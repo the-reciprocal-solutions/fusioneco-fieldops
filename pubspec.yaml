@@ -9,6 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Native AR engine (slice 0: first device build). See packages/fe_ar/README.md.
+  fe_ar:
+    path: packages/fe_ar
   cupertino_icons: ^1.0.8
 
   # state + routing

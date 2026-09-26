@@ -926,6 +926,7 @@
   "ar.dashboard.install": "جولة التركيب",
   "ar.dashboard.scan": "امسح لوحة",
   "ar.dashboard.sub": "اعثر على الأصول المخفية، تحقّق من التركيب، واترك لوحات للمرة القادمة.",
+  "ar.dashboard.demo": "تجريبي",
   "ar.dashboard.sub_demo": "الوضع التجريبي مفعّل — مبنى نموذجي، ولا يُحفظ شيء.",
   "ar.dashboard.title": "الواقع المعزز: النموذج حيث تقف",
   "ar.demo.banner": "تجريبي · مبنى نموذجي",

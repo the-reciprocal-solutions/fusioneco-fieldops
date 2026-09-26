@@ -326,7 +326,7 @@ class _FloorsView extends ConsumerWidget {
       ),
       data: (floors) {
         if (floors.isEmpty) {
-          return const _Problem(titleKey: 'ar.models.no_floors', bodyKey: 'ar.models.no_floors_body', showDemo: false);
+          return const _Problem(titleKey: 'ar.models.no_floors', bodyKey: 'ar.models.no_floors_body');
         }
         ArFloorSummary? floor;
         for (final f in floors) {

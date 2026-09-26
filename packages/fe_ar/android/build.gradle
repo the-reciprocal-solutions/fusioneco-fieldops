@@ -27,7 +27,8 @@ android {
     namespace "com.fusionapps.fe_ar"
     // SceneView 4.34+ compiles against API 37; the app needs compileSdk 37
     // too if the AAR metadata check asks for it (README, "Enabling").
-    compileSdk 37
+    // API 37 installs as "android-37.0" (minor API levels); the bare "37" hash is not found.
+    compileSdkVersion "android-37.0"
 
     defaultConfig {
         minSdk 24

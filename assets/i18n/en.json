@@ -926,6 +926,7 @@
   "ar.dashboard.install": "Install run",
   "ar.dashboard.scan": "Scan a board",
   "ar.dashboard.sub": "Find hidden assets, check installs, leave boards for next time.",
+  "ar.dashboard.demo": "Demo",
   "ar.dashboard.sub_demo": "Demo mode is on — sample building, nothing is saved.",
   "ar.dashboard.title": "AR: the model where you stand",
   "ar.demo.banner": "DEMO · sample building",

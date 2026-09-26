@@ -8,7 +8,9 @@ import android.view.ViewGroup
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Recomposer
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.Lifecycle
@@ -28,6 +30,10 @@ import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import io.github.sceneview.*
 import io.github.sceneview.ar.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /** Platform view type `fusioneco/ar/view` (CONTRACT C8). */
 internal class FeArViewFactory(private val controller: FeArController) : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
@@ -60,6 +66,14 @@ internal class FeArPlatformView(
 ) : PlatformView {
     private val owner = ArViewOwner()
     val composeView = ComposeView(context)
+
+    // Compose normally installs a "window recomposer" on the window's content
+    // root and looks up its lifecycle there; under Flutter that root is
+    // FlutterView, which has no ViewTreeLifecycleOwner ("ViewTreeLifecycleOwner
+    // not found from FlutterView" on the first device run). A recomposer of our
+    // own, set as the parent composition context, keeps Compose inside this view.
+    private val recomposeScope = CoroutineScope(AndroidUiDispatcher.CurrentThread + SupervisorJob())
+    private val recomposer = Recomposer(recomposeScope.coroutineContext)
     private val surfaceType = if (params?.get("surface") == "surface") SurfaceType.Surface else SurfaceType.TextureSurface
 
     init {
@@ -68,6 +82,8 @@ internal class FeArPlatformView(
         composeView.setViewTreeSavedStateRegistryOwner(owner)
         composeView.setViewTreeViewModelStoreOwner(owner)
         composeView.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(owner.lifecycle))
+        recomposeScope.launch { recomposer.runRecomposeAndApplyChanges() }
+        composeView.setParentCompositionContext(recomposer)
         composeView.setContent {
             if (controller.sessionWanted.value) {
                 FeArScene(controller, owner.lifecycle, surfaceType)
@@ -82,6 +98,8 @@ internal class FeArPlatformView(
         controller.detachView(this)
         composeView.disposeComposition()
         owner.destroy()
+        recomposer.cancel()
+        recomposeScope.cancel()
     }
 
     /** RESUMED runs the ARCore session; STARTED pauses it (camera released). */

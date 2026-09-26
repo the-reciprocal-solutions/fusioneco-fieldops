@@ -22,9 +22,17 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-012**
+Next number: **P-013**
 
 ## Open
+
+### P-012 · AR overlay renders but is not registered to the room
+- **Status:** not started · **Priority:** P1 · **Area:** AR alignment (Dart fit ↔ fe_ar)
+- **Found:** 2026-09-26 (first Android device run, demo bedroom model)
+- **Done so far:** fe_ar builds and runs on Android: camera, ARCore tracking and Filament drawing the downloaded tiles all work.
+- **Left:** the model appears at an arbitrary place in the camera view instead of on the room. Trace the chain board detection (QR pose from `MarkerDetector`) → observation → Dart 4-DoF fit → `setModelTransform` → Filament root transform: frames (ARCore world Y-up vs tile frame), the marker pose convention (normal, up), board size/physical scale, and whether a transform is applied before the first lock.
+- **Where:** `packages/fe_ar/android/src/main/kotlin/com/fusionapps/fe_ar/` (`MarkerDetector.kt`, `FeArController.kt`, `TileRenderer.kt`), `lib/core/ar/`, `lib/state/ar_session_controller.dart`
+- **Next step:** log the marker observation and the applied transform on device while scanning one board of the demo bedroom, compare with the board's `posTile`/normal from the web plan.
 
 ### P-011 · Model viewer (2D/3D): Dart side never analyzed, tested or run on a device
 - **Status:** needs verification · **Priority:** P2 · **Area:** model viewer (`lib/core/bim_viewer`, `lib/features/bim_viewer`, `lib/state/bim_viewer_*`, `assets/bim_viewer`, viewer scope in `ar_repository.dart` / `offline_db.dart`)
@@ -45,13 +53,12 @@ Next number: **P-012**
 - **Next step:** bootstrap the slim 3.47.5 SDK (LEARNINGS → Platform) and run the three commands; fix what flutter_lints 6 reports.
 
 ### P-005 · `packages/fe_ar` native plugin: slice 0 (build it on devices)
-- **Status:** not started · **Priority:** P2 · **Area:** AR native (`packages/fe_ar`)
+- **Status:** in progress · **Priority:** P2 · **Area:** AR native (`packages/fe_ar`)
 - **Found:** 2026-09-26 (fe_ar build)
-- **Done so far:** Kotlin, Swift, ObjC++ and a shared C99 core written; the C core passes 131 checks under ASan/UBSan; Swift type-checked against stubs; ObjC++ syntax-checked against Filament 1.72.1 headers. Not a dependency of the app.
-- **Left:** build on Android and iOS devices and resolve the 11 `TODO(slice-0)` markers (README "Slice 0 checklist"); compile `materials/*.mat` with matc 1.72.1 and commit the `.filamat` outputs; add the path dependency; `compileSdk`/`minSdk`/Kotlin-compose alignment; extend `NSCameraUsageDescription`; revisit the portrait lock for tablet AR.
-- **Why deferred:** no Android SDK, Xcode build, kotlinc or matc on this Mac; AR-2/AR-3/AR-37 need real devices.
+- **Done so far:** path dependency added; app and plugin compile against API 37 (`android-37.0`); Android build runs on a OnePlus 7 Pro with camera, ARCore and Filament rendering (two device crashes fixed, see LEARNINGS "fe_ar first device build"). The C core passes 131 checks under ASan/UBSan.
+- **Left:** overlay registration (P-012); compile `materials/*.mat` with matc 1.72.1 and commit the `.filamat` outputs; resolve the remaining `TODO(slice-0)` markers; iOS build on a LiDAR iPad (CocoaPods, Filament pod); extend `NSCameraUsageDescription`; revisit the portrait lock for tablet AR; measure QR lock time and the performance budgets.
 - **Where:** [packages/fe_ar/README.md](packages/fe_ar/README.md), [CHANNEL.md](packages/fe_ar/CHANNEL.md)
-- **Next step:** slice-0 checklist item 1 (SceneView in a Flutter platform view) on the reference Android device.
+- **Next step:** P-012, then materials.
 
 ### P-006 · AR hand-offs don't carry the AR context into Verify and Snags
 - **Status:** not started · **Priority:** P2 · **Area:** AR ↔ field verification / Snag Assistant

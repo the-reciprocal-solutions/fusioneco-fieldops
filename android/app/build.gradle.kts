@@ -21,7 +21,11 @@ val hasReleaseKeystore = keystoreProperties.getProperty("storeFile") != null
 
 android {
     namespace = "com.fusionapps.fieldops"
-    compileSdk = flutter.compileSdkVersion
+    // API 37 (installed as "android-37.0"): fe_ar's SceneView 4.39 and its
+    // Compose/AndroidX dependencies require apps to compile against 37+.
+    compileSdk {
+        version = release(37) { minorApiLevel = 0 }
+    }
     ndkVersion = "30.0.16138531"
 
     compileOptions {

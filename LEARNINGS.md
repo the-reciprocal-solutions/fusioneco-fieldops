@@ -266,9 +266,34 @@ It caught real bugs: a missing method, unused imports, and an `unnecessary_impor
 **Where:** session scratchpad `fvcheck/run.sh`, `fvcheck/downgrade2.py`, `fieldops-core/dartcheck/sync.sh` (wiped with the session).
 
 
-## AR BIM overlay (v1 built 2026-09-26; not yet run on a device)
+## AR BIM overlay (v1 built 2026-09-26; first Android device run 2026-09-26)
 
 Full plan: [docs/ar-bim-overlay.md](docs/ar-bim-overlay.md). These are the findings from the 2026-09-25 design pass that would otherwise have to be rediscovered.
+
+### fe_ar first device build: four blockers, none of them in our AR logic (2026-09-26)
+**What happened:** enabling `packages/fe_ar` and building on a OnePlus 7 Pro (Android 11, ARCore 1.56) hit four failures in a row before the camera showed a model.
+1. `Failed to find target with hash string 'android-37'`. **Cause:** API 37 installs as `platforms/android-37.0` (minor API levels), so the bare `compileSdk 37` hash does not resolve. **Fix:** plugin `compileSdkVersion "android-37.0"`; app `compileSdk { version = release(37) { minorApiLevel = 0 } }` (AGP 9 DSL).
+2. `checkDebugAarMetadata`: 11 issues. **Cause:** SceneView 4.39 and its Compose/AndroidX artifacts require every consumer to compile against 37; the app was on `flutter.compileSdkVersion` (36). **Fix:** the app DSL above. `minSdk`/`targetSdk` stay Flutter's.
+3. Crash on opening AR: `ViewTreeLifecycleOwner not found from io.flutter.embedding.android.FlutterView`. **Cause:** setting the lifecycle/saved-state owners on our `ComposeView` is not enough. Compose installs a *window recomposer* on the window's content root, which under Flutter is `FlutterView`, and looks up the lifecycle there. **Fix:** give the ComposeView its own `Recomposer` on `AndroidUiDispatcher.CurrentThread` and `setParentCompositionContext(recomposer)`; cancel both in `dispose()`.
+4. `eglCreateWindowSurface … already connected to another API` / `EGL_BAD_ALLOC` on every window resize (navigation bar, app switch). **Cause:** `AndroidView` uses texture-layer hybrid composition, which moves the platform view onto a new Surface on resize; Filament could not reattach its swap chain. **Fix:** Android now uses `PlatformViewLink` + `initExpensiveAndroidView` (Hybrid Composition) with fe_ar `surface: 'surface'` (a real SurfaceView).
+**What to watch:**
+- The build pulls ~280 MB of native libs into the debug APK (Filament, gltfio, ARCore, ML Kit); install over wireless adb takes ~100 s and the Mac needs a few GB free (the disk filled mid-session).
+- ARCore logs are noisy and harmless: `API key … could not be obtained` (cloud anchors only), `feature_track_ml_depth_provider` errors (depth warm-up), `No usable local profile`, online-recalibration file missing.
+- Without `fe_feature.filamat` (needs Filament 1.72.1 `matc`) tiles draw with gltfio materials tinted per layer: no progress colours, x-ray or section. The log says so once per session (`W/fe_ar`).
+- `flutter run` over wireless adb often loses the VM service after install ("Lost connection"); the app keeps running. `adb install -r` + `adb shell monkey -p com.fusionapps.fieldops 1` and `adb logcat` are more reliable for device checks.
+**Where:** [FeArPlatformView.kt](packages/fe_ar/android/src/main/kotlin/com/fusionapps/fe_ar/FeArPlatformView.kt), [ar_view.dart](lib/core/ar/ar_view.dart), [packages/fe_ar/android/build.gradle](packages/fe_ar/android/build.gradle), [android/app/build.gradle.kts](android/app/build.gradle.kts)
+**Project state:** camera + model overlay render on Android; the overlay is **not yet registered to the room** (it appears at an arbitrary place). PENDING P-012.
+
+### Demo mode must be switchable from the dashboard, not only from failure screens (2026-09-26)
+**What happened:** a tester with the build (no fe_ar) could not find Demo. The Demo offer lived only on the AR-unavailable view and at the bottom of the building list, and a checked-in technician's "Floor" goes straight to the site's floors (the "no floors" state even passed `showDemo: false`).
+**Fix:** a Demo pill on the dashboard AR card (`ar.dashboard.demo`), and the no-floors state offers Demo too.
+**What to watch:** any mode switch reachable only from an error or empty state is invisible to the people most likely to need it. Put it on the entry surface.
+**Where:** [ar_entry_widgets.dart](lib/features/ar/widgets/ar_entry_widgets.dart) `_DemoToggle`, [ar_models_screen.dart](lib/features/ar/ar_models_screen.dart)
+
+### A demo room IFC that passes the real AR pipeline (2026-09-26)
+**What happened:** there was no small model to test the whole flow in a real room. A stdlib-only generator now writes an IFC4 bedroom (structure, walls/door/window, built-in lofts, concealed electrical, plumbing, refrigerant, fire) and it passes the server's `buildTilesFromIfc` + QA gate locally (85/85 elements meshed, 6 tiles, 3 inside corners, 1 board suggestion).
+**What to watch (authoring rules the pipeline enforces):** storey `Name` must equal the FusionEco floor name (or link it on AR Markers); `IfcFurniture` is skipped by AR, so fixed joinery the user should align against goes in as `IfcBuildingElementProxy` (drawn as edges); keep window sills above the 1.01 m plan cut; STEP strings must be ASCII (`\X2\hhhh\X0\` for anything else); GlobalIds deterministic (uuid5) so re-uploads keep boards and progress.
+**Where:** `../IFC Models/FusionEco_Demo_Bedroom/` (generator, IFC, README walkthrough — outside the repos)
 
 ### `bim_elements` carries no geometry, so the server has no mesh to send (2026-09-25)
 **What happened:** the AR plan assumed the existing IFC pipeline could feed an overlay. It can't. `ifcExtractor.ts` imports `web-ifc` but uses only its attribute APIs — `bim_elements` stores property sets, containment and classifications, and `hadRepresentation` is a **boolean**, not a mesh. `building_3d_models.fileUrl` points at the raw IFC, not at anything a phone can draw. **What to watch:** any "we already have the model" claim about BIM features. Tessellation, glTF authoring, chunking and a `nodeIndex → globalId` map are all new work (AR-5 … AR-8). The identity model is the part that already exists.

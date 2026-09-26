@@ -2,7 +2,7 @@
 
 The native half of FieldOps AR: the camera, tracking, marker and corner detection, drawing the BIM tiles, and picking. **Native executes, Dart decides** ([docs/ar-bim-overlay.md §6.1](../../docs/ar-bim-overlay.md)): every decision (where the model goes, which tiles are resident, what is highlighted, which observation to trust) is made in the app's pure Dart (`lib/core/ar/`), and every pixel of UI is Flutter's. This plugin is headless.
 
-**Status: written, never built.** It is opt-in and not in the app's `pubspec.yaml` until slice 0 builds it on the reference devices (AR-2, AR-3, AR-37). Only the shared C core has been compiled and tested (see [Tests](#tests)). Everything marked `TODO(slice-0)` in the source is an API use that must be confirmed on a real toolchain.
+**Status (2026-09-26): Android builds and runs; iOS not built yet.** It is a path dependency of the app. On a OnePlus 7 Pro (Android 11) the camera, ARCore tracking and Filament tile drawing work; registering the model to the room is still open (app `PENDING.md` P-012), and the `.filamat` materials are not compiled yet. The app embeds the view with Hybrid Composition and `surface: 'surface'` (texture-layer mode broke the swap chain on resize). Remaining `TODO(slice-0)` markers still need confirming.
 
 | | Android | iPhone / iPad |
 |---|---|---|
@@ -41,7 +41,7 @@ packages/fe_ar/
 
 2. **Android.**
    - `minSdk` 24 or higher (SceneView's floor). Check `flutter.minSdkVersion` in `android/app/build.gradle.kts`.
-   - `compileSdk` 37: SceneView 4.34+ compiles against API 37, and its AndroidX dependencies may require the app to as well (the AAR-metadata check says so if needed). Set `compileSdk = 37` in `android/app/build.gradle.kts` if it fails.
+   - `compileSdk` 37: SceneView 4.34+ compiles against API 37, and its AndroidX dependencies may require the app to as well (the AAR-metadata check says so if needed). Done (2026-09-26): the app uses `compileSdk { version = release(37) { minorApiLevel = 0 } }`, because API 37 installs as `android-37.0` and a bare `37` does not resolve.
    - Kotlin: `android/build.gradle` applies `org.jetbrains.kotlin.plugin.compose` at **2.4.0**, which must equal the app's `org.jetbrains.kotlin.android` version in `android/settings.gradle.kts`. Bump both together.
    - Manifest: nothing to add. The plugin's manifest merges in `CAMERA` (the app has it), `android.hardware.camera.ar` **not required**, and `<meta-data android:name="com.google.ar.core" android:value="optional"/>`: AR is optional, so Play never blocks the install and tier-C devices get the floor plan. Don't set it to `required`.
    - The app's activity is locked to portrait (`android:screenOrientation="portrait"`); tablets will want landscape for the AR workspace (docs/ar-setup-and-gamma-parity.md §2.9).

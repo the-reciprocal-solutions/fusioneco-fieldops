@@ -122,6 +122,11 @@ class ArDashboardCard extends ConsumerWidget {
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
+              // Demo is switched here as well as on the AR-unavailable screen:
+              // a checked-in technician goes straight to their site's floors
+              // and would otherwise never see the building list's Demo offer.
+              _DemoToggle(on: demo, onChanged: (v) => ref.read(arPrefsProvider.notifier).setDemo(v)),
             ],
           ),
           const SizedBox(height: 14),
@@ -155,6 +160,40 @@ class ArDashboardCard extends ConsumerWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DemoToggle extends StatelessWidget {
+  const _DemoToggle({required this.on, required this.onChanged});
+  final bool on;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: on ? Colors.white : Colors.white.withValues(alpha: 0.16),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => onChanged(!on),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 36),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(ArIcons.demo, size: 14, color: on ? FeColors.primary : Colors.white),
+              const SizedBox(width: 6),
+              AppText.caption(
+                'ar.dashboard.demo'.getString(context),
+                color: on ? FeColors.primary : Colors.white,
+                weight: FontWeight.w800,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

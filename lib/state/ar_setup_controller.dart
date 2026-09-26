@@ -344,7 +344,16 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     if ((space == null || space.isEmpty) && target != null && s.plan != null) {
       space = s.plan!.spaceAt(target.centre.x, target.centre.z)?.name;
     }
-    return _matcher.rankForRoom(pool, spaceName: space);
+    final ranked = _matcher.rankForRoom(pool, spaceName: space);
+    if (state.method == ArPlaceMethod.grid) return ranked;
+    // Indoors the corners you can walk up to are the room's inside corners.
+    // A column's outside corner ranked first (structural) became the default
+    // target on the first device run, and a room-corner snap was matched to
+    // a column corner outside the building (4 m off).
+    return [
+      ...ranked.where((c) => c.kind == 'inside'),
+      ...ranked.where((c) => c.kind != 'inside'),
+    ];
   }
 
   // ------------------------------------------------------------- choose
@@ -477,9 +486,30 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
   /// placement (position and heading), so the badge goes amber.
   void useCornerA() {
     final d = state.snapped;
-    final a = state.chosenA;
+    var a = state.chosenA;
     if (d == null || a == null) return;
-    final fit = _session.addObservation(_matcher.firstCorner(d, a, cameraAr: _s.cameraAr));
+    // The snap must have the chosen corner's shape (inside vs outside/column,
+    // same angle). If it doesn't, take the best-ranked corner that does and
+    // say so, rather than fitting an inside corner onto a column's edge.
+    if (!_matcher.shapeMatches(d, a)) {
+      CornerCandidate? match;
+      for (final c in state.ranked) {
+        if (_matcher.shapeMatches(d, c)) {
+          match = c;
+          break;
+        }
+      }
+      if (match == null) {
+        _session.toast('ar.toast.corner_rejected', tone: ArToastTone.warning);
+        return;
+      }
+      a = match;
+      _set(state.copyWith(chosenA: a));
+      _session.toast('ar.toast.corner_switched', args: [a.label]);
+    }
+    final obsA = _matcher.firstCorner(d, a, cameraAr: _s.cameraAr);
+    final fit = _session.addObservation(obsA);
+    unawaited(_session.anchorObservation(obsA));
     final floor = _s.floor!;
     final suggestions = _matcher.suggestSecond(a, floor.corners);
     _set(state.copyWith(
@@ -504,9 +534,9 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     final c = pick ?? state.matchedB;
     final before = _s.fit;
     if (d == null || c == null) return;
-    final fit = _session.addObservation(
-      _matcher.observe(d, c, cameraAr: _s.cameraAr, yawPrior: before?.yawRad),
-    );
+    final obsB = _matcher.observe(d, c, cameraAr: _s.cameraAr, yawPrior: before?.yawRad);
+    final fit = _session.addObservation(obsB);
+    unawaited(_session.anchorObservation(obsB));
     _stopSnapPolling();
     _afterFit(fit, via: 'corner');
   }

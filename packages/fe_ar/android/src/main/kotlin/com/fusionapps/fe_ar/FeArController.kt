@@ -25,6 +25,7 @@ import com.google.ar.core.CameraConfig
 import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.Config
 import com.google.ar.core.Frame
+import com.google.ar.core.Plane
 import com.google.ar.core.RecordingConfig
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingFailureReason
@@ -88,6 +89,11 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
 
     // ---- drawing state (replayed onto a new renderer)
     private var modelCurrent = ArMath.identity()
+    /** True once Dart has sent a model transform this session (TileRenderer.placed). */
+    private var modelPlaced = false
+    private var lastFloorMs = 0L
+    private var lastFloorY: Float? = null
+    private var floorPlane: Plane? = null
     private var easeFrom = ArMath.identity()
     private var easeTo = ArMath.identity()
     private var easeStartNs = 0L
@@ -108,6 +114,10 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     private var lastReason: String? = null
     private var everTracked = false
     private var lastPoseMs = 0L
+    private var lastCamCheckMs = 0L
+
+    /** SceneView's AR camera node for this view (FeArScene), for the camera check below. */
+    var cameraNode: io.github.sceneview.ar.node.ARCameraNode? = null
     private var lastTargetMs = 0L
     private val startNs = SystemClock.elapsedRealtimeNanos()
     private var depthSupportCache: Boolean? = null
@@ -208,6 +218,7 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         renderer = r
         r.setModelMatrix(modelCurrent)
         r.setLayers(layers, tiles.tiles.values)
+        r.setPlaced(modelPlaced, tiles.tiles.values)
         r.setGrid(gridGlb)
         r.setPins(pinGlb)
         for (e in tiles.tiles.values) upload(e)
@@ -246,12 +257,24 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     fun pickCameraConfig(session: Session): CameraConfig {
         // The QR must be decodable from ~2 m (docs/ar-markers-and-qr.md §2.2):
         // take the largest CPU image up to 1080p at 30 fps.
+        // The camera image on screen is the GPU texture, not the CPU image: a
+        // config chosen by CPU size alone can come with a small texture, which
+        // looked blurred full-screen on the first device run. Largest texture
+        // first, then the largest CPU image up to 1080p for the QR decoder.
         return try {
             val filter = CameraConfigFilter(session).setTargetFps(EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_30))
-            session.getSupportedCameraConfigs(filter)
+            val all = session.getSupportedCameraConfigs(filter)
+            for (c in all) {
+                android.util.Log.i("fe_ar", "camera config: cpu ${c.imageSize.width}x${c.imageSize.height} texture ${c.textureSize.width}x${c.textureSize.height} depth ${c.depthSensorUsage}")
+            }
+            val chosen = all
                 .filter { it.imageSize.width <= 1920 }
-                .maxByOrNull { it.imageSize.width * it.imageSize.height }
+                .maxWithOrNull(
+                    compareBy<CameraConfig>({ it.textureSize.width * it.textureSize.height }, { it.imageSize.width * it.imageSize.height }),
+                )
                 ?: session.cameraConfig
+            android.util.Log.i("fe_ar", "camera config chosen: cpu ${chosen.imageSize.width}x${chosen.imageSize.height} texture ${chosen.textureSize.width}x${chosen.textureSize.height}")
+            chosen
         } catch (e: Exception) {
             session.cameraConfig
         }
@@ -339,10 +362,70 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
 
         markers.onFrame(session, frame, tracking)
 
+        // Debug check, every 2 s: the camera Filament renders with must sit
+        // where ARCore says the phone is. If it doesn't move while the phone
+        // does, the model is drawn screen-locked (P-012).
+        if (tracking && nowMs - lastCamCheckMs >= 2000L) {
+            lastCamCheckMs = nowMs
+            val node = cameraNode
+            if (node != null) {
+                val fm = FloatArray(16)
+                node.camera.getModelMatrix(fm)
+                val a = cam.displayOrientedPose
+                android.util.Log.d(
+                    "fe_ar",
+                    "camera check: filament=(%.3f, %.3f, %.3f) arcore=(%.3f, %.3f, %.3f) model=(%.3f, %.3f, %.3f) placed=%b"
+                        .format(fm[12], fm[13], fm[14], a.tx(), a.ty(), a.tz(), modelCurrent[12], modelCurrent[13], modelCurrent[14], modelPlaced),
+                )
+            } else {
+                android.util.Log.d("fe_ar", "camera check: no camera node")
+            }
+        }
+
+        if (tracking && nowMs - lastFloorMs >= FLOOR_INTERVAL_MS) {
+            lastFloorMs = nowMs
+            detectFloor(session, cam.pose.ty())
+        }
+
         if (targetIds != null && tracking && nowMs - lastTargetMs >= TARGET_INTERVAL_MS) {
             lastTargetMs = nowMs
             targetScreen()?.let { emit(it) }
         }
+    }
+
+    /**
+     * The floor for the fit's height (extension event `floor`): the largest
+     * tracked upward plane of at least [FLOOR_MIN_AREA_M2] that sits a
+     * standing phone's height below the camera (a table or bed is too high).
+     * Emitted when it first appears or moves by 1 cm, at most once a second.
+     */
+    private fun detectFloor(session: Session, cameraY: Float) {
+        var best: Plane? = null
+        for (p in session.getAllTrackables(Plane::class.java)) {
+            if (p.type != Plane.Type.HORIZONTAL_UPWARD_FACING || p.trackingState != TrackingState.TRACKING || p.subsumedBy != null) continue
+            if (p.extentX * p.extentZ < FLOOR_MIN_AREA_M2) continue
+            val drop = cameraY - p.centerPose.ty()
+            if (drop < FLOOR_MIN_DROP_M || drop > FLOOR_MAX_DROP_M) continue
+            // The largest, not the lowest: a small false plane under the floor
+            // won on "lowest" in the first device run (27 cm too low).
+            if (best == null || p.extentX * p.extentZ > best.extentX * best.extentZ) best = p
+        }
+        // Sticky: two floor planes ~10 cm apart traded places as each grew, and
+        // the model bounced. Keep the current plane while it is tracked (or
+        // follow what it merged into) unless another is clearly bigger.
+        val current = floorPlane?.let { it.subsumedBy ?: it }
+        if (current != null && current.trackingState == TrackingState.TRACKING && best != null && best != current &&
+            best.extentX * best.extentZ < FLOOR_SWITCH_RATIO * current.extentX * current.extentZ
+        ) {
+            best = current
+        }
+        val floor = best ?: return
+        floorPlane = floor
+        val y = floor.centerPose.ty()
+        val last = lastFloorY
+        if (last != null && kotlin.math.abs(y - last) < 0.01f) return
+        lastFloorY = y
+        emit(mapOf("type" to "floor", "yAr" to y.toDouble(), "areaM2" to (floor.extentX * floor.extentZ).toDouble()))
     }
 
     private fun reasonOf(r: TrackingFailureReason): String = when (r) {
@@ -357,6 +440,16 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     // ======================================================== model transform
 
     private fun setModel(m: FloatArray, easeMs: Int) {
+        if (!modelPlaced) {
+            // First placement: jump straight there (never ease in from the
+            // session origin), then show the model.
+            modelPlaced = true
+            modelCurrent = m
+            easeDurNs = 0L
+            renderer?.setModelMatrix(modelCurrent)
+            renderer?.setPlaced(true, tiles.tiles.values)
+            return
+        }
         if (easeMs <= 0 || !ArMath.isYawTranslation(modelCurrent) || !ArMath.isYawTranslation(m)) {
             modelCurrent = m
             easeDurNs = 0L
@@ -689,6 +782,11 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
                     if (s == null || f == null || x == null || y == null) result.success(null)
                     else result.success(corners.detect(s, f, x * density, y * density))
                 }
+                "anchorAt" -> {
+                    val s = latestSession
+                    val p = Args.floats(a["posAr"], 3)
+                    result.success(if (s == null || p == null) null else markers.anchorAt(s, p))
+                }
                 "pick" -> {
                     val x = Args.float(a["x"])
                     val y = Args.float(a["y"])
@@ -787,6 +885,10 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         tiles.clear { e -> renderer?.removeTile(e.hash) }
         states.clear()
         modelCurrent = ArMath.identity()
+        modelPlaced = false
+        renderer?.setPlaced(false, tiles.tiles.values)
+        lastFloorY = null
+        floorPlane = null
         easeDurNs = 0L
         layers = LayerState()
         targetIds = null
@@ -861,6 +963,14 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         private const val FAR_M = 100f
         private const val POSE_INTERVAL_MS = 200L // 5 Hz (§6.4)
         private const val TARGET_INTERVAL_MS = 100L // 10 Hz (§6.4)
+        private const val FLOOR_INTERVAL_MS = 1000L
+        /** A floor plane must be at least this big (a doormat is not the floor). */
+        private const val FLOOR_MIN_AREA_M2 = 0.25f
+        /** Camera height above the floor while standing: tables and beds sit higher than MIN below the phone. */
+        private const val FLOOR_MIN_DROP_M = 0.8f
+        private const val FLOOR_MAX_DROP_M = 2.3f
+        /** Another plane replaces the current floor only when this much bigger. */
+        private const val FLOOR_SWITCH_RATIO = 1.5f
 
         /** GAMMA-style orange slab gridlines (design board TabSnap: #FB923C). */
         private const val GRID_RGB = 0xFB923C

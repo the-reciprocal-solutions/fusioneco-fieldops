@@ -119,6 +119,16 @@ class ChannelArEngine implements ArEngine {
       CornerSeenEvent.tryParse(await _call<Object?>('detectCornerAt', {'x': x, 'y': y}));
 
   @override
+  Future<String?> anchorAt(Vec3 posAr) async {
+    try {
+      final id = await _call<Object?>('anchorAt', {'posAr': posAr.toList()});
+      return id?.toString();
+    } on ArEngineException {
+      return null; // an older plugin without the extension
+    }
+  }
+
+  @override
   Future<PickResult?> pick(double x, double y) async =>
       PickResult.fromMap(await _call<Object?>('pick', {'x': x, 'y': y}));
 

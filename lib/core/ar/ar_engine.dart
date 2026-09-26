@@ -58,6 +58,12 @@ abstract interface class ArEngine {
   /// Snaps a corner under screen point ([x], [y]) in logical pixels.
   Future<CornerSeenEvent?> detectCornerAt(double x, double y);
 
+  /// Pins a native anchor at [posAr] (fe_ar extension) and returns its id; the
+  /// engine then sends `anchor` events as the tracker refines it, exactly as
+  /// for a board. Used for committed corner snaps, so the model follows
+  /// ARCore/ARKit map corrections instead of sliding. Null if unsupported.
+  Future<String?> anchorAt(Vec3 posAr);
+
   /// The feature under a screen point, against resident tiles.
   Future<PickResult?> pick(double x, double y);
 
@@ -350,6 +356,10 @@ sealed class ArEvent {
         final id = raw['anchorId']?.toString();
         if (pos == null || id == null) return bad('anchorId/posAr');
         return AnchorUpdatedEvent(anchorId: id, posAr: pos);
+      case 'floor':
+        final y = asDouble(raw['yAr']);
+        if (y == null) return bad('yAr');
+        return FloorPlaneEvent(yAr: y, areaM2: asDouble(raw['areaM2']) ?? 0);
       case 'pose':
         final m = Mat4.tryParse(raw['arFromCamera']);
         if (m == null) return bad('arFromCamera');
@@ -512,6 +522,23 @@ final class AnchorUpdatedEvent extends ArEvent {
         'anchorId': anchorId,
         'posAr': posAr.toList(),
       };
+}
+
+/// The tracked floor (fe_ar extension): the lowest upward plane a standing
+/// phone's height below the camera. The fit takes the model's height from it
+/// instead of from board centres, so a board hung 5 cm off no longer lifts
+/// the whole model. At most 1 Hz, and only when it moves by 1 cm.
+final class FloorPlaneEvent extends ArEvent {
+  const FloorPlaneEvent({required this.yAr, this.areaM2 = 0});
+
+  final double yAr;
+  final double areaM2;
+
+  @override
+  String get type => 'floor';
+
+  @override
+  Map<String, dynamic> toMap() => {'type': type, 'yAr': yAr, 'areaM2': areaM2};
 }
 
 /// Camera pose, 5 Hz while subscribed. Drives tile residency, the target

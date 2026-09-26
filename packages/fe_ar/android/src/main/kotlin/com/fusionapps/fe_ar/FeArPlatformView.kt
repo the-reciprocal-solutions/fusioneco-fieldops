@@ -123,6 +123,14 @@ internal class FeArPlatformView(
 private fun FeArScene(controller: FeArController, lifecycle: Lifecycle, surfaceType: SurfaceType) {
     val engine = rememberEngine()
     val scene = rememberScene(engine)
+    // Our own handle on the AR camera node SceneView drives from each ARCore
+    // frame, so the controller can check the rendered camera really follows
+    // the phone (first device run: the model looked screen-locked).
+    val cameraNode = rememberARCameraNode(engine)
+    DisposableEffect(cameraNode) {
+        controller.cameraNode = cameraNode
+        onDispose { if (controller.cameraNode === cameraNode) controller.cameraNode = null }
+    }
     // Created after the engine and scene, so disposed BEFORE them (Compose
     // forgets remembered objects in reverse order): the renderer destroys its
     // assets while the engine is still alive.
@@ -136,6 +144,7 @@ private fun FeArScene(controller: FeArController, lifecycle: Lifecycle, surfaceT
         surfaceType = surfaceType,
         engine = engine,
         scene = scene,
+        cameraNode = cameraNode,
         sessionCameraConfig = { session -> controller.pickCameraConfig(session) },
         playbackDataset = controller.playbackFile,
         planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL,

@@ -266,6 +266,7 @@ class LiveArGateway implements ArGateway {
       maxX: maxX,
       maxZ: maxZ,
       walls: [for (final w in p.walls) w.polyline],
+      wallThicknesses: [for (final w in p.walls) w.thickness],
       columns: [for (final c in p.columns) c.polygon],
       doors: [
         for (final o in p.openings)
@@ -316,11 +317,15 @@ class LiveArGateway implements ArGateway {
           name: f.name,
           discipline: f.discipline,
           systemGlobalId: f.systemGlobalId,
+          // The server sends only the system's GlobalId; a model that names
+          // the system in a property set (e.g. "System") gives the readable name.
+          systemName: f.prop('System'),
           ifcType: f.ifcType,
           bboxMin: min,
           bboxMax: max,
           floorId: f.floorId,
           tileHashes: {for (final t in f.tiles) t.hash},
+          props: f.props,
         ));
       }
     }

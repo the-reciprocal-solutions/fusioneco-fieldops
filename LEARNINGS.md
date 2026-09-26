@@ -270,6 +270,19 @@ It caught real bugs: a missing method, unused imports, and an `unnecessary_impor
 
 Full plan: [docs/ar-bim-overlay.md](docs/ar-bim-overlay.md). These are the findings from the 2026-09-25 design pass that would otherwise have to be rediscovered.
 
+### fe_ar on a real room: what broke alignment and visibility, and what fixed it (2026-09-26)
+**What happened:** after the first build ran, a day of device tests in a plain painted bedroom (OnePlus 7 Pro, no depth sensor) found, in order:
+1. **Platform view mode.** Hybrid Composition (`PlatformViewLink` + `initExpensiveAndroidView`) does NOT work with SceneView: HC merges Flutter's raster thread into the main thread, which then owns the GL context each frame, and ARCore's `session.update` throws `MissingGlContextException` (black camera). HC + SurfaceView was black too (the surface sits behind the window). Keep `AndroidView` (texture-layer) + fe_ar `TextureView`; the `EGL_BAD_ALLOC … already connected` logged on a window resize there did not stop rendering.
+2. **Model drawn before it was placed.** The native root starts at identity = the session origin; tiles loaded on download, so the model appeared "somewhere random". Now hidden until the first `setModelTransform` (TileRenderer `placed`).
+3. **Wrong first corner.** The default target was the top-ranked candidate — a structural column's *outside* corner — and `firstCorner` never compared shapes. Inside corners now rank first and a mismatched snap switches to the best candidate of the same shape; phones show the plan on the corner-1 card (every inside corner of a rectangular room looks alike).
+4. **Floor height.** "Lowest horizontal plane" picked false planes 27 cm under the floor; "largest" then flipped between two planes ~10 cm apart. Now: largest, sticky (switch only for 1.5× area), and Dart ignores a plane > 12 cm from the floor the observations imply.
+5. **Drift.** Corner snaps had no native anchor, so ARCore map corrections slid the model. `anchorAt` pins each committed corner; `anchor` events refit like boards.
+6. **Plain walls.** ARCore finds no vertical planes on an evenly painted wall; corner snaps fall back to `floorTap` (crosshair on the floor + one nearby vertical surface for heading — maybe a cabinet). One such corner is only a rough placement: use two corners ≥ 3 m apart (heading from positions) or printed boards.
+7. **Pale, single-colour model.** `fe_feature.filamat` wasn't compiled (fallback overwrote the tiles' per-discipline colours with one layer cyan), and slabs drew solid over the ceiling. matc 1.72.1 from `filament-v1.72.1-mac.tgz` (47 MB) compiles both materials in seconds; Dart now tints MEP per discipline and ghosts slabs/roofs/coverings/footings.
+8. **Blurry camera.** The camera config was chosen by CPU image size; choose by GPU texture size (what's drawn), then CPU.
+**Still open:** the overlay looked screen-locked on device (P-012); a per-2 s `camera check` debug log (Filament camera vs ARCore pose) was added to prove or rule it out.
+**Where:** `packages/fe_ar/android/.../{FeArController,TileRenderer,MarkerDetector,FeArPlatformView}.kt`, `lib/state/ar_session_controller.dart`, `lib/state/ar_setup_controller.dart`, `lib/core/ar/corner_matcher.dart`
+
 ### fe_ar first device build: four blockers, none of them in our AR logic (2026-09-26)
 **What happened:** enabling `packages/fe_ar` and building on a OnePlus 7 Pro (Android 11, ARCore 1.56) hit four failures in a row before the camera showed a model.
 1. `Failed to find target with hash string 'android-37'`. **Cause:** API 37 installs as `platforms/android-37.0` (minor API levels), so the bare `compileSdk 37` hash does not resolve. **Fix:** plugin `compileSdkVersion "android-37.0"`; app `compileSdk { version = release(37) { minorApiLevel = 0 } }` (AGP 9 DSL).

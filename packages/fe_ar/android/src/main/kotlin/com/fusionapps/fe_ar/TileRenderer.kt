@@ -69,6 +69,14 @@ internal class TileRenderer(
     private var sectionWorldY = 0f
     private var translationY = 0f
 
+    /**
+     * False until Dart sends the first model transform. Before that the root is
+     * identity, which puts the model wherever the session started (the phone's
+     * first pose): it read as "the overlay lands somewhere random" on the first
+     * device run. Tiles, grid and pins stay loaded but hidden until placed.
+     */
+    private var placed = false
+
     val hasFeatureMaterial: Boolean get() = featureMaterial != null
 
     init {
@@ -144,7 +152,10 @@ internal class TileRenderer(
                         configure(mi, entry, p)
                         rcm.setMaterialInstanceAt(ri, k, mi)
                         mats += mi
-                    } else {
+                    } else if (entry.layer != "mep") {
+                        // Fallback without fe_feature.filamat: MEP keeps the
+                        // tile's own per-discipline colour (the server bakes
+                        // it); only architecture and structure get the layer tint.
                         val c = LayerStyle.of(entry.layer).color
                         rcm.getMaterialInstanceAt(ri, k).setParameter("baseColorFactor", c[0], c[1], c[2], c[3])
                     }
@@ -225,7 +236,7 @@ internal class TileRenderer(
 
     private fun applyVisibility(entry: TileEntry, t: GpuTile) {
         val rcm = engine.renderableManager
-        val layerOn = layers.visible(entry.layer)
+        val layerOn = placed && layers.visible(entry.layer)
         for ((p, pass) in t.passes.withIndex()) {
             val on = layerOn && when {
                 featureMaterial == null -> p == PASS_SOLID
@@ -289,6 +300,15 @@ internal class TileRenderer(
 
     fun setPins(glb: ByteArray?) {
         pinAsset = replaceOverlay(pinAsset, glb)
+        setOverlayVisible(layers)
+    }
+
+    /** Shows or hides everything under the model root (see [placed]). */
+    fun setPlaced(value: Boolean, entries: Collection<TileEntry>) {
+        if (placed == value) return
+        placed = value
+        for (e in entries) gpu[e.hash]?.let { applyVisibility(e, it) }
+        setOverlayVisible(layers)
     }
 
     private fun replaceOverlay(old: FilamentAsset?, glb: ByteArray?): FilamentAsset? {
@@ -318,11 +338,17 @@ internal class TileRenderer(
     }
 
     private fun setOverlayVisible(state: LayerState) {
-        // the grid is a structural guide: it follows the structure toggle
-        val grid = gridAsset ?: return
         val rcm = engine.renderableManager
-        for (e in grid.entities) {
-            if (rcm.hasComponent(e)) rcm.setLayerMask(rcm.getInstance(e), 0xff, if (state.grid) 0x01 else 0x00)
+        // the grid is a structural guide: it follows the structure toggle
+        gridAsset?.let { grid ->
+            for (e in grid.entities) {
+                if (rcm.hasComponent(e)) rcm.setLayerMask(rcm.getInstance(e), 0xff, if (placed && state.grid) 0x01 else 0x00)
+            }
+        }
+        pinAsset?.let { pins ->
+            for (e in pins.entities) {
+                if (rcm.hasComponent(e)) rcm.setLayerMask(rcm.getInstance(e), 0xff, if (placed) 0x01 else 0x00)
+            }
         }
     }
 
@@ -386,7 +412,9 @@ internal class LayerStyle(val color: FloatArray, val ghostAlpha: Float, val line
             a,
         )
 
-        private val MEP = LayerStyle(rgb(0x22D3EE, 0.62f), 0.16f, lines = false, writesDepth = true)
+        // 0.88: MEP is what people came to see; 0.62 read washed out over a
+        // bright room on the first device run. Dart tints it per discipline.
+        private val MEP = LayerStyle(rgb(0x22D3EE, 0.88f), 0.16f, lines = false, writesDepth = true)
         private val STRUCTURE = LayerStyle(rgb(0xCBD5E1, 0.26f), 0.10f, lines = false, writesDepth = false)
         private val ARCHITECTURE = LayerStyle(rgb(0x38BDF8, 0.90f), 0.35f, lines = true, writesDepth = false)
 

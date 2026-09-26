@@ -35,6 +35,23 @@ abstract final class FeArColors {
   /// Structural grid lines drawn on the slab (GAMMA's orange dash-dot).
   static const gridline = Color(0xFFFB923C);
 
+  // ---- discipline legend -------------------------------------------------
+  /// An opaque colour from a feature-state tint (`arDisciplineRgb`, 0xRRGGBB).
+  /// The legend reads the discipline palette from the tints the model is
+  /// drawn with, so a chip can never disagree with the overlay.
+  static Color fromRgb(int rgb) => Color(0xFF000000 | (rgb & 0xFFFFFF));
+
+  /// Structure keeps its layer look (ghosted slate); its legend dot matches.
+  static const structure = Color(0xFF94A3B8);
+
+  /// A dot for "not colouring by discipline right now" (progress, system…).
+  static const legendNeutral = Color(0xFF64748B);
+
+  // ---- drill check -------------------------------------------------------
+  static const drillSafe = FeColors.success;
+  static const drillCaution = FeColors.warning;
+  static const drillDanger = FeColors.danger;
+
   // ---- honest badges (§2.7) ---------------------------------------------
   static const lockedBg = FeColors.successSoft;
   static const lockedFg = Color(0xFF065F46);

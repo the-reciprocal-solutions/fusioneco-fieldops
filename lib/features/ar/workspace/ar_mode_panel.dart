@@ -13,6 +13,8 @@ import '../../../widgets/app_text.dart';
 import '../../../widgets/tech_popup.dart';
 import '../ar_ui.dart';
 import '../widgets/ar_chrome.dart';
+import 'ar_drill_panel.dart';
+import 'ar_element_card.dart';
 
 /// What the action card (iPad) or sheet (phone) shows for the current mode.
 /// The mode decides what a tap does (§2.9): Locate identifies and targets,
@@ -28,11 +30,14 @@ class ArModePanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(arWorkspaceProvider.select((w) => w.mode));
+    final drilling = ref.watch(arWorkspaceProvider.select((w) => w.drilling));
     final s = ref.watch(arSessionProvider);
+    // Drill check owns the card while it's on; it says "align first" itself.
+    if (drilling) return ArDrillPanel(tablet: tablet, onBackToSetup: onBackToSetup);
     if (!s.isPlaced) {
       return _NotPlaced(onPlace: onBackToSetup);
     }
-    return AnimatedSwitcher(
+    final panel = AnimatedSwitcher(
       duration: const Duration(milliseconds: 200),
       child: KeyedSubtree(
         key: ValueKey(mode),
@@ -43,6 +48,36 @@ class ArModePanel extends ConsumerWidget {
           ArMode.snags => _SnagsPanel(tablet: tablet),
           ArMode.forms => const _FormsPanel(),
         },
+      ),
+    );
+    if (!ArWorkspaceController.roughPlacement(s)) return panel;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _RoughPlacementHint(onImprove: onBackToSetup),
+        const SizedBox(height: 10),
+        panel,
+      ],
+    );
+  }
+}
+
+/// Every corner so far was placed by tapping the floor: no wall face was
+/// detected, so the heading is a guess from the plan. Say so on every card,
+/// with the fix, until a real corner or a board refines it. Tapping it goes
+/// back to setup keeping what was measured.
+class _RoughPlacementHint extends StatelessWidget {
+  const _RoughPlacementHint({required this.onImprove});
+  final VoidCallback onImprove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      child: GestureDetector(
+        onTap: onImprove,
+        child: ArHintRow(text: 'ar.work.rough_placement'.getString(context), icon: ArIcons.warning),
       ),
     );
   }
@@ -106,39 +141,27 @@ class _LocatePanel extends ConsumerWidget {
     final isTarget = target != null && f.featureId == target.featureId && f.buildId == target.buildId;
     final cam = s.cameraTile;
     final distance = cam?.distanceTo(f.centre);
+    final facts = ctrl.factsFor(f);
     final sub = [
       if (distance != null) arTr(context, 'ar.locate.distance', [arMetres(context, distance)]),
-      f.systemName ?? f.ifcType,
+      // The system is on its own tag below; the type says what it is.
+      if (f.name != null && f.name!.trim().isNotEmpty) f.ifcType,
     ].join(' · ');
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: isTarget ? FeColors.dangerSoft : FeColors.infoSoft,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(isTarget ? ArIcons.locate : ArIcons.identify, color: isTarget ? FeColors.danger : FeColors.primary),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  AppText.titleMedium(f.displayName, weight: FontWeight.w800, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  AppText.bodySmall(sub, color: FeColors.ink2, maxLines: 1, overflow: TextOverflow.ellipsis),
-                ],
-              ),
-            ),
-            if (ws.selection.length > 1)
-              TechCountChip(text: arTr(context, 'ar.work.n_selected', [ws.selection.length])),
-          ],
+        ArElementHeader(
+          feature: f,
+          title: f.displayName,
+          subtitle: sub,
+          target: isTarget,
+          trailing: ws.selection.length > 1 ? TechCountChip(text: arTr(context, 'ar.work.n_selected', [ws.selection.length])) : null,
         ),
+        const SizedBox(height: 8),
+        ArElementTags(feature: f, target: isTarget),
+        const SizedBox(height: 8),
+        ArElementFactsView(facts: facts),
         if (s.args?.workOrderId != null && isTarget) ...[
           const SizedBox(height: 8),
           ArHintRow(text: 'ar.locate.from_wo'.getString(context), icon: ArIcons.forms),
@@ -261,8 +284,11 @@ class _VerifyPanelState extends ConsumerState<_VerifyPanel> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AppText.titleMedium(arTr(context, 'ar.verify.title', [f.displayName]), weight: FontWeight.w800),
-        AppText.bodySmall('ar.verify.prefilled'.getString(context), color: FeColors.ink2),
+        ArElementHeader(
+          feature: f,
+          title: arTr(context, 'ar.verify.title', [f.displayName]),
+          subtitle: 'ar.verify.prefilled'.getString(context),
+        ),
         const SizedBox(height: 10),
         _CheckRow(
           state: check == null || !check.measured ? _Check.pending : (check.consistent ? _Check.ok : _Check.warn),

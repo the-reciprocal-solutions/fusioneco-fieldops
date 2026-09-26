@@ -24,7 +24,7 @@ The wire contract between the app's `ChannelArEngine` (`lib/core/ar/channel_ar_e
 | `startSession` | optional `{depth: bool = true, progressEvents: bool = false, recordTo: path?, playbackFrom: path?}` | `null`. Starts tracking. Android: asks the Play Store for Google Play Services for AR when missing (then emits `error arcore-install-requested`); `recordTo`/`playbackFrom` use ARCore Recording & Playback (MP4). iOS: `recordTo`/`playbackFrom` emit `recording-unsupported` / `playback-unsupported` |
 | `loadTiles` | `{tiles: [{hash: String, path: String}]}` | `{loaded: [hash], failed: [{hash, reason}]}` once every tile is decoded. Tiles upload **in the order sent** (send focus tiles first). The file's SHA-256 is compared with `hash`; a mismatch loads anyway and emits `error tile-hash-mismatch` |
 | `unloadTiles` | `{hashes: [String]}` | `null` |
-| `setModelTransform` | `{arFromTile: [16], easeMs: int = 300}` (`matrix` accepted as an alias) | `null`. Eases over `easeMs` (yaw along the shortest arc, translation linearly, smoothstep); `easeMs <= 0` or a non-4-DoF matrix applies at once. Native never computes a transform |
+| `setModelTransform` | `{arFromTile: [16], easeMs: int = 300}` (`matrix` accepted as an alias) | `null`. Eases over `easeMs` (yaw along the shortest arc, translation linearly, smoothstep); `easeMs <= 0` or a non-4-DoF matrix applies at once. Native never computes a transform. **Until the first call after `startSession`/`stop`, the model (tiles, grid, pins) is loaded but hidden**, and the first call applies at once: the identity root would put the model at the session origin |
 | `setFeatureState` | `{rgba: Uint8List, width: int, buildId: String?}` | `null`. One RGBA8 texel per feature id, row-major, `width` per row (`feature_state.dart`). **RGB** tint, `0,0,0` = none. **A** = display mode `round(a / 85)`: 0 hidden · 1 ghost · 2 normal · 3 highlight (drawn through walls, outlined, pulsing). Optional `buildId` scopes the texture to one build (feature ids are dense *per build*); without it the texture applies to every build that has no texture of its own |
 | `setLayers` | `{mep: bool, structure: bool, architecture: bool, opacity: 0..1, sectionY: double?, grid: bool?}` | `null`. `sectionY` is a tile-frame height: geometry above it is clipped. `grid` (extra, default true) toggles the grid overlay |
 | `setTarget` | `{featureIds: [int] \| null, buildId: String?}` | `null`. Turns on `targetScreen` events (10 Hz) for the union of those features' bounds; `null` clears. Highlighting itself comes from the feature state (alpha 255) |
@@ -43,6 +43,7 @@ Additive; a Dart side that doesn't use them loses nothing.
 | Method | Arguments | Result |
 |---|---|---|
 | `projectTile` | `{points: [[x,y,z]]}` tile frame | `[[x, y, onScreen] \| null]` in logical pixels, through the current (eased) model transform. For Flutter-drawn pin labels and grid bubbles |
+| `anchorAt` | `{posAr: [x,y,z]}` | anchor id or `null`. A native anchor at a committed corner snap; it then reports `anchor` events like a board's, so Dart refits as the tracker corrects its map (corners had no anchor and the model slid in plain rooms) |
 | `installArCore` | — | Android: `true` when Google Play Services for AR is installed after asking. iOS: `false` |
 
 ## Events
@@ -58,6 +59,7 @@ Maps on `fusioneco/ar/events`. Never per frame.
 | `pose` | `arFromCamera: [16]` (camera looks down its −Z) | 5 Hz while tracking |
 | `targetScreen` | `x, y` (logical px), `onScreen: bool` | 10 Hz while a target is set and resident. Behind the camera, `x, y` are mirrored so an edge arrow still points the way to turn |
 | `error` | `code, detail` | see codes |
+| `floor` | `yAr: double, areaM2: double` | **extension**: the largest tracked upward plane ≥ 0.25 m², 0.8–2.3 m below the camera (Dart ignores it when it disagrees by > 12 cm with the floor the observations imply). At most 1 Hz, only when it moves by 1 cm. Dart fixes the model's height from it (floor on floor); boards and corners then set only yaw and horizontal position |
 | `markerProgress` | `rawPayload, samples, needed: 15, distanceM, viewAngleDeg, gate: ok\|tooClose\|tooFar\|angle` | **extension**, only after `startSession({progressEvents: true})`: one per QR sample while a board locks, for the M3 Lock ring and its coaching chips. Dart ignores unknown types, so it's safe either way |
 
 ### How a `marker` is accepted (docs/ar-bim-overlay.md §4.2)

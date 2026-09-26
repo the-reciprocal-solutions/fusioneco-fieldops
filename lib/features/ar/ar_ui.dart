@@ -162,6 +162,25 @@ abstract final class ArIcons {
   static const box = LucideIcons.box;
   static const help = LucideIcons.circleHelp;
   static const external = LucideIcons.externalLink;
+  static const drill = LucideIcons.drill;
+  static const crosshair = LucideIcons.crosshair;
+  static const legend = LucideIcons.palette;
+  static const showAll = LucideIcons.eye;
+  static const hidden = LucideIcons.eyeOff;
+  static const expand = LucideIcons.chevronDown;
+  static const collapse = LucideIcons.chevronUp;
+  static const height = LucideIcons.moveVertical;
+  static const run = LucideIcons.ruler;
+  static const size = LucideIcons.circleDot;
+  static const concealed = LucideIcons.brickWall;
+  static const electrical = LucideIcons.zap;
+  static const plumbing = LucideIcons.droplets;
+  static const hvac = LucideIcons.fan;
+  static const fire = LucideIcons.flame;
+  static const controls = LucideIcons.cpu;
+  static const otherMep = LucideIcons.cable;
+  static const structure = LucideIcons.columns3;
+  static const walls = LucideIcons.brickWall;
 
   static IconData discipline(String d) => switch (d) {
     'mep' => LucideIcons.fan,

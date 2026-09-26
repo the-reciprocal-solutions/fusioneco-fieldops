@@ -259,4 +259,45 @@ void main() {
       expect(fit.quality, AlignmentQuality.locked);
     }
   });
+
+  group('floor-anchored height (P-012)', () {
+    test('a board hung 5 cm high no longer lifts the model when the floor is tracked', () {
+      // Floor at tile y = 0 → AR y = 0.2 (the truth's tY).
+      final fit = _estimator.fit(
+        [
+          _marker('high', const Vec3(0, 1.5, 0), offset: const Vec3(0, 0.05, 0)),
+          _marker('ok', const Vec3(6, 1.5, 0)),
+        ],
+        floorAr: 0.2,
+        floorTileY: 0,
+      );
+      expect(fit.floorAnchored, isTrue);
+      expect(fit.t.y, closeTo(0.2, 1e-9));
+      expect(fit.verticalErrorsM['high'], closeTo(0.05, 1e-6));
+      // Heights are the floor's job: residuals are horizontal only.
+      expect(fit.maxResidualM, lessThan(1e-6));
+      expect(fit.quality, AlignmentQuality.locked);
+    });
+
+    test('without a floor the same board drags the model up by half its error', () {
+      final fit = _estimator.fit([
+        _marker('high', const Vec3(0, 1.5, 0), offset: const Vec3(0, 0.05, 0)),
+        _marker('ok', const Vec3(6, 1.5, 0)),
+      ]);
+      expect(fit.floorAnchored, isFalse);
+      expect(fit.t.y, closeTo(0.225, 1e-6));
+    });
+  });
+
+  group('green needs agreement within 2 cm', () {
+    test('two far boards that disagree by 7 cm (3.5 cm each) are usable but amber', () {
+      final fit = _estimator.fit([
+        _marker('a', const Vec3(0, 1.5, 0), offset: const Vec3(0.07, 0, 0)),
+        _marker('b', const Vec3(6, 1.5, 0)),
+      ]);
+      expect(fit.maxResidualM, greaterThan(AlignmentEstimator.greenResidualM));
+      expect(fit.maxResidualM, lessThanOrEqualTo(AlignmentEstimator.lockResidualM));
+      expect(fit.quality, AlignmentQuality.placed);
+    });
+  });
 }

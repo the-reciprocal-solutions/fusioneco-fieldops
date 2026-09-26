@@ -232,7 +232,10 @@ class _Camera extends ConsumerWidget {
         showGhost: setup.ghost != null && (step == ArSetupStep.locked || step == ArSetupStep.leaveBoard),
         showModel: s.stage == ArSessionStage.work || s.isPlaced,
         targetGlobalId: ws.mode == ArMode.locate ? s.target?.globalId : null,
-        selected: {for (final f in ws.selection) f.globalId},
+        selected: {
+          for (final f in ws.selection) f.globalId,
+          if (ws.drilling && ws.drill?.feature != null) ws.drill!.feature!.globalId,
+        },
         statusColors: !progressColours
             ? const {}
             : {
@@ -245,6 +248,11 @@ class _Camera extends ConsumerWidget {
                   },
               },
         snagGlobalIds: {for (final p in ws.snagPins) p.feature.globalId},
+        hidden: {
+          for (final f in s.features)
+            if ((!ws.layers.mep && ArDiscipline.of(f.discipline).isMep) || ArWorkspaceController.filteredOut(f, ws.layers))
+              f.globalId,
+        },
         opacity: ws.layers.opacity,
         nudgePx: s.nudgeM * 600,
       ),

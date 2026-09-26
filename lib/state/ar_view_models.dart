@@ -224,6 +224,7 @@ class ArFeature {
     this.systemName,
     this.floorId,
     this.tileHashes = const {},
+    this.props = const {},
   });
 
   final String buildId;
@@ -244,6 +245,22 @@ class ArFeature {
 
   /// Tiles this element appears in: pinned resident while it is the target.
   final Set<String> tileHashes;
+
+  /// IFC instance properties (`"<Pset>.<Property>": text`, plus `Tag`).
+  final Map<String, String> props;
+
+  /// The first property named [name] in any property set, case-insensitive.
+  String? prop(String name) {
+    final n = name.toLowerCase();
+    for (final e in props.entries) {
+      final k = e.key.toLowerCase();
+      if (k == n || k.endsWith('.$n')) {
+        final v = e.value.trim();
+        if (v.isNotEmpty) return v;
+      }
+    }
+    return null;
+  }
 
   Vec3 get centre => Vec3(
     (bboxMin.x + bboxMax.x) / 2,
@@ -313,6 +330,7 @@ class ArPlan {
     required this.maxX,
     required this.maxZ,
     this.walls = const [],
+    this.wallThicknesses = const [],
     this.columns = const [],
     this.doors = const [],
     this.spaces = const [],
@@ -323,7 +341,15 @@ class ArPlan {
   final double minZ;
   final double maxX;
   final double maxZ;
+
+  /// Wall centre lines.
   final List<List<Vec2>> walls;
+
+  /// Thickness of `walls[i]` in metres, parallel to [walls]. The mini plan
+  /// draws hairlines and never needed it; the drill check and "concealed in
+  /// wall" do (a wall's faces are its centre line ± thickness/2). Plans
+  /// built without it read the server's own default via [wallThicknessAt].
+  final List<double> wallThicknesses;
   final List<List<Vec2>> columns;
 
   /// Door openings as two-point segments.
@@ -333,6 +359,9 @@ class ArPlan {
 
   double get width => math.max(0.1, maxX - minX);
   double get depth => math.max(0.1, maxZ - minZ);
+
+  /// 0.2 m (the wire parser's default, `PlanWall.thickness`) when unknown.
+  double wallThicknessAt(int i) => i < wallThicknesses.length && wallThicknesses[i] > 0 ? wallThicknesses[i] : 0.2;
 
   /// The space whose polygon contains the plan point, if any.
   ArPlanSpace? spaceAt(double x, double z) {

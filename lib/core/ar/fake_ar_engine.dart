@@ -703,6 +703,12 @@ class FakeArEngine implements ArEngine {
   }
 
   @override
+  Future<String?> anchorAt(Vec3 posAr) async {
+    commands.add('anchorAt');
+    return null; // the demo world never drifts
+  }
+
+  @override
   Future<PickResult?> pick(double x, double y) async {
     commands.add('pick');
     final pump = ArDemoScenario.features().first;

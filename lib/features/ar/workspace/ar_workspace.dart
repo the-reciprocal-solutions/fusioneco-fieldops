@@ -18,6 +18,8 @@ import '../widgets/ar_demo_scene.dart';
 import '../widgets/ar_mini_plan.dart';
 import '../widgets/ar_status.dart';
 import '../widgets/ar_visuals.dart';
+import 'ar_discipline_legend.dart';
+import 'ar_drill_panel.dart';
 import 'ar_menu_panel.dart';
 import 'ar_mode_panel.dart';
 
@@ -125,6 +127,7 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
       children: [
         layer,
         ..._locateOverlay(context, s, ws),
+        if (ws.drilling) Positioned.fill(child: ArDrillCrosshair(viewSize: widget.viewSize)),
         if (ws.measuring) _measureChip(context, s, ws),
         if (ws.lassoBusy || ws.picking)
           const Positioned(
@@ -218,6 +221,14 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
           ),
         ),
       ),
+      // Under the badge, between the mode rail and the tool rail (and clear
+      // of the corner plan when it's open).
+      PositionedDirectional(
+        start: 210,
+        end: ws.planInCorner && s.plan != null ? 390 : 120,
+        top: 72,
+        child: const ArDisciplineLegend(center: true),
+      ),
       if (ws.planInCorner && s.plan != null)
         PositionedDirectional(
           end: 110,
@@ -230,6 +241,13 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
   }
 
   // --------------------------------------------------------------- phone
+
+  /// Phone: the legend sits under the top row (and the Demo banner); what
+  /// used to start there moves below it.
+  double _phoneLegendTop(BuildContext context, ArSessionState s) => MediaQuery.paddingOf(context).top + 12 + (s.demo ? 96 : 56);
+
+  double _phoneBelowLegend(BuildContext context, ArSessionState s) =>
+      _phoneLegendTop(context, s) + (s.features.isEmpty ? 8 : 52);
 
   List<Widget> _phone(BuildContext context, ArSessionState s, ArWorkspaceState ws) {
     final top = MediaQuery.paddingOf(context).top + 12;
@@ -252,6 +270,13 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
       ),
       if (s.demo)
         Positioned(top: top + 56, left: 0, right: 0, child: const Center(child: ArDemoBanner())),
+      // Stops short of the tool column on the end edge.
+      PositionedDirectional(
+        start: 12,
+        end: 68,
+        top: _phoneLegendTop(context, s),
+        child: const ArDisciplineLegend(),
+      ),
       PositionedDirectional(
         end: 12,
         top: top + (s.demo ? 96 : 64),
@@ -268,6 +293,8 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
             const SizedBox(height: 8),
             ArGlassButton(icon: ArIcons.measure, label: 'ar.tool.measure'.getString(context), active: ws.measuring, onTap: _ws.toggleMeasure),
             const SizedBox(height: 8),
+            ArGlassButton(icon: ArIcons.drill, label: 'ar.tool.drill_long'.getString(context), active: ws.drilling, onTap: _toggleDrill),
+            const SizedBox(height: 8),
             ArGlassButton(icon: ArIcons.more, label: 'ar.tool.more'.getString(context), active: ws.panel == ArPanel.more, onTap: () => _ws.openPanel(ArPanel.more)),
           ],
         ),
@@ -275,7 +302,7 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
       if (ws.planInCorner && s.plan != null)
         PositionedDirectional(
           start: 12,
-          top: top + (s.demo ? 96 : 64),
+          top: _phoneBelowLegend(context, s),
           width: 180,
           height: 128,
           child: _cornerPlan(s),
@@ -301,6 +328,11 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
 
   void _reSnap() => ref.read(arSetupProvider.notifier).reSnap();
 
+  void _toggleDrill() {
+    ArHaptics.snap();
+    _ws.toggleDrill();
+  }
+
   void _backToSetup() => ref.read(arSetupProvider.notifier).reAlign(keepObservations: true);
 
   // -------------------------------------------------------------- locate
@@ -316,7 +348,7 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
         Positioned(
           left: widget.viewSize.width * 0.58,
           top: widget.viewSize.height * 0.52 - 40,
-          child: IgnorePointer(child: _TargetLabel(title: target.displayName, subtitle: _distanceLine(context, distance))),
+          child: IgnorePointer(child: _TargetLabel(target: target, subtitle: _distanceLine(context, distance))),
         ),
       ];
     }
@@ -326,7 +358,7 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
         Positioned(
           left: (screen.$1 - 80).clamp(8, widget.viewSize.width - 168).toDouble(),
           top: (screen.$2 - 76).clamp(8, widget.viewSize.height - 80).toDouble(),
-          child: IgnorePointer(child: _TargetLabel(title: target.displayName, subtitle: _distanceLine(context, distance))),
+          child: IgnorePointer(child: _TargetLabel(target: target, subtitle: _distanceLine(context, distance))),
         ),
       ];
     }
@@ -365,7 +397,7 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
         ? arTr(context, 'ar.measure.result', [arMetres(context, ws.measureM!), arCentimetres(context, uncertainty, plusMinus: true)])
         : (ws.measureFrom == null ? 'ar.measure.first'.getString(context) : 'ar.measure.second'.getString(context));
     return Positioned(
-      top: widget.tablet ? 80 : MediaQuery.paddingOf(context).top + 120,
+      top: widget.tablet ? (s.features.isEmpty ? 80 : 128) : _phoneBelowLegend(context, s) + 4,
       left: 0,
       right: 0,
       child: Center(
@@ -399,12 +431,13 @@ class _LassoPainter extends CustomPainter {
 }
 
 class _TargetLabel extends StatelessWidget {
-  const _TargetLabel({required this.title, required this.subtitle});
-  final String title;
+  const _TargetLabel({required this.target, required this.subtitle});
+  final ArFeature target;
   final String subtitle;
 
   @override
   Widget build(BuildContext context) {
+    final d = ArDiscipline.of(target.discipline);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(color: FeColors.danger, borderRadius: BorderRadius.circular(12)),
@@ -412,7 +445,20 @@ class _TargetLabel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          AppText.titleSmall(title, color: Colors.white, weight: FontWeight.w800),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // The discipline's colour, ringed white so amber or red reads
+              // on the red label.
+              Container(
+                padding: const EdgeInsets.all(1.5),
+                decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                child: ArLegendDot(colour: arDisciplineColor(d), filled: d != ArDiscipline.walls, size: 9),
+              ),
+              const SizedBox(width: 6),
+              Flexible(child: AppText.titleSmall(target.displayName, color: Colors.white, weight: FontWeight.w800)),
+            ],
+          ),
           AppText.caption(subtitle, color: Colors.white),
         ],
       ),
@@ -530,6 +576,7 @@ class _ToolRail extends ConsumerWidget {
           _Tool(icon: ArIcons.board, label: 'ar.tool.board'.getString(context), onTap: setup.saveBoardFromWork),
           _Tool(icon: ArIcons.section, label: 'ar.tool.section'.getString(context), active: ws.layers.section, onTap: ctrl.toggleSection),
           _Tool(icon: ArIcons.measure, label: 'ar.tool.measure'.getString(context), active: ws.measuring, onTap: ctrl.toggleMeasure),
+          _Tool(icon: ArIcons.drill, label: 'ar.tool.drill'.getString(context), active: ws.drilling, onTap: ctrl.toggleDrill),
           _Tool(icon: ArIcons.layers, label: 'ar.tool.layers'.getString(context), active: ws.panel == ArPanel.layers, onTap: () => ctrl.openPanel(ArPanel.layers)),
           _Tool(
             icon: ArIcons.grid,
@@ -733,6 +780,9 @@ class _PhoneSheetState extends ConsumerState<_PhoneSheet> {
   var _extent = _SheetExtent.half;
   double _drag = 0;
 
+  /// The extent before Drill check folded the sheet, restored after.
+  _SheetExtent? _beforeDrill;
+
   double _height(double screen) => switch (_extent) {
     _SheetExtent.peek => 196,
     _SheetExtent.half => math.min(410, screen * 0.48),
@@ -752,6 +802,19 @@ class _PhoneSheetState extends ConsumerState<_PhoneSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // Drill check aims with the view's centre: at "half" the sheet's top
+    // edge sits right on the crosshair, so fold it to peek (its verdict card
+    // comes first and still shows) and put it back afterwards.
+    ref.listen<bool>(arWorkspaceProvider.select((w) => w.drilling), (prev, next) {
+      if (next && prev != true) {
+        _beforeDrill = _extent;
+        setState(() => _extent = _SheetExtent.peek);
+      } else if (!next && prev == true && _beforeDrill != null) {
+        final back = _beforeDrill!;
+        _beforeDrill = null;
+        setState(() => _extent = back);
+      }
+    });
     final ws = ref.watch(arWorkspaceProvider);
     final ctrl = ref.read(arWorkspaceProvider.notifier);
     final screen = MediaQuery.sizeOf(context).height;

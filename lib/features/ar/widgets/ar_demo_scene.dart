@@ -20,6 +20,7 @@ class ArDemoSceneState {
     this.selected = const {},
     this.statusColors = const {},
     this.snagGlobalIds = const {},
+    this.hidden = const {},
     this.opacity = 0.8,
     this.nudgePx = 0,
   });
@@ -37,6 +38,10 @@ class ArDemoSceneState {
   /// GlobalId → progress colour, when colouring by progress.
   final Map<String, Color> statusColors;
   final Set<String> snagGlobalIds;
+
+  /// GlobalIds the legend or the Layers switches filter out: not drawn, so
+  /// the discipline chips can be tried in Demo mode too.
+  final Set<String> hidden;
   final double opacity;
 
   /// The nudge, drawn as a small shift of the model so it visibly moves.
@@ -269,6 +274,7 @@ class _ScenePainter extends CustomPainter {
     final h = size.height;
     final a = scene.opacity.clamp(0.15, 1.0).toDouble();
     for (final r in _regions) {
+      if (scene.hidden.contains(r.globalId)) continue;
       final rect = Rect.fromLTRB(r.rect.left * w + scene.nudgePx, r.rect.top * h, r.rect.right * w + scene.nudgePx, r.rect.bottom * h);
       final selected = scene.selected.contains(r.globalId);
       final target = scene.targetGlobalId == r.globalId;

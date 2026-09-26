@@ -203,7 +203,10 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
       case ArSetupStep.start:
         return _StartCard(setup: setup, session: s, plan: _plan(setup, s), tablet: widget.tablet);
       case ArSetupStep.cornerA:
-        return _CornerACard(setup: setup, session: s, plan: widget.tablet ? _plan(setup, s) : null);
+        // Phones get the plan too: in a rectangular room every inside corner
+        // looks alike, and without seeing which one is chosen people snapped
+        // a different one and the model landed rotated (first device run).
+        return _CornerACard(setup: setup, session: s, plan: _plan(setup, s), planHeight: widget.tablet ? 180 : 140);
       case ArSetupStep.cornerB:
         return _CornerBCard(setup: setup, session: s, plan: widget.tablet ? _plan(setup, s) : null);
       case ArSetupStep.boardScan:
@@ -591,10 +594,11 @@ String? _contextLine(BuildContext context, ArSessionState s) {
 
 /// S2 / TabSnap / PhSnap: aim the pin at corner A.
 class _CornerACard extends ConsumerWidget {
-  const _CornerACard({required this.setup, required this.session, this.plan});
+  const _CornerACard({required this.setup, required this.session, this.plan, this.planHeight = 180});
   final ArSetupState setup;
   final ArSessionState session;
   final Widget? plan;
+  final double planHeight;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -615,7 +619,9 @@ class _CornerACard extends ConsumerWidget {
           ),
           if (plan != null) ...[
             const SizedBox(height: 10),
-            SizedBox(height: 180, child: plan),
+            SizedBox(height: planHeight, child: plan),
+            const SizedBox(height: 4),
+            AppText.caption('ar.corner.tap_other'.getString(context), color: FeColors.ink2),
           ],
           const SizedBox(height: 10),
           AppText.bodyMedium(

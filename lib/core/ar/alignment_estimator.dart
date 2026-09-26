@@ -222,6 +222,8 @@ class AlignmentFit {
     required this.observationCount,
     this.method = 'none',
     this.nudgeM = 0,
+    this.verticalErrorsM = const {},
+    this.floorAnchored = false,
   });
 
   factory AlignmentFit.none() => AlignmentFit(
@@ -268,6 +270,14 @@ class AlignmentFit {
   /// Size of the hand nudge folded into [t], in metres (0 when none).
   final double nudgeM;
 
+  /// Per observation, how far above (+) or below (−) its model height it was
+  /// seen, in metres. With [floorAnchored] this is the board's hanging error
+  /// (or the floor finish), and it is excluded from [residualsM].
+  final Map<String, double> verticalErrorsM;
+
+  /// The height came from the tracked floor, not from the observations.
+  final bool floorAnchored;
+
   double get yawDeg => radToDeg(yawRad);
   double get maxResidualMm => maxResidualM * 1000;
 
@@ -297,12 +307,14 @@ class AlignmentFit {
         observationCount: observationCount,
         method: method,
         nudgeM: nudgeM,
+        verticalErrorsM: verticalErrorsM,
+        floorAnchored: floorAnchored,
       );
 
   @override
   String toString() => 'AlignmentFit(${quality.name}, yaw ${yawDeg.toStringAsFixed(2)}°, '
       't $t, max ${maxResidualMm.toStringAsFixed(1)} mm, n $observationCount, '
-      'spread ${spreadM.toStringAsFixed(2)} m, outliers $outliers)';
+      'spread ${spreadM.toStringAsFixed(2)} m, method $method${floorAnchored ? ', floor' : ''}, outliers $outliers)';
 }
 
 /// Closed-form weighted 4-DoF fit: yaw about +Y plus translation
@@ -327,6 +339,10 @@ class AlignmentEstimator {
 
   /// Green needs every kept residual at or under this; red above it.
   static const lockResidualM = 0.05;
+
+  /// Worst residual still shown green; between this and [lockResidualM] the
+  /// fit is usable but amber (docs/ar-setup-and-gamma-parity.md, P-012).
+  static const greenResidualM = 0.02;
 
   /// An observation is an outlier when its residual exceeds
   /// `max(outlierSigmas · σ, outlierFloorM)`.
@@ -353,7 +369,18 @@ class AlignmentEstimator {
   /// offender (largest residual relative to its own tolerance) is dropped
   /// and the fit rerun, one at a time, so a single bad board can't drag a
   /// good one out with it.
-  AlignmentFit fit(List<ArObservation> obs, {bool manual = false, Vec3? nudgeAr}) {
+  /// [floorAr] (the tracked floor's AR-world Y) with [floorTileY] (the
+  /// model's finished floor in the tile frame) fixes the vertical: the model
+  /// floor sits on the real floor, and observations only set yaw and the
+  /// horizontal position. Residuals are then horizontal, and each
+  /// observation's height error is reported in [AlignmentFit.verticalErrorsM].
+  AlignmentFit fit(
+    List<ArObservation> obs, {
+    bool manual = false,
+    Vec3? nudgeAr,
+    double? floorAr,
+    double? floorTileY,
+  }) {
     if (obs.isEmpty) {
       return manual ? AlignmentFit.none().withQuality(AlignmentQuality.manual) : AlignmentFit.none();
     }
@@ -381,12 +408,18 @@ class AlignmentEstimator {
 
     final nudge = nudgeAr ?? Vec3.zero;
     final isManual = manual || nudgeAr != null;
-    final t = solution.t + nudge;
+    final onFloor = floorAr != null && floorTileY != null;
+    var t = solution.t + nudge;
+    // Yaw-only rotation leaves Y alone, so aY = bY + tY: the floor gives tY.
+    if (onFloor) t = Vec3(t.x, floorAr - floorTileY, t.z);
     final transform = Mat4.fromYawTranslation(solution.yaw, t);
 
     final residuals = <String, double>{};
+    final vertical = <String, double>{};
     for (final o in obs) {
-      residuals[o.id] = (transform.transformPoint(o.bTile) - o.aAr).length;
+      final d = transform.transformPoint(o.bTile) - o.aAr;
+      residuals[o.id] = onFloor ? Vec3(d.x, 0, d.z).length : d.length;
+      vertical[o.id] = -d.y;
     }
     var maxResidual = 0.0;
     for (final o in inliers) {
@@ -401,7 +434,10 @@ class AlignmentEstimator {
       // Checked before "placed" on purpose: two observations that disagree
       // must never read as a calm amber, even when they are close together.
       quality = AlignmentQuality.siteMismatch;
-    } else if (n == 1 || solution.spread < spreadForPositionsM) {
+    } else if (n == 1 || solution.spread < spreadForPositionsM || maxResidual > greenResidualM) {
+      // Green needs two references far enough apart to fix yaw from their
+      // positions, agreeing within 2 cm; anything less stays amber, where the
+      // UI asks for another board or corner.
       quality = AlignmentQuality.placed;
     } else {
       quality = AlignmentQuality.locked;
@@ -415,6 +451,8 @@ class AlignmentEstimator {
       residualsM: Map.unmodifiable(residuals),
       outliers: List.unmodifiable(outliers),
       spreadM: solution.spread,
+      verticalErrorsM: Map.unmodifiable(vertical),
+      floorAnchored: onFloor,
       quality: quality,
       observationCount: n,
       method: solution.method,

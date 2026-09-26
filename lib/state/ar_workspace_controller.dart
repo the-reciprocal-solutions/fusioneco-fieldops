@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/ar/alignment_estimator.dart' show CornerObs;
+import '../core/ar/drill_check.dart';
 import '../core/ar/feature_state.dart';
 import '../core/c2o/c2o_asset_resolver.dart';
 import '../core/ar/vec.dart';
@@ -42,6 +44,8 @@ class ArLayerState {
     this.colourBy = ArColourBy.discipline,
     this.opacity = 0.7,
     this.section = false,
+    this.hiddenDisciplines = const {},
+    this.solo,
   });
 
   final bool mep;
@@ -61,6 +65,26 @@ class ArLayerState {
   /// A horizontal cut 1.2 m above the finished floor, like the web's cut plan.
   final bool section;
 
+  /// MEP disciplines switched off in the legend ([ArDiscipline.name]s). Walls
+  /// and structure are not in here: their chips drive [architecture] and
+  /// [structure], the same switches the Layers panel's models use, so the
+  /// legend and the panel can never disagree.
+  final Set<String> hiddenDisciplines;
+
+  /// The chip a long-press made "show only this" ([ArDiscipline.name]);
+  /// tapping it again restores everything.
+  final String? solo;
+
+  /// Whether a legend chip reads as shown: its model switch is on and, for
+  /// MEP, the discipline isn't filtered out.
+  bool shows(ArDiscipline d) => switch (d) {
+    ArDiscipline.walls => architecture,
+    ArDiscipline.structure => structure,
+    _ => mep && !hiddenDisciplines.contains(d.name),
+  };
+
+  bool isSolo(ArDiscipline d) => solo == d.name && shows(d);
+
   ArLayerState copyWith({
     bool? mep,
     bool? structure,
@@ -76,6 +100,9 @@ class ArLayerState {
     ArColourBy? colourBy,
     double? opacity,
     bool? section,
+    Set<String>? hiddenDisciplines,
+    String? solo,
+    bool clearSolo = false,
   }) => ArLayerState(
     mep: mep ?? this.mep,
     structure: structure ?? this.structure,
@@ -91,6 +118,8 @@ class ArLayerState {
     colourBy: colourBy ?? this.colourBy,
     opacity: opacity ?? this.opacity,
     section: section ?? this.section,
+    hiddenDisciplines: hiddenDisciplines ?? this.hiddenDisciplines,
+    solo: clearSolo ? null : (solo ?? this.solo),
   );
 }
 
@@ -117,6 +146,9 @@ class ArWorkspaceState {
     this.snagPins = const [],
     this.verify,
     this.mappingConfirmed = true,
+    this.legendOpen = true,
+    this.drilling = false,
+    this.drill,
   });
 
   final ArMode mode;
@@ -150,6 +182,15 @@ class ArWorkspaceState {
   /// asset ↔ element mapping (§1.2), on by default, one tap to clear.
   final bool mappingConfirmed;
 
+  /// The discipline legend under the badge: open, or folded to one chip.
+  final bool legendOpen;
+
+  /// The Drill check tool is on (crosshair + verdict card).
+  final bool drilling;
+
+  /// Its latest reading, refreshed at most 5 times a second.
+  final ArDrillReading? drill;
+
   ArFeature? get primary => selection.isEmpty ? null : selection.first;
 
   ArWorkspaceState copyWith({
@@ -176,6 +217,10 @@ class ArWorkspaceState {
     ArVerifyCheck? verify,
     bool clearVerify = false,
     bool? mappingConfirmed,
+    bool? legendOpen,
+    bool? drilling,
+    ArDrillReading? drill,
+    bool clearDrill = false,
   }) => ArWorkspaceState(
     mode: mode ?? this.mode,
     selectMode: selectMode ?? this.selectMode,
@@ -198,6 +243,9 @@ class ArWorkspaceState {
     snagPins: snagPins ?? this.snagPins,
     verify: clearVerify ? null : (verify ?? this.verify),
     mappingConfirmed: mappingConfirmed ?? this.mappingConfirmed,
+    legendOpen: legendOpen ?? this.legendOpen,
+    drilling: drilling ?? this.drilling,
+    drill: clearDrill ? null : (drill ?? this.drill),
   );
 }
 
@@ -276,6 +324,49 @@ class ArSelectionSummary {
   }
 }
 
+/// What the Drill check shows. [notPlaced]: no fit yet, align first;
+/// [noWalls]: the floor plan has no walls to test; [noHit]: the crosshair
+/// isn't on a wall.
+enum ArDrillStatus { notPlaced, noWalls, noHit, safe, caution, danger }
+
+class ArDrillReading {
+  const ArDrillReading({required this.status, this.hit, this.nearest, this.nearbyCount = 0});
+
+  final ArDrillStatus status;
+  final DrillHit? hit;
+
+  /// The nearest service behind the face within 1 m, if any (also on green:
+  /// "nearest service 42 cm").
+  final DrillFinding<ArFeature>? nearest;
+
+  /// Services within the caution radius, the nearest included.
+  final int nearbyCount;
+
+  ArFeature? get feature => nearest?.ref;
+}
+
+/// What the element card can say about one element from data already on
+/// the phone (bounding box, floor datum, plan walls): no server call.
+class ArElementFacts {
+  const ArElementFacts({required this.discipline, this.feature, this.placement, this.runLengthM, this.sizeMm = const []});
+
+  /// The element itself, for its IFC properties (Tag, Status, SiteNote).
+  final ArFeature? feature;
+
+  final ArDiscipline discipline;
+
+  /// Heights above the finished floor and whether it is concealed. Null
+  /// before the floor pack is known.
+  final ServicePlacement? placement;
+
+  /// Runs (pipe, duct, conduit, tray): the longest box side.
+  final double? runLengthM;
+
+  /// Runs: the cross-section from the box, smallest first, in mm. One value
+  /// for round sections (pipe, cable: ≈ diameter), two for ducts and trays.
+  final List<int> sizeMm;
+}
+
 extension _FirstOrNullSafe<T> on Iterable<T> {
   T? get firstOrNullSafe {
     final it = iterator;
@@ -289,13 +380,35 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
   var _lastMarkerSeq = -1;
   ArFloorContext? _floorSeen;
 
+  static const _drill = DrillCheck();
+
+  /// Drill check runs at most this often (5 Hz): pose events already come
+  /// at ~5 Hz, and a verdict that flickers faster than it can be read helps
+  /// nobody.
+  static const _drillInterval = Duration(milliseconds: 200);
+  Timer? _drillTimer;
+  var _drillAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   ArSessionController get _session => ref.read(arSessionProvider.notifier);
   ArSessionState get _s => ref.read(arSessionProvider);
 
   @override
   ArWorkspaceState build() {
-    ref.onDispose(() => _disposed = true);
+    ref.onDispose(() {
+      _disposed = true;
+      _drillTimer?.cancel();
+    });
     ref.listen<ArSessionState>(arSessionProvider, (prev, next) {
+      // Drill check follows the camera (and a refit, a new plan).
+      if (state.drilling &&
+          (prev == null ||
+              !identical(prev.cameraAr, next.cameraAr) ||
+              !identical(prev.cameraForwardAr, next.cameraForwardAr) ||
+              !identical(prev.fit, next.fit) ||
+              !identical(prev.plan, next.plan) ||
+              !identical(prev.features, next.features))) {
+        _scheduleDrill();
+      }
       // A restarted session (Demo toggle, retry) brings a new floor pack:
       // nothing selected or measured on the old one carries over.
       final floor = next.floor;
@@ -342,7 +455,17 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
   // ------------------------------------------------------------ modes
 
   void setMode(ArMode m) {
-    _set(state.copyWith(mode: m, panel: ArPanel.none, rejections: const [], measuring: false, clearMeasure: true, clearVerify: true));
+    // A mode tab also leaves Drill check: the card below is the mode's again.
+    _set(state.copyWith(
+      mode: m,
+      panel: ArPanel.none,
+      rejections: const [],
+      measuring: false,
+      clearMeasure: true,
+      clearVerify: true,
+      drilling: false,
+      clearDrill: true,
+    ));
     if (m == ArMode.progress) {
       unawaited(loadProgress());
       if (state.layers.colourBy != ArColourBy.progress) {
@@ -472,7 +595,11 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
 
   // ------------------------------------------------------------- measure
 
-  void toggleMeasure() => _set(state.copyWith(measuring: !state.measuring, clearMeasure: true));
+  void toggleMeasure() {
+    final wasDrilling = state.drilling;
+    _set(state.copyWith(measuring: !state.measuring, clearMeasure: true, drilling: false, clearDrill: true));
+    if (wasDrilling) unawaited(_pushFeatureState());
+  }
 
   Future<void> _measureTap(double x, double y, {ArFeature? demoHit}) async {
     ArPickHit? hit;
@@ -516,16 +643,278 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
 
   void saveView() => _set(state.copyWith(savedViews: state.savedViews + 1));
 
+  /// The finished floor in the tile frame: where heights are measured from.
+  static double _datumOf(ArSessionState s) {
+    final floor = s.floor;
+    return floor == null ? 0.0 : floor.floorDatumY + floor.floorFinishOffsetM;
+  }
+
   Future<void> _pushLayers() async {
     final l = state.layers;
-    final floor = _s.floor;
-    final datum = floor == null ? 0.0 : floor.floorDatumY + floor.floorFinishOffsetM;
+    final datum = _datumOf(_s);
     await _session.setLayers(
       mep: l.mep,
       structure: l.structure,
       architecture: l.architecture,
       opacity: l.opacity,
       sectionY: l.section ? datum + 1.2 : null,
+    );
+  }
+
+  // --------------------------------------------------------- disciplines
+
+  List<ArFeature>? _countsOf;
+  Map<ArDiscipline, int> _counts = const {};
+
+  /// Elements per legend chip on the loaded floor (chips with none are not
+  /// shown). Cached per feature list: the legend rebuilds with every pose.
+  Map<ArDiscipline, int> disciplineCounts() {
+    final features = _s.features;
+    if (!identical(features, _countsOf)) {
+      final counts = <ArDiscipline, int>{};
+      for (final f in features) {
+        final d = ArDiscipline.of(f.discipline);
+        counts[d] = (counts[d] ?? 0) + 1;
+      }
+      _countsOf = features;
+      _counts = counts;
+    }
+    return _counts;
+  }
+
+  /// One tap on a legend chip: hide or show that discipline. Walls and
+  /// Structure are the model switches of the Layers panel. Tapping the chip
+  /// that is "showing only this" restores everything.
+  void toggleDiscipline(ArDiscipline d) {
+    final l = state.layers;
+    if (l.isSolo(d)) {
+      showAllDisciplines();
+      return;
+    }
+    setDisciplineShown(d, !l.shows(d));
+  }
+
+  /// Plain show/hide (the Layers panel's switch, and a chip tap). Clears any
+  /// "show only this": the user is now choosing chip by chip.
+  void setDisciplineShown(ArDiscipline d, bool shown) {
+    final l = state.layers;
+    switch (d) {
+      case ArDiscipline.walls:
+        setLayers(l.copyWith(architecture: shown, clearSolo: true));
+      case ArDiscipline.structure:
+        setLayers(l.copyWith(structure: shown, clearSolo: true));
+      default:
+        if (shown && !l.mep) {
+          // Every MEP chip read as hidden because the MEP model was off:
+          // bring the model back with just the one that was asked for.
+          setLayers(l.copyWith(
+            mep: true,
+            hiddenDisciplines: {for (final x in ArDiscipline.mepValues) if (x != d) x.name},
+            clearSolo: true,
+          ));
+          return;
+        }
+        final hidden = {...l.hiddenDisciplines};
+        if (shown) {
+          hidden.remove(d.name);
+        } else {
+          hidden.add(d.name);
+        }
+        setLayers(l.copyWith(hiddenDisciplines: hidden, clearSolo: true));
+    }
+  }
+
+  /// Long-press: show only [d]. Wall edges stay on unless Walls is the one
+  /// soloed: they are thin, and they are the live check that the overlay
+  /// still sits on the room (§5.3) — "only electrical" without them would
+  /// hide a drifted alignment. A second long-press restores everything.
+  void soloDiscipline(ArDiscipline d) {
+    final l = state.layers;
+    if (l.isSolo(d)) {
+      showAllDisciplines();
+      return;
+    }
+    setLayers(l.copyWith(
+      mep: d.isMep ? true : l.mep,
+      hiddenDisciplines: {for (final x in ArDiscipline.mepValues) if (x != d) x.name},
+      structure: d == ArDiscipline.structure,
+      architecture: true,
+      solo: d.name,
+    ));
+  }
+
+  void showAllDisciplines() => setLayers(state.layers.copyWith(
+    mep: true,
+    structure: true,
+    architecture: true,
+    hiddenDisciplines: const {},
+    clearSolo: true,
+  ));
+
+  void toggleLegend() => _set(state.copyWith(legendOpen: !state.legendOpen));
+
+  // ---------------------------------------------------------- element facts
+
+  ArPlan? _wallsOf;
+  List<DrillWall> _walls = const [];
+  List<ArFeature>? _slabsOf;
+  List<(Vec3, Vec3)> _slabs = const [];
+  List<ArFeature>? _servicesOf;
+  List<DrillService<ArFeature>> _services = const [];
+
+  List<DrillWall> _wallsFor(ArPlan? plan) {
+    if (!identical(plan, _wallsOf)) {
+      _wallsOf = plan;
+      _walls = plan == null
+          ? const []
+          : [
+              for (var i = 0; i < plan.walls.length; i++)
+                if (plan.walls[i].length >= 2) DrillWall(polyline: plan.walls[i], thicknessM: plan.wallThicknessAt(i)),
+            ];
+    }
+    return _walls;
+  }
+
+  List<(Vec3, Vec3)> _slabsFor(List<ArFeature> features) {
+    if (!identical(features, _slabsOf)) {
+      _slabsOf = features;
+      _slabs = [
+        for (final f in features)
+          if (f.ifcType.toUpperCase().contains('SLAB')) (f.bboxMin, f.bboxMax),
+      ];
+    }
+    return _slabs;
+  }
+
+  /// Every MEP element, whatever the legend hides: a cable filtered out of
+  /// the view is still in the wall.
+  List<DrillService<ArFeature>> _servicesFor(List<ArFeature> features) {
+    if (!identical(features, _servicesOf)) {
+      _servicesOf = features;
+      _services = [
+        for (final f in features)
+          if (ArDiscipline.of(f.discipline).isMep) DrillService(ref: f, bboxMin: f.bboxMin, bboxMax: f.bboxMax),
+      ];
+    }
+    return _services;
+  }
+
+  /// Heights, run length, size and concealment for the element card.
+  /// Concealment is judged for MEP only: a wall is always "in a wall".
+  ArElementFacts factsFor(ArFeature f) {
+    final s = _s;
+    final d = ArDiscipline.of(f.discipline);
+    ServicePlacement? placement;
+    if (s.floor != null) {
+      placement = _drill.place(
+        bboxMin: f.bboxMin,
+        bboxMax: f.bboxMax,
+        floorY: _datumOf(s),
+        walls: d.isMep ? _wallsFor(s.plan) : const [],
+        slabs: d.isMep ? _slabsFor(s.features) : const [],
+      );
+      if (!d.isMep) {
+        placement = ServicePlacement(zone: ServiceZone.room, bottomM: placement.bottomM, topM: placement.topM);
+      }
+    }
+    if (!f.isRun) return ArElementFacts(discipline: d, feature: f, placement: placement);
+    final sides = [
+      (f.bboxMax.x - f.bboxMin.x).abs(),
+      (f.bboxMax.y - f.bboxMin.y).abs(),
+      (f.bboxMax.z - f.bboxMin.z).abs(),
+    ]..sort();
+    final t = f.ifcType.toLowerCase();
+    final round = t.contains('pipe') || t.contains('conduit') || (t.contains('cable') && !t.contains('carrier'));
+    return ArElementFacts(
+      feature: f,
+      discipline: d,
+      placement: placement,
+      runLengthM: sides.last,
+      sizeMm: [for (final v in round ? sides.take(1) : sides.take(2)) _roundMm(v)],
+    );
+  }
+
+  /// To 5 mm below 100 mm, 10 mm above: the box is only near enough.
+  static int _roundMm(double m) {
+    final mm = m * 1000;
+    final step = mm < 100 ? 5 : 10;
+    return math.max(step, (mm / step).round() * step);
+  }
+
+  // ---------------------------------------------------------- drill check
+
+  /// Drill check on or off. Mutually exclusive with Measure (one centre
+  /// tool at a time).
+  void toggleDrill() {
+    final on = !state.drilling;
+    _set(state.copyWith(drilling: on, clearDrill: true, measuring: false, clearMeasure: true, panel: ArPanel.none));
+    if (on) {
+      _drillTimer?.cancel();
+      _drillTimer = null;
+      _drillAt = DateTime.fromMillisecondsSinceEpoch(0);
+      _runDrill();
+    } else {
+      unawaited(_pushFeatureState());
+    }
+  }
+
+  /// "Show element": leave Drill check with the nearest service selected.
+  void selectFromDrill(ArFeature f) {
+    _set(state.copyWith(drilling: false, clearDrill: true, mode: ArMode.locate, selection: [f], rejections: const []));
+    unawaited(_pushFeatureState());
+  }
+
+  void _scheduleDrill() {
+    if (_drillTimer?.isActive ?? false) return;
+    final wait = _drillInterval - DateTime.now().difference(_drillAt);
+    if (wait <= Duration.zero) {
+      _runDrill();
+    } else {
+      // Trailing run: the last pose before the phone came to rest is the
+      // one that must be checked.
+      _drillTimer = Timer(wait, _runDrill);
+    }
+  }
+
+  void _runDrill() {
+    _drillTimer = null;
+    if (_disposed || !state.drilling) return;
+    _drillAt = DateTime.now();
+    final before = state.drill?.feature;
+    final reading = _readDrill(_s);
+    _set(state.copyWith(drill: reading));
+    final after = reading.feature;
+    // Re-upload the highlight only when the nearest service changes.
+    if ((before == null) != (after == null) || (before != null && after != null && !_same(before, after))) {
+      unawaited(_pushFeatureState());
+    }
+  }
+
+  ArDrillReading _readDrill(ArSessionState s) {
+    final fit = s.fit;
+    if (!s.isPlaced || fit == null) return const ArDrillReading(status: ArDrillStatus.notPlaced);
+    final walls = _wallsFor(s.plan);
+    if (walls.isEmpty) return const ArDrillReading(status: ArDrillStatus.noWalls);
+    final cam = s.cameraTile;
+    final fwd = s.cameraForwardAr;
+    if (cam == null || fwd == null) return const ArDrillReading(status: ArDrillStatus.noHit);
+    final r = _drill.run(
+      origin: cam,
+      direction: fit.dirArToTile(fwd),
+      walls: walls,
+      floorY: _datumOf(s),
+      services: _servicesFor(s.features),
+    );
+    if (r.hit == null) return const ArDrillReading(status: ArDrillStatus.noHit);
+    return ArDrillReading(
+      status: switch (r.verdict!) {
+        DrillVerdict.safe => ArDrillStatus.safe,
+        DrillVerdict.caution => ArDrillStatus.caution,
+        DrillVerdict.danger => ArDrillStatus.danger,
+      },
+      hit: r.hit,
+      nearest: r.nearest,
+      nearbyCount: r.findings.where((f) => f.planeDistanceM < _drill.cautionM).length,
     );
   }
 
@@ -736,7 +1125,8 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
     }
     // Locate's x-ray context: with a target and at most one selection,
     // everything else is ghosted, in every build, so the target stands out.
-    final ghostOthers = state.mode == ArMode.locate && s.target != null && state.selection.length <= 1;
+    // Not while drilling: every service behind the wall should read clearly.
+    final ghostOthers = state.mode == ArMode.locate && s.target != null && state.selection.length <= 1 && !state.drilling;
     for (final entry in byBuild.entries) {
       await _pushBuildFeatureState(s, entry.key, entry.value, ghostOthers: ghostOthers);
     }
@@ -771,10 +1161,28 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
           final key = f.systemGlobalId;
           if (key != null) styles[f.featureId] = FeatureStyle(rgb: (key.hashCode & 0xFFFFFF) | 0x010101);
         case ArColourBy.discipline:
-          break;
+          // Colour MEP by discipline and ghost the slabs. Without a tint the
+          // material falls back to one colour per layer (all MEP cyan), which
+          // read as "everything looks the same and pale" on the first device
+          // run; full-width slabs drawn normally washed out the ceiling.
+          final rgb = arDisciplineRgb(f.discipline);
+          final slab = _isSheet(f);
+          if (rgb != null || slab) {
+            styles[f.featureId] = FeatureStyle(
+              display: (slab || ghostOthers) ? FeatureDisplay.ghost : FeatureDisplay.normal,
+              rgb: rgb,
+            );
+          }
       }
     }
     final selected = state.selection.where((f) => f.buildId == buildId).map((f) => f.featureId).toSet();
+    // Drill check's nearest service is highlighted like a selection, and
+    // shown even when the legend hides its discipline: it's the warning.
+    final drillHit = state.drilling ? state.drill?.feature : null;
+    if (drillHit != null && drillHit.buildId == buildId) {
+      selected.add(drillHit.featureId);
+      hidden.remove(drillHit.featureId);
+    }
     final target = <int>{if (s.target != null && s.target!.buildId == buildId) s.target!.featureId};
     final FeatureStateTexture tex;
     if (styles.isEmpty) {
@@ -796,19 +1204,45 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
       for (final id in hidden) {
         styles[id] = FeatureStyle.hidden;
       }
-      tex = FeatureState.build(featureCount: maxId + 1, styles: styles);
+      tex = FeatureState.build(
+        featureCount: maxId + 1,
+        styles: styles,
+        base: ghostOthers ? FeatureStyle.ghost : FeatureStyle.normal,
+      );
     }
     await _session.setFeatureState(tex.rgba, tex.width, buildId: buildId);
   }
 
-  /// The Layers panel's SHOW switches, applied per element type. They are
-  /// MEP switches: architecture and structure have their own layer toggles
-  /// (`setLayers`), so their elements never match here — otherwise "Equipment
-  /// off" would hide every wall now that each build gets its own texture.
-  /// Disciplines are the server's (`services/ar/geometry/classify.ts`).
+  /// Slabs, roofs and coverings: surfaces as big as the room. Drawn solid
+  /// over a camera image they hide the real ceiling and floor.
+  static bool _isSheet(ArFeature f) {
+    final t = f.ifcType.toUpperCase();
+    return t.contains('SLAB') || t.contains('ROOF') || t.contains('COVERING') || t.contains('FOOTING');
+  }
+
+  /// Public for Demo mode's painted scene, which has no feature texture.
+  static bool filteredOut(ArFeature f, ArLayerState l) => _filteredOut(f, l);
+
+  /// Every observation behind the fit is a floor-tap corner (`CornerObs`
+  /// method `floorTap`): no wall face was detected, so position and heading
+  /// rest on where the user tapped the floor. Usable, but rough, and the
+  /// badge alone ("Placed") doesn't say so: the workspace shows a hint.
+  static bool roughPlacement(ArSessionState s) =>
+      s.isPlaced && s.observations.isNotEmpty && s.observations.every((o) => o is CornerObs && o.method == 'floorTap');
+
+  /// The legend's discipline filters and the Layers panel's SHOW switches,
+  /// per element. The SHOW switches are MEP switches: architecture and
+  /// structure never match them — otherwise "Equipment off" would hide every
+  /// wall now that each build gets its own texture. Walls and structure
+  /// follow their own chips (= the model switches) per element as well,
+  /// because an architecture IFC often carries the columns and slabs, and
+  /// the Structure chip must hide those too. Disciplines are the server's
+  /// (`services/ar/geometry/classify.ts`).
   static bool _filteredOut(ArFeature f, ArLayerState l) {
-    final d = f.discipline.toLowerCase();
-    if (d.startsWith('architect') || d.startsWith('struct')) return false;
+    final disc = ArDiscipline.of(f.discipline);
+    if (disc == ArDiscipline.walls) return !l.architecture;
+    if (disc == ArDiscipline.structure) return !l.structure;
+    if (l.hiddenDisciplines.contains(disc.name)) return true;
     final t = f.ifcType.toLowerCase();
     if (!l.pipes && (t.contains('pipe') || t.contains('valve'))) return true;
     if (!l.ducts && t.contains('duct')) return true;
@@ -816,6 +1250,62 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
     if (!l.equipment && !f.isRun && !f.isValve) return true;
     return false;
   }
+}
+
+/// The legend's chips: six MEP disciplines (the [arDisciplineRgb] colours)
+/// plus Structure and Walls, which keep their layer look.
+enum ArDiscipline {
+  electrical,
+  plumbing,
+  hvac,
+  fire,
+  controls,
+  otherMep,
+  structure,
+  walls;
+
+  static const mepValues = [electrical, plumbing, hvac, fire, controls, otherMep];
+
+  /// The same prefixes as [arDisciplineRgb]; anything unrecognised is
+  /// "other MEP" (cyan), which is what the renderer draws it as.
+  static ArDiscipline of(String discipline) {
+    final d = discipline.toLowerCase();
+    if (d.startsWith('architect')) return walls;
+    if (d.startsWith('struct')) return structure;
+    if (d.startsWith('elec')) return electrical;
+    if (d.startsWith('plumb')) return plumbing;
+    if (d.startsWith('hvac') || d.startsWith('mech')) return hvac;
+    if (d.startsWith('fire')) return fire;
+    if (d.startsWith('control')) return controls;
+    return otherMep;
+  }
+
+  bool get isMep => this != structure && this != walls;
+
+  /// The tint the model is drawn with; null for Structure and Walls.
+  int? get rgb => switch (this) {
+    electrical => arDisciplineRgb('electrical'),
+    plumbing => arDisciplineRgb('plumbing'),
+    hvac => arDisciplineRgb('hvac'),
+    fire => arDisciplineRgb('fire'),
+    controls => arDisciplineRgb('controls'),
+    otherMep => arDisciplineRgb('mep'),
+    structure || walls => null,
+  };
+}
+
+/// AR discipline colours (sRGB), chosen to read against a camera image and
+/// to match the web plan's legend. Null for architecture and structure, which
+/// keep their layer look (edges, faint slate).
+int? arDisciplineRgb(String discipline) {
+  final d = discipline.toLowerCase();
+  if (d.startsWith('elec')) return 0xF59E0B; // amber
+  if (d.startsWith('plumb')) return 0x10B981; // green
+  if (d.startsWith('hvac') || d.startsWith('mech')) return 0x3B82F6; // blue
+  if (d.startsWith('fire')) return 0xEF4444; // red
+  if (d.startsWith('control')) return 0xA855F7; // purple
+  if (d == 'mep') return 0x06B6D4; // cyan
+  return null;
 }
 
 final arWorkspaceProvider = NotifierProvider.autoDispose<ArWorkspaceController, ArWorkspaceState>(

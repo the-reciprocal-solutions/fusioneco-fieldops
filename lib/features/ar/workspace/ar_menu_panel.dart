@@ -15,6 +15,7 @@ import '../../../widgets/app_text.dart';
 import '../../../widgets/tech_popup.dart';
 import '../ar_ui.dart';
 import '../widgets/ar_chrome.dart';
+import 'ar_discipline_legend.dart';
 
 /// GAMMA's flat 13-item menu, regrouped (§2.9): **Position** (re-align,
 /// save a board here, fine-tune) · **View** (floor plan, gridlines, torch,
@@ -329,6 +330,13 @@ class _LayersList extends ConsumerWidget {
             icon: const Icon(ArIcons.plus, size: 16),
             label: AppText.label('ar.layers.add_model'.getString(context), color: FeColors.primary, weight: FontWeight.w700),
           ),
+        // The legend's filters, as switches: one state, two controls. Walls
+        // and Structure here are the same switches as the models above.
+        if (ref.read(arWorkspaceProvider.notifier).disciplineCounts().isNotEmpty) ...[
+          const SizedBox(height: 12),
+          ArEyebrow('ar.legend.title'.getString(context)),
+          const ArDisciplineSwitches(),
+        ],
         const SizedBox(height: 12),
         ArEyebrow('ar.layers.show'.getString(context)),
         _SwitchRow(label: 'ar.layers.pipes'.getString(context), value: l.pipes, onChanged: (v) => ctrl.setLayers(l.copyWith(pipes: v))),

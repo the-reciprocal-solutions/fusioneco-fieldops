@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' show Size;
 
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/ar/alignment_estimator.dart';
@@ -321,6 +322,49 @@ class ArSessionState {
 
 class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   static const _estimator = AlignmentEstimator();
+
+  /// AR-world Y of the tracked floor (FloorPlaneEvent), or null before one.
+  double? _floorAr;
+
+  /// A tracked plane further than this from the floor the observations imply
+  /// is not the floor (a low false plane moved the model 27 cm on the first
+  /// device run). Board hanging errors are a few cm; 12 cm leaves room.
+  static const _floorAgreeM = 0.12;
+
+  /// The tracked floor, if it agrees with the observations: each corner is
+  /// measured on the floor, each board implies one (its model height above
+  /// the model floor). With none to compare against, the plane is trusted.
+  double? _floorFor(List<ArObservation> obs, double? floorTileY) {
+    final f = _floorAr;
+    if (f == null || floorTileY == null || obs.isEmpty) return f;
+    final implied = [for (final o in obs) o.aAr.y - (o.bTile.y - floorTileY)]..sort();
+    final median = implied[implied.length ~/ 2];
+    if ((f - median).abs() <= _floorAgreeM) return f;
+    if (kDebugMode) {
+      debugPrint('[ar-fit] floor plane ${f.toStringAsFixed(3)} ignored: observations put the floor at ${median.toStringAsFixed(3)}');
+    }
+    return null;
+  }
+
+  /// One line per refit in debug builds (`adb logcat -s flutter`), so an
+  /// overlay that sits wrong can be read off in numbers: what each reference
+  /// was seen at, where the model says it is, and how far apart they land.
+  void _logFit(AlignmentFit fit, List<ArObservation> obs, _RefitReason reason) {
+    if (!kDebugMode) return;
+    String v(Vec3 p) => '(${p.x.toStringAsFixed(3)}, ${p.y.toStringAsFixed(3)}, ${p.z.toStringAsFixed(3)})';
+    final lines = <String>[
+      '[ar-fit] ${reason.name}: $fit floorAr=${_floorAr?.toStringAsFixed(3)}',
+      for (final o in obs)
+        '[ar-fit]   ${o.kind} ${o.id} ${o is MarkerObs ? o.method : (o as CornerObs).method} '
+            'ar=${v(o.aAr)} tile=${v(o.bTile)} '
+            'res=${((fit.residualsM[o.id] ?? 0) * 1000).toStringAsFixed(0)}mm '
+            'dy=${((fit.verticalErrorsM[o.id] ?? 0) * 1000).toStringAsFixed(0)}mm'
+            '${o is MarkerObs ? ' nAr=${v(o.normalAr)} nTile=${v(o.normalTile)}' : ''}',
+    ];
+    for (final l in lines) {
+      debugPrint(l);
+    }
+  }
   static final _residency = makeResidency();
 
   ArEngine? _engine;
@@ -571,6 +615,12 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       _set(state.copyWith(lastCorner: ArCornerSighting(seq: ++_seq, corner: DetectedCorner.fromSeen(e))));
     } else if (e is AnchorUpdatedEvent) {
       _onAnchorUpdated(e.anchorId, e.posAr);
+    } else if (e is FloorPlaneEvent) {
+      if (state.demo) return;
+      _floorAr = e.yAr;
+      // Only a refit that already placed the model moves it; the floor alone
+      // never places anything.
+      if (state.observations.isNotEmpty) _refit(state.observations, reason: _RefitReason.floor);
     } else if (e is CameraPoseEvent) {
       // Demo: the fake's camera walks a different sample floor; the
       // director places the camera instead (see addObservation).
@@ -666,6 +716,17 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     unawaited(_updateResidency());
   }
 
+  /// Pins a native anchor under a committed corner, so the tracker's map
+  /// corrections move the observation (and the model) with the real corner.
+  /// Boards get theirs from the engine; corners had none, and in a plain room
+  /// the model slid whenever ARCore corrected its map (first device run).
+  Future<void> anchorObservation(ArObservation o) async {
+    final e = _engine;
+    if (e == null || state.demo) return;
+    final id = await e.anchorAt(o.aAr);
+    if (id != null && !_disposed) _anchorToObs[id] = o.id;
+  }
+
   /// The tracker refined a board's anchor: refit, and watch for drift.
   void _onAnchorUpdated(String anchorId, Vec3 posAr) {
     final obsId = _anchorToObs[anchorId];
@@ -726,7 +787,17 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   AlignmentFit _refit(List<ArObservation> obs, {required _RefitReason reason}) {
     final before = state.fit;
     final nudgeAr = (state.nudgeM != 0 && state.nudgeAxisAr != null) ? state.nudgeAxisAr! * state.nudgeM : null;
-    var fit = obs.isEmpty ? AlignmentFit.none() : _estimator.fit(obs, nudgeAr: nudgeAr);
+    final floor = state.floor;
+    final floorTileY = floor == null ? null : floor.floorDatumY + floor.floorFinishOffsetM;
+    var fit = obs.isEmpty
+        ? AlignmentFit.none()
+        : _estimator.fit(
+            obs,
+            nudgeAr: nudgeAr,
+            floorAr: _floorFor(obs, floorTileY),
+            floorTileY: floorTileY,
+          );
+    _logFit(fit, obs, reason);
 
     if (reason == _RefitReason.anchor && _lockedResidualM != null && fit.quality == AlignmentQuality.locked) {
       // Runtime drift check: the anchors moved apart since the lock.
@@ -1056,7 +1127,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   }
 }
 
-enum _RefitReason { observation, anchor, nudge }
+enum _RefitReason { observation, anchor, nudge, floor }
 
 /// Error → an `ar.error.*` key with a next step on screen.
 String arErrorKey(Object e) {

@@ -311,6 +311,22 @@ internal class MarkerDetector(private val emit: (Map<String, Any?>) -> Unit) {
         }
     }
 
+    /**
+     * A native anchor at [p] (a committed corner snap), refined and reported
+     * like a board's: `anchor` events at most 2 Hz when it moves over 1 mm.
+     */
+    fun anchorAt(session: Session, p: FloatArray): String? {
+        val anchor = try {
+            session.createAnchor(Pose.makeTranslation(p[0], p[1], p[2]))
+        } catch (e: Exception) {
+            emit(mapOf("type" to "error", "code" to "anchor-failed", "detail" to (e.message ?: "")))
+            return null
+        }
+        val id = UUID.randomUUID().toString()
+        anchors[id] = Tracked(anchor, p.copyOf(), SystemClock.elapsedRealtime())
+        return id
+    }
+
     /** Forget everything (session stopped or restarted). */
     fun reset() {
         for (t in anchors.values) runCatching { t.anchor.detach() }

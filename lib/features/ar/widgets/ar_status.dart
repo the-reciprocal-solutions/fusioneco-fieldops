@@ -43,6 +43,11 @@ String arBadgeText(BuildContext context, ArBadgeInfo b, {bool compact = false}) 
       if (compact) return arTr(context, 'ar.badge.placed_short');
       if (b.boards == 1 && b.corners == 0) return arTr(context, 'ar.badge.placed_board');
       if (b.corners == 1 && b.boards == 0) return arTr(context, 'ar.badge.placed_corner');
+      // Far enough apart for positions, but agreeing only to 2–5 cm: usable,
+      // not green (AlignmentEstimator.greenResidualM).
+      if (b.residualM > AlignmentEstimator.greenResidualM) {
+        return arTr(context, 'ar.badge.placed_loose', [what, pm]);
+      }
       return arTr(context, 'ar.badge.placed_close', [what]);
     case AlignmentQuality.locked:
       if (compact) return arTr(context, 'ar.badge.locked_short', [pm]);

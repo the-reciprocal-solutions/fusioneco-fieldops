@@ -290,9 +290,15 @@ class CornerMatcher {
       final d = first.posTile.distanceXzTo(c.posTile);
       if (d < lockSeparationM) continue;
       final rankScore = maxRank > 0 ? c.rank / maxRank : 0.0;
+      // From an inside (room) corner, the next one to walk to is another
+      // inside corner of the same room; a column's outside corner is usually
+      // outside the room or behind furniture (first device run: "Column · SE
+      // corner, 5.4 m away" was suggested from inside a bedroom).
+      final sameRoom = first.kind == 'inside' && c.kind == 'inside';
       final score = 0.45 * distanceScore(d) +
           0.35 * rankScore +
-          (c.structural ? 0.2 : 0.0);
+          (c.structural ? 0.2 : 0.0) +
+          (sameRoom ? 0.5 : 0.0);
       far.add((c, score));
     }
     if (far.isEmpty) {

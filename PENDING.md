@@ -27,12 +27,16 @@ Next number: **P-013**
 ## Open
 
 ### P-012 · AR overlay renders but is not registered to the room
-- **Status:** not started · **Priority:** P1 · **Area:** AR alignment (Dart fit ↔ fe_ar)
+- **Status:** in progress · **Priority:** P1 · **Area:** AR alignment (Dart fit ↔ fe_ar)
 - **Found:** 2026-09-26 (first Android device run, demo bedroom model)
-- **Done so far:** fe_ar builds and runs on Android: camera, ARCore tracking and Filament drawing the downloaded tiles all work.
-- **Left:** the model appears at an arbitrary place in the camera view instead of on the room. Trace the chain board detection (QR pose from `MarkerDetector`) → observation → Dart 4-DoF fit → `setModelTransform` → Filament root transform: frames (ARCore world Y-up vs tile frame), the marker pose convention (normal, up), board size/physical scale, and whether a transform is applied before the first lock.
-- **Where:** `packages/fe_ar/android/src/main/kotlin/com/fusionapps/fe_ar/` (`MarkerDetector.kt`, `FeArController.kt`, `TileRenderer.kt`), `lib/core/ar/`, `lib/state/ar_session_controller.dart`
-- **Next step:** log the marker observation and the applied transform on device while scanning one board of the demo bedroom, compare with the board's `posTile`/normal from the web plan.
+- **Diagnosis:** the Dart fit and native maths agree (same yaw sign, column-major, board normals face the room on both sides). The "random" position was the model drawn **before any fit**: tiles loaded on download, native root at identity = the session origin. Accuracy limits after a lock: one board's yaw comes from a noisy wall normal (5° ≈ 26 cm at 3 m), height came from board centres, boards are placed from the plan not measured, PnP assumes a 115 mm QR.
+- **Done (2026-09-26, Android):** model hidden until the first `setModelTransform`; native `floor` event + floor-anchored height in `AlignmentEstimator.fit` (horizontal residuals, `verticalErrorsM`); green needs ≥ 2 references ≥ 1.5 m apart agreeing within 2 cm (`greenResidualM`), else amber with "add a corner or a 2nd board"; `[ar-fit]` debug log per refit (`adb logcat -s flutter`).
+- **Left:** device check in the demo room with the log; iOS mirror of the hide-until-placed rule and the `floor` event (`ios/Classes/FeArController.swift`); a print-size check for PnP-only boards; make "corners first, then leave a board" the default setup path for rooms without surveyed boards.
+- **Where:** `packages/fe_ar/android/src/main/kotlin/com/fusionapps/fe_ar/` (`FeArController.kt`, `TileRenderer.kt`), `lib/core/ar/alignment_estimator.dart`, `lib/state/ar_session_controller.dart`
+- **Also done (2026-09-26, later):** corner snaps get an ARCore anchor (`anchorAt`), sticky largest floor plane + 12 cm agreement gate, inside corners ranked first and shape-checked on the first snap, corner plan shown on phones, camera config by largest GPU texture (1920×1080), `fe_feature.filamat` compiled (matc 1.72.1) and bundled, discipline tints + ghosted slabs.
+- **Resolved 2026-09-27:** the "screen-locked overlay" was not the camera: the `camera check` debug log showed Filament's camera equal to ARCore's pose to the millimetre over ~2 m of walking. It was the model drawn at the session origin before placement (now hidden until placed). Plain painted walls still force `floorTap` corners (rough heading): prefer boards or two corners there.
+- **Also done 2026-09-27:** discipline legend + filters, element card (derived facts + IFC props: Tag, Status, SiteNote, Manufacturer), Drill check (`lib/core/ar/drill_check.dart`), rough-placement warning; server sends element props with features.
+- **Next step:** align in the demo room (tap the right corner on the plan, snap, Use) and measure the loft/door offsets; re-run "Prepare for AR" so the bedroom build carries props.
 
 ### P-011 · Model viewer (2D/3D): Dart side never analyzed, tested or run on a device
 - **Status:** needs verification · **Priority:** P2 · **Area:** model viewer (`lib/core/bim_viewer`, `lib/features/bim_viewer`, `lib/state/bim_viewer_*`, `assets/bim_viewer`, viewer scope in `ar_repository.dart` / `offline_db.dart`)

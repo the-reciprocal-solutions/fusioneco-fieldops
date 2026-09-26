@@ -557,6 +557,7 @@ class ArFeature {
     this.bboxMin,
     this.bboxMax,
     this.tiles = const [],
+    this.props = const {},
   });
 
   static ArFeature? fromJson(Map<String, dynamic> json, {String? buildId}) {
@@ -583,6 +584,11 @@ class ArFeature {
       bboxMin: Vec3.tryParse(json['bboxMin']),
       bboxMax: Vec3.tryParse(json['bboxMax']),
       tiles: tiles,
+      props: {
+        if (json['props'] is Map)
+          for (final e in (json['props'] as Map).entries)
+            if (e.value != null) e.key.toString(): e.value.toString(),
+      },
     );
   }
 
@@ -602,6 +608,24 @@ class ArFeature {
   final Vec3? bboxMax;
   final List<ArFeatureTileRef> tiles;
 
+  /// IFC instance properties, `"<Pset>.<Property>": text` plus `Tag` and
+  /// `ObjectType` (server builds from 2026-09-27; empty before).
+  final Map<String, String> props;
+
+  /// The first property named [name] in any property set (case-insensitive),
+  /// e.g. `prop('SiteNote')`, `prop('Status')`, `prop('Manufacturer')`.
+  String? prop(String name) {
+    final n = name.toLowerCase();
+    for (final e in props.entries) {
+      final k = e.key.toLowerCase();
+      if (k == n || k.endsWith('.$n')) {
+        final v = e.value.trim();
+        if (v.isNotEmpty) return v;
+      }
+    }
+    return null;
+  }
+
   Vec3? get centre =>
       bboxMin == null || bboxMax == null ? null : (bboxMin! + bboxMax!) * 0.5;
 
@@ -618,6 +642,7 @@ class ArFeature {
         'bboxMin': bboxMin?.toList(),
         'bboxMax': bboxMax?.toList(),
         'tiles': [for (final t in tiles) t.toJson()],
+        if (props.isNotEmpty) 'props': props,
       };
 }
 

@@ -1,7 +1,5 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import '../../theme/fe_colors.dart';
@@ -65,30 +63,18 @@ class ArView extends StatelessWidget {
     if (_native) {
       switch (defaultTargetPlatform) {
         case TargetPlatform.android:
-          // Hybrid Composition with a SurfaceView (fe_ar "surface"). The default
-          // texture-layer mode moves the view onto a new Surface whenever the
-          // window resizes, and Filament could not reattach its swap chain
-          // (EGL_BAD_ALLOC, "already connected to another API") on the first
-          // device run; a real SurfaceView in the view tree keeps one Surface.
-          final params = <String, dynamic>{'surface': 'surface', ...?creationParams};
-          return PlatformViewLink(
+          // AndroidView (texture-layer composition) + fe_ar's TextureView — the
+          // only combination that shows the camera. Tried on device 2026-09-26:
+          // Hybrid Composition merges Flutter's raster thread into the main
+          // thread, which then owns the GL context every frame, and ARCore's
+          // session.update fails with MissingGlContextException (black view);
+          // HC + SurfaceView also stayed black. The EGL_BAD_ALLOC logged on a
+          // window resize here did not stop rendering.
+          return AndroidView(
             viewType: ChannelArEngine.viewType,
-            surfaceFactory: (context, controller) => AndroidViewSurface(
-              controller: controller as AndroidViewController,
-              gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
-              hitTestBehavior: PlatformViewHitTestBehavior.opaque,
-            ),
-            onCreatePlatformView: (p) => PlatformViewsService.initExpensiveAndroidView(
-              id: p.id,
-              viewType: ChannelArEngine.viewType,
-              layoutDirection: Directionality.maybeOf(context) ?? TextDirection.ltr,
-              creationParams: params,
-              creationParamsCodec: const StandardMessageCodec(),
-              onFocus: () => p.onFocusChanged(true),
-            )
-              ..addOnPlatformViewCreatedListener(p.onPlatformViewCreated)
-              ..addOnPlatformViewCreatedListener((id) => onPlatformViewCreated?.call(id))
-              ..create(),
+            creationParams: creationParams,
+            creationParamsCodec: const StandardMessageCodec(),
+            onPlatformViewCreated: onPlatformViewCreated,
           );
         case TargetPlatform.iOS:
           return UiKitView(

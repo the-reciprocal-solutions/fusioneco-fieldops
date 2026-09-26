@@ -13,7 +13,6 @@ import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import 'widgets/permit_card.dart';
-import 'widgets/permit_visuals.dart';
 
 /// "My permits" (docs/permit-to-work.md): Live / Upcoming / Done, merged
 /// across the crew and raised queries. This is the app's own list, not the

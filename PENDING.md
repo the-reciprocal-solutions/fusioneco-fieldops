@@ -22,9 +22,18 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-013**
+Next number: **P-014**
 
 ## Open
+
+### P-013 · Permit to Work (PTW): never run on a device, no live API run
+- **Status:** needs verification · **Priority:** P2 · **Area:** Permit to Work (`lib/domain/permit.dart`, `lib/core/permit/permit_gas.dart`, `lib/data/permit_repository.dart`, `lib/state/permit_controller.dart`, `lib/features/permits/**`)
+- **Found:** 2026-09-26 (PTW wiring, tests and docs pass); analyze/test run added 2026-09-27
+- **Done so far:** notification/push routing fixed to match the server's actual `entityType: "PermitToWork"` stamp (both `core/utils/notification_route.dart` and `_routeForPushData` in `core/push/push_service.dart`, keeping the plain `'Permit'` spelling too); the scanner's `/permit-check/<token>` handling (`scanner_screen.dart`, `permitCheckTokenFromScan` in `core/permit/permit_gas.dart`) was already wired in ahead of this pass. Pure-Dart tests written: `test/permit_model_test.dart`, `test/permit_gas_test.dart`, `test/permit_routes_test.dart` (47 tests total). `docs/permit-to-work.md` written. **2026-09-27:** the slim Flutter 3.47.5 SDK was bootstrapped into the session scratchpad (disk allowed it this time, ~11 GB free) and this is a **real Flutter ≥ 3.44 run**: `flutter pub get --enforce-lockfile` (lockfile unchanged), `flutter analyze` (0 errors anywhere in the project; only pre-existing infos/warnings in unrelated files remain — `lib/features/permits/**`, `lib/domain/permit.dart`, `lib/core/permit/**`, `lib/data/permit_repository.dart`, `lib/state/permit_controller.dart`, `lib/theme/fe_permit_colors.dart` and the router/push/notification/scanner edits all have zero errors and zero warnings), `flutter test test/permit_model_test.dart test/permit_gas_test.dart test/permit_routes_test.dart` (47/47 pass). Getting there also required fixing: one real warning (`permits_hub_screen.dart`'s unused `permit_visuals.dart` import) and two test bugs of my own (a timezone-dependent assertion in `permit_model_test.dart`, and a `listFromJson` call shaped like a full nested envelope rather than the bare items list `PermitRepository.mine` actually passes it) — and, incidentally, two compile-blocking bugs in the unrelated `bim_viewer` module that were blocking `flutter analyze`/`test` project-wide (see P-011).
+- **Left:** a device run of every screen and sheet (hub, detail, resolve, sign-on, gas test, isolation, stop-work) in EN and AR; a real server round trip for every write in §4 of the doc, including the offline-queue path and the inline-data-URL signature/photo encoding; widget tests for the screens/sheets themselves (only the pure model/gas/route logic has tests so far — `permit_detail_screen.dart` and the sheets have none); confirming `GET /api/auth/config` gates PTW visibility if/when the server adds one (none exists yet, so the module is unconditionally visible).
+- **Why deferred:** no device, emulator, or reachable server in this session.
+- **Where:** [docs/permit-to-work.md §6](docs/permit-to-work.md#6-verification-be-honest)
+- **Next step:** widget tests for the hub/detail/sheets, then a device run.
 
 ### P-012 · AR overlay renders but is not registered to the room
 - **Status:** in progress · **Priority:** P1 · **Area:** AR alignment (Dart fit ↔ fe_ar)

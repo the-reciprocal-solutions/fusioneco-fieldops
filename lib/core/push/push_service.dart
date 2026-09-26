@@ -121,8 +121,12 @@ String? _routeForPushData({
   if (entityType == 'Inspection') return Routes.inspectionDetail(entityId);
   if (entityType == 'Snag') return Routes.snagDetail(entityId);
   // Permit to Work: the link `/technician/permits/<id>` maps through the
-  // prefix strip above; this covers a link-less one.
-  if (entityType == 'Permit') return Routes.permitDetail(entityId);
+  // prefix strip above; this covers a link-less one. `ptwService.ts` stamps
+  // `entityType: "PermitToWork"`; `Permit` is kept too for symmetry with
+  // `routeForNotification` in core/utils/notification_route.dart.
+  if (entityType == 'Permit' || entityType == 'PermitToWork') {
+    return Routes.permitDetail(entityId);
+  }
   // AR install request: the link `/technician/ar/install?floorId=<id>` maps
   // through the prefix strip above; a link-less one names the floor. The
   // server stamps `ar_install_request` (installRequestService.ts).

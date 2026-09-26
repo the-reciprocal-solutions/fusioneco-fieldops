@@ -41,7 +41,12 @@ String? routeForNotification(AppNotification notification) {
   if (entityType == 'Snag') return Routes.snagDetail(entityId);
   // Permit to Work — the server also sends `/technician/permits/<id>` as the
   // link, which the branch above already maps; this covers a link-less one.
-  if (entityType == 'Permit') return Routes.permitDetail(entityId);
+  // `ptwService.ts` stamps `entityType: "PermitToWork"`; `Permit` is kept
+  // too in case an older or generic notification path ever used it. Keep in
+  // step with `_routeForPushData` in push_service.dart.
+  if (entityType == 'Permit' || entityType == 'PermitToWork') {
+    return Routes.permitDetail(entityId);
+  }
   // AR install requests send the link `/technician/ar/install?floorId=<id>`,
   // which the prefix strip above maps onto [Routes.arInstall] as it is; a
   // link-less one names the floor as its entity. The server stamps

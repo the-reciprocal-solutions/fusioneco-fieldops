@@ -175,6 +175,15 @@ Only strings cross the router, and every path is built with a `Routes.*` helper.
 | `/ar/install/:code` | `Routes.arInstallGuide` | `floorId` | install list |
 | `/ar/spare/:code` | `Routes.arSpare` | `floorId` | scan sheet on `SPARE_UNBOUND` |
 
+### 4.1 When the AR doors appear (2026-09-27)
+
+AR is not sold to every client, so the doors into AR are **additions, never replacements**: "View in 3D" (the twin) and "Open model viewer" stay on asset and order screens for everyone. The AR doors draw themselves only when both switches are on:
+
+1. the client's `isArView` flag from `GET /api/auth/config` (opt-out: only an explicit `false` hides AR; `Permissions.isArView` in [session_store.dart](../lib/core/storage/session_store.dart));
+2. the floor (or the asset's floor) has a **published AR model** — `GET /api/bim/ar/availability?floorId|assetId` (server `services/ar/arAvailabilityService.ts`, same rows as the models picker). The dashboard card uses `GET /api/bim/ar/availability/buildings` (any building with AR), and stays while Demo mode is on so Demo can be switched off.
+
+`arDoorAvailableProvider` / `arAnyBuildingProvider` ([ar_availability.dart](../lib/state/ar_availability.dart)) combine the two. Loading, errors and "no signal, nothing cached" count as unavailable — except a floor whose AR pack is already on the phone. `ShowInArButton` renders an empty box (margin included) when unavailable; pass spacing via its `margin`, never wrap it in padding.
+
 ## 5. Offline behaviour
 
 - **Reads** are pack-first. A board on a downloaded floor resolves with no signal. The manifest is re-validated with its ETag, and Dio treats `< 400` as success, so the repository checks `statusCode == 304` itself before parsing. A retired board keeps resolving locally until the next manifest fetch.

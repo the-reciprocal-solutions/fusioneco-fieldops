@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/router.dart';
+import '../../../state/ar_availability.dart';
 import '../../../state/ar_demo_gateway.dart';
 import '../../../state/ar_prefs_controller.dart';
 import '../../../theme/fe_colors.dart';
@@ -18,8 +19,21 @@ import '../ar_ui.dart';
 
 /// "Show in AR" on an asset or a work order (§1.1 Locate). Opens the models
 /// picker scoped to the asset's floor; the asset becomes the Locate target.
-class ShowInArButton extends StatelessWidget {
-  const ShowInArButton({super.key, this.assetId, this.floorId, this.workOrderId, this.compact = false});
+///
+/// Draws itself ONLY where AR is enabled — the client's `isArView` flag AND a
+/// published AR model for this floor / the asset's floor
+/// ([arDoorAvailableProvider]). Everywhere else it is an empty box (margin
+/// included), so the screen's own "View in 3D" / model-viewer buttons stay as
+/// the way in. Never use it to replace those buttons.
+class ShowInArButton extends ConsumerWidget {
+  const ShowInArButton({
+    super.key,
+    this.assetId,
+    this.floorId,
+    this.workOrderId,
+    this.compact = false,
+    this.margin = EdgeInsets.zero,
+  });
 
   final String? assetId;
   final String? floorId;
@@ -28,11 +42,20 @@ class ShowInArButton extends StatelessWidget {
   /// The order screen's small pill style instead of a full-width button.
   final bool compact;
 
+  /// Space around the button, applied only when it is shown.
+  final EdgeInsetsGeometry margin;
+
   void _open(BuildContext context) =>
       context.push(Routes.arModels(assetId: assetId, floorId: floorId, workOrderId: workOrderId));
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final available = ref.watch(arDoorAvailableProvider((floorId: floorId, assetId: assetId))).valueOrNull ?? false;
+    if (!available) return const SizedBox.shrink();
+    return Padding(padding: margin, child: _button(context));
+  }
+
+  Widget _button(BuildContext context) {
     final label = 'ar.entry.show_in_ar'.getString(context);
     if (compact) {
       return PressableScale(
@@ -86,6 +109,11 @@ class ArDashboardCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final demo = ref.watch(arPrefsProvider.select((p) => p.demo));
+    // Only for clients with AR (isArView on and at least one building with a
+    // published AR model). Demo mode keeps the card so a switched-on demo can
+    // always be switched off again.
+    final hasAr = ref.watch(arAnyBuildingProvider).valueOrNull ?? false;
+    if (!hasAr && !demo) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(

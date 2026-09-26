@@ -161,6 +161,38 @@ class _BimViewerScreenState extends ConsumerState<BimViewerScreen> {
               ? Row(children: [Expanded(flex: 11, child: model), divider, Expanded(flex: 9, child: plan)])
               : Column(children: [Expanded(flex: 11, child: model), divider, Expanded(flex: 9, child: plan)]);
         });
+      case BimViewLayout.pip:
+        // The 3D view full-bleed with the plan as a small overlay. `BimPipCorner`
+        // and `BimPipSize` already exist in bim_viewer_prefs.dart (with a
+        // remembered choice and a `cornerNearest` helper for a drag gesture),
+        // but this screen never wired a drag onto the box or read the
+        // remembered corner/size back out of `BimViewerPrefs` — this is a
+        // static default (bottom end-corner, medium size) so the layout is at
+        // least usable and RTL-correct, not the finished picture-in-picture UX.
+        return LayoutBuilder(builder: (context, c) {
+          final short = c.maxWidth < c.maxHeight ? c.maxWidth : c.maxHeight;
+          final side = short * BimPipSize.medium.share;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              model,
+              PositionedDirectional(
+                end: 12,
+                bottom: 12,
+                width: side,
+                height: side,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: FeColors.line, width: 2),
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 8)],
+                  ),
+                  child: ClipRRect(borderRadius: BorderRadius.circular(8), child: plan),
+                ),
+              ),
+            ],
+          );
+        });
     }
   }
 
@@ -193,6 +225,7 @@ class _Toolbar extends StatelessWidget {
                     value: l,
                     icon: Icon(switch (l) {
                       BimViewLayout.split => LucideIcons.columns2,
+                      BimViewLayout.pip => LucideIcons.pictureInPicture2,
                       BimViewLayout.model => LucideIcons.box,
                       BimViewLayout.plan => LucideIcons.map,
                     }, size: 16),

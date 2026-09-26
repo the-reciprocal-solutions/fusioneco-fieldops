@@ -310,6 +310,49 @@ class ArRepository {
     );
   }
 
+  // ------------------------------------------------------------ availability
+
+  /// Can AR open for this floor / asset? Asked by every "Show in AR" door
+  /// before it draws itself — not every client or building has AR
+  /// (`GET /availability`, services/ar/arAvailabilityService.ts). Cached like
+  /// the floors list; with no signal and no cached answer, a floor whose AR
+  /// pack is already on this phone still counts as available.
+  Future<bool> isArAvailable({String? floorId, String? assetId}) async {
+    if (floorId == null && assetId == null) return false;
+    try {
+      final read = await _sync.syncGet('$_base/availability', query: {
+        'floorId': ?floorId,
+        if (floorId == null) 'assetId': ?assetId,
+      });
+      final body = _bareBody(read.data);
+      return body is Map && body['available'] == true;
+    } on NetworkFailure {
+      if (floorId == null) return false;
+      for (final m in await _store.listArManifests()) {
+        if (m.scope == 'floor' && m.scopeId == floorId) return true;
+      }
+      return false;
+    }
+  }
+
+  /// Does any building this user can see have a published AR model? Gates the
+  /// dashboard's AR card. Offline with no cached answer: true only if an AR
+  /// floor pack is already on this phone.
+  Future<bool> anyArBuilding() async {
+    try {
+      final read = await _sync.syncGet('$_base/availability/buildings');
+      final body = _bareBody(read.data);
+      final ids = body is Map ? body['buildingIds'] : null;
+      return ids is List && ids.isNotEmpty;
+    } on NetworkFailure {
+      return (await _store.listArManifests()).any((m) => m.scope == 'floor');
+    }
+  }
+
+  /// AR endpoints answer with the bare body; tolerate a `{success, data}` envelope too.
+  static Object? _bareBody(Object? d) =>
+      d is Map && d.containsKey('data') && (d.containsKey('success') || d.containsKey('message')) ? d['data'] : d;
+
   // ----------------------------------------------------------------- resolve
 
   /// One scan → building, floor and model (docs/ar-markers-and-qr.md §3.2).

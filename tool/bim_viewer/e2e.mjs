@@ -106,12 +106,14 @@ check(!!orbitPose && orbitPose.mode === 'orbit' && Array.isArray(orbitPose.targe
 
 // Tap to pick: sweep a few screen points until something with a feature is hit.
 let picked = null;
+let pickedAt = null;
 for (const [fx, fy] of [[0.5, 0.5], [0.45, 0.55], [0.55, 0.45], [0.4, 0.4], [0.6, 0.6], [0.5, 0.35], [0.5, 0.65]]) {
   await clearEvents();
   await page.mouse.click(412 * fx, 780 * fy);
   const p = await waitFor((e) => e.type === 'pick', 'pick', 5000);
   if (p.featureId !== null && p.featureId !== undefined) {
     picked = p;
+    pickedAt = [fx, fy];
     break;
   }
 }
@@ -134,6 +136,62 @@ if (mep) {
   check(Math.hypot(after[0] - before[0], after[1] - before[1], after[2] - before[2]) > 0.1, `select(${mep.featureId}) moves the camera to the element`);
   await page.screenshot({ path: join(OUT_DIR, '3-selected-mep.png') });
 }
+
+// Measure tool: two taps on the model give a straight-line distance;
+// clearMeasure empties it, and setTool('none') turns tapping-to-measure off.
+if (picked) {
+  const [pfx, pfy] = pickedAt;
+  await run('setTool', { tool: 'measure' });
+  check((await debug()).tool === 'measure', 'setTool measure switches the tap tool');
+  await clearEvents();
+  await page.mouse.click(412 * pfx, 780 * pfy);
+  const first = await waitFor((e) => e.type === 'measure', 'first measure point', 5000);
+  check(first.points.length === 1 && first.distanceM === null, 'one tap: a single point, no distance yet');
+
+  // The second tap must land on a different surface point than the first
+  // (same pixel twice would measure zero); sweep small offsets around it.
+  let second = null;
+  for (const [ox, oy] of [[12, 12], [-12, -12], [16, 0], [0, 16], [-16, 0], [12, -12]]) {
+    await page.mouse.click(412 * pfx + ox, 780 * pfy + oy);
+    let ev = null;
+    try {
+      ev = await waitFor((e) => e.type === 'measure', 'second measure point', 3000);
+    } catch (_) {
+      /* the offset missed the model; try the next one */
+    }
+    if (ev && ev.points.length === 2 && ev.distanceM > 0) {
+      second = ev;
+      break;
+    }
+    if (!ev || ev.points.length !== 1) {
+      // re-arm the first point before the next offset attempt
+      await page.mouse.click(412 * pfx, 780 * pfy);
+      try {
+        await waitFor((e) => e.type === 'measure', 're-arm first point', 3000);
+      } catch (_) {
+        /* keep trying the remaining offsets */
+      }
+    }
+  }
+  check(!!second, `measure: two taps give a distance > 0 (${second && second.distanceM} m, along floor ${second && second.horizontalM} m, height ${second && second.verticalM} m)`);
+  if (second) {
+    const d = await debug();
+    check(Array.isArray(d.measure) && d.measure.length === 2, 'debug().measure holds both tapped points');
+  }
+
+  await run('clearMeasure', {});
+  const cleared = await waitFor((e) => e.type === 'measure', 'measure cleared', 5000);
+  check(Array.isArray(cleared.points) && cleared.points.length === 0 && cleared.distanceM === null, 'clearMeasure empties the measurement');
+  check((await debug()).measure.length === 0, 'debug().measure is empty after clearMeasure');
+
+  await run('setTool', { tool: 'none' });
+  check((await debug()).tool === 'none', 'setTool none turns the measure tool off');
+}
+
+// Section-cut height: setCut moves the orbit clip plane above the datum.
+await run('setCut', { heightM: 1.5 });
+const cutDbg = await debug();
+check(Math.abs(cutDbg.cutY - (manifest.datumY + 1.5)) < 1e-6, `setCut moves the orbit section cut to datum + 1.5 m (${cutDbg.cutY})`);
 
 // Layers and x-ray.
 await run('setLayers', { architecture_solid: false });

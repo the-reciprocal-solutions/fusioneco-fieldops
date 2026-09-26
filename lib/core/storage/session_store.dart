@@ -115,6 +115,7 @@ class Permissions {
     this.isCreateAsset = false,
     this.isAssetReport = false,
     this.isDigitalTwin,
+    this.isArView,
     this.currencyType,
     this.currencyRates = const {},
   });
@@ -129,6 +130,11 @@ class Permissions {
   // unset/missing flag (every account created before this gate existed)
   // keeps View in 3D reachable. Only an explicit `false` blocks it.
   final bool? isDigitalTwin;
+  // FieldOps "Show in AR" doors (server `isArView`, default on). Same opt-out
+  // polarity as isDigitalTwin: only an explicit `false` hides AR for a client.
+  // A door also needs the floor/building to have a published AR model — see
+  // state/ar_availability.dart; this flag is the per-client switch on top.
+  final bool? isArView;
   final String? currencyType;
   final Map<String, double> currencyRates;
 
@@ -146,6 +152,7 @@ class Permissions {
       isCreateAsset: json['isCreateAsset'] == true,
       isAssetReport: json['isAssetReport'] == true,
       isDigitalTwin: json['isDigitalTwin'] as bool?,
+      isArView: json['isArView'] as bool?,
       currencyType: json['currencyType']?.toString(),
       currencyRates: rates,
     );
@@ -156,6 +163,7 @@ class Permissions {
         'isCreateAsset': isCreateAsset,
         'isAssetReport': isAssetReport,
         'isDigitalTwin': isDigitalTwin,
+        'isArView': isArView,
         'currencyType': currencyType,
         'currencyRates': currencyRates,
       };

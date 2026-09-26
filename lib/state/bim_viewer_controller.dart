@@ -12,6 +12,13 @@ import 'ar_gateway.dart';
 import 'ar_session_controller.dart' show arErrorKey;
 import 'ar_view_models.dart';
 import 'bim_viewer_pack.dart';
+import 'bim_viewer_prefs.dart';
+
+// The layout enum and the remembered UI choices live with the prefs (they
+// are persisted); re-exported so a screen importing only the controller
+// keeps compiling, as it did when the enum was declared here.
+export 'bim_viewer_prefs.dart'
+    show BimViewLayout, BimPipCorner, BimPipSize, BimViewerPrefs, bimViewerPrefsProvider;
 
 /// The 2D/3D model viewer (docs/bim-viewer.md): Dalux-style split view of
 /// the floor's model (3D, orbit or walk) over its plan (2D), with a
@@ -22,8 +29,11 @@ import 'bim_viewer_pack.dart';
 /// solid-wall tiles ([BimViewerPack]); nothing here talks to the network
 /// directly, so it works offline on a downloaded floor and in Demo mode.
 /// The 3D engine is a [BimViewEngine] the screen creates and [attach]es.
-
-enum BimViewLayout { split, model, plan }
+///
+/// The user's layout, layers and section-cut height are remembered per
+/// phone ([bimViewerPrefsProvider]): seeded on the first [open], written
+/// back whenever the user changes one. Everything else (camera, tool,
+/// selection, measurement) is per visit.
 
 /// What is selected: a model element (from a 3D pick or a plan tap on
 /// equipment) or a plan equipment footprint with no model element behind it.
@@ -110,6 +120,11 @@ class BimViewerState {
     this.tilesTotal = 0,
     this.tilesDone = false,
     this.dark = false,
+    this.features = const [],
+    this.tool = BimTool.select,
+    this.measure,
+    this.cutHeightM = 2.2,
+    this.floors = const [],
   });
 
   final String? floorId;
@@ -144,6 +159,29 @@ class BimViewerState {
   final int tilesTotal;
   final bool tilesDone;
   final bool dark;
+
+  /// The floor's model elements (names, asset links, boxes), loaded after
+  /// the floor itself: empty until then, and for good when offline with no
+  /// cached rows. Picks, plan taps and the element list resolve against it.
+  final List<ArFeature> features;
+
+  /// What a tap in 3D does. Back to [BimTool.select] on every [open]: a
+  /// half-finished measurement on another floor means nothing here.
+  final BimTool tool;
+
+  /// The measure tool's current points and distances, straight from the
+  /// engine (it owns the snapping). Null when nothing is being measured.
+  final BimMeasure? measure;
+
+  /// Orbit section cut above the floor datum, metres
+  /// ([BimViewerPrefs.minCutM]…[BimViewerPrefs.maxCutM]). A plant room
+  /// with a 4 m slab needs a higher cut than an office; remembered.
+  final double cutHeightM;
+
+  /// The building's floors, for the floor switcher. Kept across [open]s of
+  /// the same controller (the building doesn't change under a switch);
+  /// empty when the list couldn't be fetched (offline, no cache).
+  final List<ArFloorSummary> floors;
 
   List<ArTile> get allTiles => [...arTiles, ...solidTiles];
   List<ArTile> get missingTiles => [for (final t in allTiles) if (!localPaths.containsKey(t.hash)) t];
@@ -194,6 +232,11 @@ class BimViewerState {
     int? tilesTotal,
     bool? tilesDone,
     bool? dark,
+    List<ArFeature>? features,
+    BimTool? tool,
+    Object? measure = _keep,
+    double? cutHeightM,
+    List<ArFloorSummary>? floors,
   }) =>
       BimViewerState(
         floorId: floorId == _keep ? this.floorId : floorId as String?,
@@ -220,6 +263,11 @@ class BimViewerState {
         tilesTotal: tilesTotal ?? this.tilesTotal,
         tilesDone: tilesDone ?? this.tilesDone,
         dark: dark ?? this.dark,
+        features: features ?? this.features,
+        tool: tool ?? this.tool,
+        measure: measure == _keep ? this.measure : measure as BimMeasure?,
+        cutHeightM: cutHeightM ?? this.cutHeightM,
+        floors: floors ?? this.floors,
       );
 }
 
@@ -229,7 +277,6 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
   var _disposed = false;
   var _openToken = 0;
   String? _scenePushedFor;
-  List<ArFeature> _features = const [];
 
   @override
   BimViewerState build() {
@@ -252,10 +299,17 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
   /// Loads a floor: the AR floor pack (offline from the phone), its plan,
   /// the solid-wall tiles, what's on the phone. [assetId] (from the asset
   /// screen) is selected and framed once the features are known.
+  ///
+  /// Also the floor switcher's path ([switchFloor]): everything about the
+  /// old floor (features, selection, measurement, tool) is dropped; the
+  /// user's view choices (layout, camera, layers, theme, cut height), the
+  /// building's floor list and the engine's health carry over.
   Future<void> open({required String floorId, String? assetId, String? assetName}) async {
     final token = ++_openToken;
+    // No floor yet means this controller was just built: the screen has
+    // only now opened, so seed the remembered view choices (below).
+    final firstOpen = state.floorId == null;
     _scenePushedFor = null;
-    _features = const [];
     final gateway = _gateway;
     _set(BimViewerState(
       floorId: floorId,
@@ -269,7 +323,14 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
       dark: state.dark,
       engineReady: state.engineReady,
       engineErrorCode: state.engineErrorCode,
+      cutHeightM: state.cutHeightM,
+      floors: state.floors,
     ));
+
+    if (firstOpen) {
+      await _applyPrefs();
+      if (token != _openToken || _disposed) return;
+    }
 
     final ArFloorContext floor;
     try {
@@ -302,6 +363,75 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
     ));
     _pushScene();
     unawaited(_loadFeatures(floor, token));
+    unawaited(loadFloors());
+  }
+
+  /// Seeds layout, layers and cut height from the remembered prefs.
+  ///
+  /// The prefs are read from the local DB asynchronously, so a cold start
+  /// waits for them (without this the viewer opens in the default split
+  /// and then jumps to the user's mini-map). But only briefly: 300 ms, then
+  /// the defaults win — a slow or locked DB must never hold the floor back.
+  /// The state was already set to loading, so the screen shows the spinner
+  /// meanwhile, not an empty viewer.
+  ///
+  /// With no 3D on this phone (a fatal engine error already arrived) the
+  /// layout stays plan: a remembered split would have nothing to split.
+  Future<void> _applyPrefs() async {
+    try {
+      await ref
+          .read(bimViewerPrefsProvider.notifier)
+          .ready
+          .timeout(const Duration(milliseconds: 300), onTimeout: () {});
+    } catch (_) {
+      // Prefs unavailable: the defaults already in state stand.
+    }
+    if (_disposed) return;
+    final BimViewerPrefs prefs;
+    try {
+      prefs = ref.read(bimViewerPrefsProvider);
+    } catch (_) {
+      return;
+    }
+    _set(state.copyWith(
+      layout: state.model3dAvailable ? prefs.layout : BimViewLayout.plan,
+      layers: prefs.layers,
+      cutHeightM: prefs.cutHeightM,
+    ));
+  }
+
+  /// Writes a view choice back to the prefs (debounced there). Best effort:
+  /// losing a remembered layout must never break the viewer.
+  void _remember(BimViewerPrefs Function(BimViewerPrefs p) change) {
+    try {
+      ref.read(bimViewerPrefsProvider.notifier).update(change);
+    } catch (_) {}
+  }
+
+  /// The building's floors for the floor switcher
+  /// (`GET /buildings/:id/floors`, cached by the gateway). Called after
+  /// every [open]; a failure (offline with no cache) keeps whatever list
+  /// is already there, so the switcher just shows fewer choices.
+  Future<void> loadFloors() async {
+    final floor = state.floor;
+    if (floor == null) return;
+    try {
+      final floors = await _gateway.floorsForBuilding(floor.buildingId);
+      // A switch to another building's floor while this was in flight
+      // would otherwise list the wrong building.
+      if (_disposed || state.floor?.buildingId != floor.buildingId) return;
+      _set(state.copyWith(floors: floors));
+    } catch (_) {
+      // Keep the old list.
+    }
+  }
+
+  /// The floor switcher: re-opens the viewer on [floorId] with the same
+  /// engine (no WebView reload) and the same view choices. The same floor
+  /// is a no-op, so a double tap doesn't throw the loaded scene away.
+  Future<void> switchFloor(String floorId) async {
+    if (floorId == state.floorId) return;
+    await open(floorId: floorId);
   }
 
   Future<Map<String, String>> _localPaths(List<ArTile> tiles) async {
@@ -317,7 +447,7 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
     try {
       final f = await _gateway.features(floor);
       if (token != _openToken || _disposed) return;
-      _features = f;
+      _set(state.copyWith(features: f));
     } catch (_) {
       return; // picks still highlight; they just can't name the element
     }
@@ -327,7 +457,7 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
   void _focusRequestedAsset() {
     final assetId = state.focusAssetId;
     if (assetId == null || state.selection != null) return;
-    final feature = _features.where((f) => f.assetId == assetId).firstOrNull;
+    final feature = state.features.where((f) => f.assetId == assetId).firstOrNull;
     final equipment = state.plan?.equipment.where((e) => e.assetId == assetId).firstOrNull;
     if (feature != null) {
       _select(BimSelection.ofFeature(feature, planPolygon: equipment?.polygon), frame: true);
@@ -408,9 +538,15 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
         _onPick(e);
       case BimTilesProgress():
         _set(state.copyWith(tilesLoaded: e.loaded, tilesTotal: e.total, tilesDone: e.done));
+      case BimMeasure():
+        // The page reports every change (point placed, snapped, cleared);
+        // no points means the measurement is gone.
+        _set(state.copyWith(measure: e.points.isEmpty ? null : e));
       case BimViewerError():
         if (e.fatal) {
-          // No 3D on this phone: keep the plan, full screen.
+          // No 3D on this phone: keep the plan, full screen. Deliberately
+          // not remembered: it's this phone's WebView today, not a choice,
+          // and the next visit may well have 3D again.
           _set(state.copyWith(engineErrorCode: e.code, layout: BimViewLayout.plan));
         }
     }
@@ -429,7 +565,7 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
     if (_scenePushedFor == floor.floorId) return;
     _scenePushedFor = floor.floorId;
     _send(BimViewCommand.setTheme(dark: state.dark));
-    _send(BimViewCommand.setFloor(datumY: state.datumY, bounds: state.bounds));
+    _send(BimViewCommand.setFloor(datumY: state.datumY, bounds: state.bounds, cutHeightM: state.cutHeightM));
     final plan = state.plan;
     if (plan != null) {
       _send(BimViewCommand.setPlan(
@@ -442,6 +578,9 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
     _pushLayers();
     _pushTiles();
     _send(BimViewCommand.setMode(state.camera));
+    // A re-created engine (or a floor switch) starts in select on the page
+    // side too, but say it: the page's default is not our contract.
+    _send(BimViewCommand.setTool(state.tool));
     final sel = state.selection;
     if (sel != null) _selectInEngine(sel, frame: true);
   }
@@ -474,9 +613,12 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
     _send(BimViewCommand.setTheme(dark: dark));
   }
 
+  /// The user's layout choice; remembered for the next visit. Without 3D
+  /// only the plan is allowed (and nothing is remembered for a refusal).
   void setLayout(BimViewLayout layout) {
     if (!state.model3dAvailable && layout != BimViewLayout.plan) return;
     _set(state.copyWith(layout: layout));
+    _remember((p) => p.copyWith(layout: layout));
   }
 
   void setCamera(BimCameraMode mode) {
@@ -485,9 +627,58 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
     _send(BimViewCommand.setMode(mode));
   }
 
+  /// The layer toggles; remembered. `massing` is derived at push time
+  /// ([effectiveLayers]), so what is stored is only the user's intent.
   void setLayers(BimLayerState layers) {
     _set(state.copyWith(layers: layers));
     _pushLayers();
+    _remember((p) => p.copyWith(layers: layers));
+  }
+
+  /// The section-cut height above the floor, clamped to
+  /// [BimViewerPrefs.minCutM]…[BimViewerPrefs.maxCutM] (below 0.8 m the cut
+  /// hides the equipment people came to see; above 4.5 m it cuts nothing
+  /// on a normal floor). Sent straight away — the page re-clips without a
+  /// reload, so a slider can call this on every change — and remembered
+  /// (the prefs debounce the write).
+  void setCutHeight(double heightM) {
+    final m = heightM.clamp(BimViewerPrefs.minCutM, BimViewerPrefs.maxCutM).toDouble();
+    if (m == state.cutHeightM) return;
+    _set(state.copyWith(cutHeightM: m));
+    _send(BimViewCommand.setCut(m));
+    _remember((p) => p.copyWith(cutHeightM: m));
+  }
+
+  /// What a tap in 3D does. Leaving measure drops the measurement here as
+  /// well as on the page (the page clears its own on `setTool`), so the
+  /// readout can't outlive the tool. Per visit, not remembered: opening the
+  /// viewer straight into measure would make the first tap on an element
+  /// place a point instead of selecting it.
+  void setTool(BimTool tool) {
+    if (tool == state.tool) return;
+    _set(tool == BimTool.measure ? state.copyWith(tool: tool) : state.copyWith(tool: tool, measure: null));
+    _send(BimViewCommand.setTool(tool));
+  }
+
+  /// Starts the measurement over (the tool stays on).
+  void clearMeasure() {
+    _set(state.copyWith(measure: null));
+    _send(BimViewCommand.clearMeasure());
+  }
+
+  /// An element chosen from a list (search, the element list): selected
+  /// and framed in 3D, with its equipment footprint lit on the plan when
+  /// the plan has one for the same GlobalId.
+  void selectFeature(ArFeature feature) {
+    final eq = state.plan?.equipment.where((q) => q.globalId == feature.globalId).firstOrNull;
+    _select(BimSelection.ofFeature(feature, planPolygon: eq?.polygon), frame: true);
+  }
+
+  /// "Show me it again": re-frames the current selection after the user
+  /// has orbited or walked away. Nothing selected: nothing happens.
+  void frameSelection() {
+    final sel = state.selection;
+    if (sel != null) _selectInEngine(sel, frame: true);
   }
 
   void resetView() => _send(BimViewCommand.resetView());
@@ -505,7 +696,7 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
       final i = hitPolygon([for (final e in plan.equipment) e.polygon], p, toleranceM);
       if (i != null) {
         final eq = plan.equipment[i];
-        final feature = eq.globalId == null ? null : _features.where((f) => f.globalId == eq.globalId).firstOrNull;
+        final feature = eq.globalId == null ? null : state.features.where((f) => f.globalId == eq.globalId).firstOrNull;
         _select(
           feature != null
               ? BimSelection.ofFeature(feature, planPolygon: eq.polygon)
@@ -524,7 +715,7 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
       _set(state.copyWith(selection: null));
       return;
     }
-    final feature = _features
+    final feature = state.features
         .where((f) => f.featureId == id && (e.buildId == null || f.buildId == e.buildId))
         .firstOrNull;
     if (feature == null) {

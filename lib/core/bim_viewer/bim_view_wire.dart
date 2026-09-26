@@ -27,6 +27,15 @@ enum BimCameraMode {
   static BimCameraMode parse(String? v) => v == 'walk' ? walk : orbit;
 }
 
+/// What a tap in 3D does: select an element, or place a measuring point.
+enum BimTool {
+  select('none'),
+  measure('measure');
+
+  const BimTool(this.wire);
+  final String wire;
+}
+
 /// What the 3D view draws. `architecture` is the AR edge layer (outlines);
 /// `architectureSolid` the viewer-only shaded walls; `massing` the walls
 /// extruded from the plan when a floor has no solid tiles (older builds,
@@ -205,6 +214,14 @@ class BimViewCommand {
 
   factory BimViewCommand.clearSelection() => const BimViewCommand._('clearSelection');
 
+  /// What a 3D tap does. Leaving measure clears the measurement.
+  factory BimViewCommand.setTool(BimTool tool) => BimViewCommand._('setTool', {'tool': tool.wire});
+
+  /// Orbit section cut height above the floor datum (m).
+  factory BimViewCommand.setCut(double heightM) => BimViewCommand._('setCut', {'heightM': heightM});
+
+  factory BimViewCommand.clearMeasure() => const BimViewCommand._('clearMeasure');
+
   factory BimViewCommand.resetView() => const BimViewCommand._('resetView');
 
   Map<String, Object?> toJson() => {'cmd': name, 'args': args};
@@ -253,6 +270,16 @@ sealed class BimViewEvent {
           layer: m['layer'] is String ? m['layer'] as String : null,
           point: Vec3.tryParse(m['point']),
           none: m['none'] == true,
+        ),
+      'measure' => BimMeasure(
+          points: [
+            if (m['points'] is List)
+              for (final p in m['points'] as List)
+                if (Vec3.tryParse(p) case final v?) v,
+          ],
+          distanceM: _double(m['distanceM']),
+          horizontalM: _double(m['horizontalM']),
+          verticalM: _double(m['verticalM']),
         ),
       'error' => BimViewerError(
           code: m['code']?.toString() ?? 'ERROR',
@@ -343,6 +370,21 @@ class BimPick extends BimViewEvent {
   final String? layer;
   final Vec3? point;
   final bool none;
+}
+
+/// The measure tool's state: 0, 1 or 2 points; distances once there are 2.
+class BimMeasure extends BimViewEvent {
+  const BimMeasure({this.points = const [], this.distanceM, this.horizontalM, this.verticalM});
+  final List<Vec3> points;
+  final double? distanceM;
+
+  /// On the plan (clearance along the floor).
+  final double? horizontalM;
+
+  /// Height difference (headroom, drop to a valve).
+  final double? verticalM;
+
+  bool get complete => distanceM != null;
 }
 
 /// `NO_WEBGL`, `NO_WASM`, `CONTEXT_LOST`, `SCRIPT`, `COMMAND_FAILED`,

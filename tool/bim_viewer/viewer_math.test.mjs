@@ -96,3 +96,26 @@ test('poseChanged ignores sub-centimetre jitter', () => {
   assert.equal(VM.poseChanged(a, { ...a, mode: 'orbit' }), true);
   assert.equal(VM.poseChanged(a, null), true);
 });
+
+test('measureOf: fewer than two points is all nulls', () => {
+  assert.deepEqual(VM.measureOf(undefined), { distanceM: null, horizontalM: null, verticalM: null });
+  assert.deepEqual(VM.measureOf([]), { distanceM: null, horizontalM: null, verticalM: null });
+  assert.deepEqual(VM.measureOf([[1, 2, 3]]), { distanceM: null, horizontalM: null, verticalM: null });
+});
+
+test('measureOf: straight-line, horizontal and vertical distances, rounded to mm', () => {
+  // 3-4 on the floor plus 12 up: a 3-4-5 triangle in the horizontal plane,
+  // then a 5-12-13 triangle straight-line vs. vertical.
+  const m = VM.measureOf([[0, 0, 0], [3, 12, 4]]);
+  assert.equal(m.horizontalM, 5);
+  assert.equal(m.verticalM, 12);
+  assert.equal(m.distanceM, 13);
+});
+
+test('measureOf: rounds to the millimetre and uses only the first two points', () => {
+  // dx=1.2 mm, dy=0.9 mm, dz=0 → distance 1.5 mm exactly (12-9-15 triangle).
+  const m = VM.measureOf([[0, 0, 0], [0.0012, 0.0009, 0], [99, 99, 99]]);
+  assert.equal(m.horizontalM, 0.001);
+  assert.equal(m.verticalM, 0.001);
+  assert.equal(m.distanceM, 0.002);
+});

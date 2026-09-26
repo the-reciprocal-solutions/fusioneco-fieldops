@@ -915,6 +915,42 @@ void main() {
     });
   });
 
+  group('AR availability — the "Show in AR" door', () {
+    test('available only when the server says so for this floor', () async {
+      sync.gets['/api/bim/ar/availability'] = const SyncedRead<dynamic>(
+        fromCache: false,
+        data: {'available': true, 'buildingId': 'bld-1', 'floorId': 'flr-3', 'floorsWithAr': ['flr-3']},
+      );
+      expect(await repo.isArAvailable(floorId: 'flr-3'), isTrue);
+      sync.gets['/api/bim/ar/availability'] = const SyncedRead<dynamic>(
+        fromCache: false,
+        data: {'success': true, 'data': {'available': false, 'reason': "AR isn't set up for this building."}},
+      );
+      expect(await repo.isArAvailable(assetId: 'AST001'), isFalse);
+      expect(await repo.isArAvailable(), isFalse); // nothing to ask about
+    });
+
+    test('offline with no cached answer: only a floor whose AR pack is on this phone', () async {
+      expect(await repo.isArAvailable(floorId: 'flr-3'), isFalse);
+      expect(await repo.anyArBuilding(), isFalse);
+      transport.answer(_manifestPath, ArHttpResponse(status: 200, body: _manifest()));
+      await repo.fetchManifest('flr-3');
+      expect(await repo.isArAvailable(floorId: 'flr-3'), isTrue);
+      expect(await repo.isArAvailable(floorId: 'flr-9'), isFalse);
+      expect(await repo.isArAvailable(assetId: 'AST001'), isFalse); // asset → floor needs the server
+      expect(await repo.anyArBuilding(), isTrue);
+    });
+
+    test('dashboard card: any building with AR', () async {
+      sync.gets['/api/bim/ar/availability/buildings'] =
+          const SyncedRead<dynamic>(fromCache: false, data: {'buildingIds': <String>[]});
+      expect(await repo.anyArBuilding(), isFalse);
+      sync.gets['/api/bim/ar/availability/buildings'] =
+          const SyncedRead<dynamic>(fromCache: true, data: {'buildingIds': ['bld-1']});
+      expect(await repo.anyArBuilding(), isTrue);
+    });
+  });
+
   group('floors and preferences', () {
     test('floors show what is on the phone and what has an update', () async {
       transport.answer(_manifestPath, ArHttpResponse(status: 200, body: _manifest(tiles: [_tile(_hashNear, 0, 200)])));

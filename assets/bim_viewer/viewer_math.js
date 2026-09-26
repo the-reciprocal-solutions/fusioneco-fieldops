@@ -141,3 +141,15 @@ export function poseChanged(a, b) {
   const dd = Math.hypot(a.dir[0] - b.dir[0], a.dir[1] - b.dir[1], a.dir[2] - b.dir[2]);
   return dp > 0.01 || dd > 0.009 || a.mode !== b.mode;
 }
+
+/**
+ * A two-point measurement: straight-line, horizontal (on the plan) and
+ * vertical distances in metres. Fewer than two points → nulls.
+ */
+export function measureOf(points) {
+  if (!points || points.length < 2) return { distanceM: null, horizontalM: null, verticalM: null };
+  const [a, b] = points;
+  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+  const r = (v) => Math.round(v * 1000) / 1000;
+  return { distanceM: r(Math.hypot(dx, dy, dz)), horizontalM: r(Math.hypot(dx, dz)), verticalM: r(Math.abs(dy)) };
+}

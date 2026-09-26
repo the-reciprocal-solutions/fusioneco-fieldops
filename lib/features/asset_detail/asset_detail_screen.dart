@@ -186,12 +186,15 @@ class _AssetDetailScreenState extends ConsumerState<AssetDetailScreen> {
                           child: _ModelViewerButton(detail: detail),
                         ),
                       // AR Locate (docs/ar-bim-overlay.md §1.1): the asset
-                      // drawn through walls where it really is. Needs a floor;
-                      // the AR screens find the model and place it.
+                      // drawn through walls where it really is. An extra door
+                      // beside the 3D / model-viewer buttons above, never a
+                      // replacement: it draws itself only when this client has
+                      // AR and the floor has a published AR model.
                       if (detail.floorId != null)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: ShowInArButton(assetId: detail.id, floorId: detail.floorId),
+                        ShowInArButton(
+                          assetId: detail.id,
+                          floorId: detail.floorId,
+                          margin: const EdgeInsets.only(bottom: 12),
                         ),
                       // FR-2.8 — hidden rather than shown-and-empty when the
                       // register has no floor recorded for this asset at

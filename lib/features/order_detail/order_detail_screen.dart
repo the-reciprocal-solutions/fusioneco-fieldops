@@ -426,18 +426,19 @@ class _DetailsTab extends ConsumerWidget {
                 // AR Locate (docs/ar-bim-overlay.md §1.1): the job's asset
                 // drawn where it really is, with this order on top. The AR
                 // screens find the asset's floor; only a work order's id rides
-                // along (the AR Forms mode opens its checklist).
-                if (record.assetId != null) ...[
-                  const SizedBox(height: 10),
+                // along (the AR Forms mode opens its checklist). Shown only when
+                // this client has AR and the asset's floor has a published AR
+                // model — "View in 3D" above stays the default way in.
+                if (record.assetId != null)
                   SizedBox(
                     width: double.infinity,
                     child: ShowInArButton(
                       assetId: record.assetId,
                       workOrderId: record.type == OrderType.workOrder ? record.id : null,
                       compact: true,
+                      margin: const EdgeInsets.only(top: 10),
                     ),
                   ),
-                ],
               ],
             ),
           ),

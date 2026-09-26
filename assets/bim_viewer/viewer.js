@@ -543,7 +543,79 @@ function tileInfoOf(object) {
   return o ? state.tiles.get(o.userData.tileHash) : null;
 }
 
+/** The first visible surface under a screen point (section cut and x-ray respected), or null. */
+function surfaceHit(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const targets = LAYERS.filter((l) => groups[l].visible).map((l) => groups[l]);
+  const cutY = cutPlane.constant;
+  const hits = raycaster
+    .intersectObjects(targets, true)
+    .filter((h) => !(h.object.material && h.object.material.clippingPlanes && h.object.material.clippingPlanes.length && h.point.y > cutY + 1e-3));
+  const solid = hits.filter((h) => h.face && !(state.layers.xray && h.object.material && h.object.material.opacity < 0.5));
+  return solid[0] || hits.find((h) => h.face) || null;
+}
+
+// ── measure tool: tap two surfaces, get the distance ─────────────────────
+// Points snap to the first visible surface (a wall face, a pipe, the floor).
+// The line and dots draw through walls, like the selection highlight; the
+// number itself is shown by Flutter (i18n, units), from the `measure` event.
+const measureGroup = new THREE.Group();
+scene.add(measureGroup);
+state.measure = [];
+
+function drawMeasure() {
+  measureGroup.children.slice().forEach((c) => {
+    measureGroup.remove(c);
+    disposeTree(c);
+  });
+  const pts = state.measure;
+  const dotGeo = new THREE.SphereGeometry(0.06, 12, 8);
+  for (const p of pts) {
+    const dot = new THREE.Mesh(dotGeo.clone(), new THREE.MeshBasicMaterial({ color: theme.accent, depthTest: false }));
+    dot.position.set(p[0], p[1], p[2]);
+    dot.renderOrder = 1001;
+    measureGroup.add(dot);
+  }
+  dotGeo.dispose();
+  if (pts.length === 2) {
+    const g = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p[0], p[1], p[2])));
+    const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: theme.accent, depthTest: false, transparent: true }));
+    line.renderOrder = 1001;
+    measureGroup.add(line);
+  }
+  markDirty();
+}
+
+function measureAt(clientX, clientY) {
+  const hit = surfaceHit(clientX, clientY);
+  if (!hit) return;
+  const p = [hit.point.x, hit.point.y, hit.point.z].map((v) => Math.round(v * 1000) / 1000);
+  state.measure = state.measure.length >= 2 ? [p] : [...state.measure, p];
+  drawMeasure();
+  const m = VM.measureOf(state.measure);
+  post({ type: 'measure', points: state.measure, ...m });
+}
+
+function clearMeasure() {
+  state.measure = [];
+  drawMeasure();
+  post({ type: 'measure', points: [], distanceM: null, horizontalM: null, verticalM: null });
+}
+
+function setTool({ tool }) {
+  state.tool = tool === 'measure' ? 'measure' : 'none';
+  if (state.tool !== 'measure') clearMeasure();
+}
+
+function setCut({ heightM }) {
+  if (typeof heightM === 'number' && heightM > 0.3) state.floor.cutM = heightM;
+  updateCut();
+}
+
 function pick(clientX, clientY) {
+  if (state.tool === 'measure') return measureAt(clientX, clientY);
   const r = canvas.getBoundingClientRect();
   const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
@@ -742,6 +814,9 @@ const COMMANDS = {
   select,
   clearSelection,
   resetView,
+  setTool,
+  setCut,
+  clearMeasure,
 };
 
 function run(command) {
@@ -775,6 +850,8 @@ window.feViewer = {
     cutY: cutPlane.constant,
     layerTiles: Object.fromEntries(LAYERS.map((l) => [l, groups[l].children.length])),
     selection: state.selection,
+    tool: state.tool || 'none',
+    measure: state.measure,
     camera: camera.position.toArray(),
   }),
 };

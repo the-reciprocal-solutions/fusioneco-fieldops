@@ -1,0 +1,5 @@
+# fastlane app identity for FieldOps iOS (docs/ios-testflight.md).
+# The bundle id is the one ios/Runner.xcodeproj builds; the team comes from
+# the APPLE_TEAM_ID secret so no account id lives in the repo.
+app_identifier(ENV.fetch("APP_IDENTIFIER", "com.thefusionapps.fusioneco.technician"))
+team_id(ENV["APPLE_TEAM_ID"]) if ENV["APPLE_TEAM_ID"].to_s != ""

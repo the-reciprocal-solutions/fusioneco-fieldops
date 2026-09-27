@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/router.dart';
 import '../../../state/ar_catalog_controller.dart';
+import '../../../state/ar_permissions.dart';
+import '../../../state/ar_prefs_controller.dart';
 import '../../../state/ar_session_controller.dart';
 import '../../../state/ar_setup_controller.dart';
 import '../../../state/ar_workspace_controller.dart';
@@ -16,6 +18,7 @@ import '../../../widgets/tech_popup.dart';
 import '../ar_ui.dart';
 import '../widgets/ar_chrome.dart';
 import 'ar_discipline_legend.dart';
+import 'ar_workspace.dart' show arToggleTorch;
 
 /// GAMMA's flat 13-item menu, regrouped (§2.9): **Position** (re-align,
 /// save a board here, fine-tune) · **View** (floor plan, gridlines, torch,
@@ -70,9 +73,13 @@ class ArMenuPanelTablet extends StatelessWidget {
 }
 
 class ArMenuPanelPhone extends StatefulWidget {
-  const ArMenuPanelPhone({super.key, required this.onClose, required this.initialTab});
+  const ArMenuPanelPhone({super.key, required this.onClose, required this.initialTab, this.maxWidth});
   final VoidCallback onClose;
   final ArPanel initialTab;
+
+  /// A phone on its side: the sheet hugs the end edge at this width instead
+  /// of spanning 900 px of camera.
+  final double? maxWidth;
 
   @override
   State<ArMenuPanelPhone> createState() => _ArMenuPanelPhoneState();
@@ -84,12 +91,14 @@ class _ArMenuPanelPhoneState extends State<ArMenuPanelPhone> {
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.paddingOf(context).top + 8;
+    final width = MediaQuery.sizeOf(context).width;
+    final narrow = widget.maxWidth != null && width > widget.maxWidth!;
     return Stack(
       children: [
         Positioned.fill(child: GestureDetector(onTap: widget.onClose, child: const ColoredBox(color: Colors.black38))),
-        Positioned(
-          left: 0,
-          right: 0,
+        PositionedDirectional(
+          start: narrow ? width - widget.maxWidth! : 0,
+          end: 0,
           bottom: 0,
           top: top,
           child: Material(
@@ -183,6 +192,7 @@ class _MenuList extends ConsumerWidget {
     final setup = ref.read(arSetupProvider.notifier);
     final ctrl = ref.read(arWorkspaceProvider.notifier);
     final queued = ref.watch(pendingMutationCountProvider).valueOrNull ?? 0;
+    final sunlight = ref.watch(arPrefsProvider.select((p) => p.sunlight));
     final floor = s.floor;
 
     void run(VoidCallback f) {
@@ -195,7 +205,9 @@ class _MenuList extends ConsumerWidget {
       children: [
         ArEyebrow('ar.menu.position'.getString(context)),
         _MenuRow(icon: ArIcons.realign, label: 'ar.menu.realign'.getString(context), onTap: () => run(() => setup.reAlign())),
-        _MenuRow(icon: ArIcons.board, label: 'ar.menu.save_board'.getString(context), onTap: () => run(setup.saveBoardFromWork)),
+        // Turning a spare into a board is an install action (P-007).
+        if (ref.watch(arInstallAllowedProvider))
+          _MenuRow(icon: ArIcons.board, label: 'ar.menu.save_board'.getString(context), onTap: () => run(setup.saveBoardFromWork)),
         _MenuRow(icon: ArIcons.fineTune, label: 'ar.menu.fine_tune'.getString(context), onTap: () => run(setup.fineTuneFromWork)),
         const SizedBox(height: 14),
         ArEyebrow('ar.menu.view'.getString(context)),
@@ -211,7 +223,21 @@ class _MenuList extends ConsumerWidget {
           selected: s.gridVisible,
           onTap: () => ref.read(arSessionProvider.notifier).setGridVisible(!s.gridVisible),
         ),
-        _MenuRow(icon: ArIcons.torch, label: 'ar.menu.torch'.getString(context), sub: 'ar.menu.soon'.getString(context)),
+        _MenuRow(
+          icon: ws.torch ? ArIcons.torch : ArIcons.torchOff,
+          label: 'ar.menu.torch'.getString(context),
+          sub: (s.capabilities?.torch ?? false) ? null : 'ar.menu.soon'.getString(context),
+          selected: ws.torch,
+          onTap: () => arToggleTorch(context, ref),
+        ),
+        // Stays open on tap (like the torch) so the change is seen at once.
+        _MenuRow(
+          icon: ArIcons.sunlight,
+          label: 'ar.menu.sunlight'.getString(context),
+          sub: 'ar.menu.sunlight_sub'.getString(context),
+          selected: sunlight,
+          onTap: () => ref.read(arPrefsProvider.notifier).setSunlight(!sunlight),
+        ),
         _MenuRow(icon: ArIcons.saveView, label: 'ar.menu.save_view'.getString(context), sub: 'ar.menu.soon'.getString(context)),
         const SizedBox(height: 14),
         ArEyebrow('ar.menu.project'.getString(context)),
@@ -224,6 +250,12 @@ class _MenuList extends ConsumerWidget {
           },
         ),
         _MenuRow(icon: ArIcons.share, label: 'ar.menu.share'.getString(context), sub: 'ar.menu.soon'.getString(context)),
+        _MenuRow(
+          icon: ArIcons.help,
+          label: 'ar.menu.tips'.getString(context),
+          sub: 'ar.menu.tips_sub'.getString(context),
+          onTap: () => run(() => ref.read(arPrefsProvider.notifier).setCoachSeen(false)),
+        ),
         _MenuRow(
           icon: ArIcons.changeFloor,
           label: 'ar.menu.change'.getString(context),
@@ -337,6 +369,35 @@ class _LayersList extends ConsumerWidget {
           ArEyebrow('ar.legend.title'.getString(context)),
           const ArDisciplineSwitches(),
         ],
+        const SizedBox(height: 12),
+        ArEyebrow('ar.layers.see_inside'.getString(context)),
+        _SwitchRow(
+          label: 'ar.layers.xray'.getString(context),
+          sub: 'ar.layers.xray_sub'.getString(context),
+          value: l.xray,
+          onChanged: (_) => ctrl.toggleXray(),
+        ),
+        _SwitchRow(
+          label: 'ar.layers.section'.getString(context),
+          sub: arTr(context, 'ar.layers.section_sub', [arMetres(context, l.sectionHeightM)]),
+          value: l.section,
+          onChanged: (_) => ctrl.toggleSection(),
+        ),
+        if (l.section)
+          Semantics(
+            label: 'ar.layers.section_height'.getString(context),
+            value: arMetres(context, l.sectionHeightM),
+            child: Slider(
+              value: l.sectionHeightM,
+              min: kArSectionMinM,
+              max: kArSectionMaxM,
+              divisions: ((kArSectionMaxM - kArSectionMinM) / 0.1).round(),
+              label: arMetres(context, l.sectionHeightM),
+              activeColor: FeColors.primary,
+              onChanged: (v) => ctrl.setSectionHeight(v, push: false),
+              onChangeEnd: ctrl.setSectionHeight,
+            ),
+          ),
         const SizedBox(height: 12),
         ArEyebrow('ar.layers.show'.getString(context)),
         _SwitchRow(label: 'ar.layers.pipes'.getString(context), value: l.pipes, onChanged: (v) => ctrl.setLayers(l.copyWith(pipes: v))),

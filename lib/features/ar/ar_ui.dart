@@ -21,6 +21,58 @@ const double kArTabletBreakpoint = 900;
 
 bool arIsTablet(BoxConstraints c) => c.maxWidth >= kArTabletBreakpoint;
 
+/// The AR camera screen's layouts. A phone turned sideways can be 900+ px
+/// wide but only ~400 px tall: the tablet layout's rails and bottom card
+/// don't fit it, the portrait phone's edge column and sheet don't either,
+/// so it gets its own ([landscapePhone]).
+enum ArLayout { phone, landscapePhone, tablet }
+
+/// Tablet needs the width *and* some height; a short, wide view is a phone
+/// on its side.
+ArLayout arLayoutFor(Size view) {
+  if (view.width >= kArTabletBreakpoint && view.height >= 600) return ArLayout.tablet;
+  if (view.width > view.height) return ArLayout.landscapePhone;
+  return ArLayout.phone;
+}
+
+/// The app is portrait-only (`main.dart`, and the manifest's
+/// `screenOrientation="portrait"`, which `setPreferredOrientations`
+/// overrides at runtime on Android). The AR camera screen alone may turn
+/// sideways: a tablet on a tripod, a phone held level at a ceiling void.
+/// Counted, because one AR screen can replace another (a board scan
+/// replacing the session): the old screen's dispose runs *after* the new
+/// one's init, and must not re-lock the new screen to portrait.
+abstract final class ArOrientation {
+  static var _holders = 0;
+
+  static Future<void> enter() {
+    _holders++;
+    return _apply();
+  }
+
+  static Future<void> leave() {
+    if (_holders > 0) _holders--;
+    return _apply();
+  }
+
+  /// Portrait while another (portrait) screen is pushed over the AR one —
+  /// the verification form, a snag — then back.
+  static Future<void> pushPortrait() => SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  static Future<void> popBack() => _apply();
+
+  static Future<void> _apply() async {
+    try {
+      await SystemChrome.setPreferredOrientations(
+        _holders > 0
+            ? const [DeviceOrientation.portraitUp, DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]
+            : const [DeviceOrientation.portraitUp],
+      );
+    } catch (_) {
+      // No platform (a widget test): nothing to rotate.
+    }
+  }
+}
+
 /// "4.2 m" below 10 m, "12 m" above: a technician reads distance, not decimals.
 String arMetres(BuildContext context, double m) {
   final v = m.abs() < 10 ? m.toStringAsFixed(1) : m.round().toString();
@@ -108,6 +160,7 @@ abstract final class ArIcons {
   static const back = LucideIcons.arrowLeft;
   static const close = LucideIcons.x;
   static const menu = LucideIcons.menu;
+  static const focus = LucideIcons.focus;
   static const torch = LucideIcons.flashlight;
   static const torchOff = LucideIcons.flashlightOff;
   static const reSnap = LucideIcons.locateFixed;
@@ -163,6 +216,7 @@ abstract final class ArIcons {
   static const help = LucideIcons.circleHelp;
   static const external = LucideIcons.externalLink;
   static const drill = LucideIcons.drill;
+  static const xray = LucideIcons.glasses;
   static const crosshair = LucideIcons.crosshair;
   static const legend = LucideIcons.palette;
   static const showAll = LucideIcons.eye;
@@ -181,6 +235,9 @@ abstract final class ArIcons {
   static const otherMep = LucideIcons.cable;
   static const structure = LucideIcons.columns3;
   static const walls = LucideIcons.brickWall;
+
+  /// Sunlight mode (high-contrast chrome for bright sites).
+  static const sunlight = LucideIcons.sun;
 
   static IconData discipline(String d) => switch (d) {
     'mep' => LucideIcons.fan,

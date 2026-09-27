@@ -1,29 +1,40 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/router.dart';
 import '../../core/ar/marker_code.dart';
+import '../../state/ar_permissions.dart';
 import '../../theme/fe_ar_colors.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/fe_header.dart';
 import 'ar_ui.dart';
 import 'widgets/ar_chrome.dart';
+import 'widgets/ar_entry_widgets.dart' show ArInstallNotEnabled;
 
 /// `/ar/spare/:code` — a blank spare board scanned outside AR (I4Spare).
 /// A board's position comes from the lock, so the way to make it a marker
 /// is: open AR on its floor, place the model, then scan it — the session
 /// offers "New board, not saved yet" by itself. This screen says so in
 /// three steps and opens the right place.
-class ArSpareScreen extends StatelessWidget {
+class ArSpareScreen extends ConsumerWidget {
   const ArSpareScreen({super.key, required this.code, this.floorId});
 
   final String code;
   final String? floorId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Turning a spare into a marker is an install action (P-007).
+    if (!ref.watch(arInstallAllowedProvider)) {
+      return Scaffold(
+        backgroundColor: FeColors.page,
+        appBar: FeHeader(title: 'ar.spare.header'.getString(context)),
+        body: const SafeArea(top: false, child: ArInstallNotEnabled()),
+      );
+    }
     final canonical = MarkerCode.normalize(code) ?? code.toUpperCase();
     final label = MarkerCode.spareLabel(canonical);
     return Scaffold(

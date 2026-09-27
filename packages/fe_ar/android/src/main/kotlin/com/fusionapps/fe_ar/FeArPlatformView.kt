@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Recomposer
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
@@ -86,7 +87,11 @@ internal class FeArPlatformView(
         composeView.setParentCompositionContext(recomposer)
         composeView.setContent {
             if (controller.sessionWanted.value) {
-                FeArScene(controller, owner.lifecycle, surfaceType)
+                // A new playback file needs a new ARCore session
+                // (FeArController.sessionGeneration).
+                key(controller.sessionGeneration.intValue) {
+                    FeArScene(controller, owner.lifecycle, surfaceType)
+                }
             }
         }
         controller.attachView(this)

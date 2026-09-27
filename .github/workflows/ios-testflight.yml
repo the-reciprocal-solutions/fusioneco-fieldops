@@ -1,0 +1,140 @@
+# iOS -> TestFlight. Setup (App Store Connect app, API key, certificate,
+# secrets) and common failures: docs/ios-testflight.md.
+#
+# Runs the fastlane `beta` lane (ios/fastlane/Fastfile): Flutter writes the
+# Xcode config and installs pods, Xcode archives with manual App Store
+# signing, and the build is uploaded without waiting for Apple's processing.
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: "Minimum CFBundleVersion (blank = this run's number; TestFlight's latest + 1 wins if higher)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "ios-v*"
+
+# One upload at a time: two runs racing would pick the same build number.
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    name: Build and upload
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      FLUTTER_VERSION: "3.47.5"
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      FASTLANE_SKIP_UPDATE_CHECK: "1"
+      FASTLANE_HIDE_CHANGELOG: "1"
+      FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
+      FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "4"
+      COCOAPODS_DISABLE_STATS: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # App Store Connect only accepts builds made with the current Xcode
+      # major (Xcode 26 / iOS 26 SDK since April 2026). latest-stable picks
+      # the newest non-beta Xcode installed on the runner image.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          sw_vers
+          pod --version
+          fastlane --version | tail -1
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('ios/Podfile', 'ios/Podfile.lock', 'packages/fe_ar/ios/fe_ar.podspec', 'pubspec.lock') }}
+          restore-keys: |
+            pods-${{ runner.os }}-
+
+      # CLAUDE.md: never let pub rewrite pubspec.lock.
+      - name: Flutter packages
+        run: flutter pub get --enforce-lockfile
+
+      - name: Check configuration
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL }}
+          WEB_BASE_URL: ${{ vars.WEB_BASE_URL || secrets.WEB_BASE_URL }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
+          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
+          GOOGLE_SERVICE_INFO_PLIST_BASE64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+        run: |
+          missing=0
+          for v in API_BASE_URL WEB_BASE_URL ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8_BASE64 APPLE_TEAM_ID DIST_CERT_P12_BASE64 DIST_CERT_PASSWORD; do
+            if [ -z "${!v}" ]; then echo "::error::Missing secret or variable $v (docs/ios-testflight.md)"; missing=1; fi
+          done
+          if [ ! -f ios/Runner/GoogleService-Info.plist ] && [ -z "$GOOGLE_SERVICE_INFO_PLIST_BASE64" ]; then
+            echo "::error::Commit ios/Runner/GoogleService-Info.plist or set GOOGLE_SERVICE_INFO_PLIST_BASE64"; missing=1
+          fi
+          case "$API_BASE_URL" in http://*) echo "::warning::API_BASE_URL is plain http";; esac
+          exit $missing
+
+      - name: Build and upload to TestFlight
+        working-directory: ios
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL }}
+          WEB_BASE_URL: ${{ vars.WEB_BASE_URL || secrets.WEB_BASE_URL }}
+          BRAND_NAME: ${{ vars.BRAND_NAME }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
+          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
+          GOOGLE_SERVICE_INFO_PLIST_BASE64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+          BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
+        run: fastlane beta
+
+      - name: Keep build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs-${{ github.run_number }}
+          path: |
+            ~/Library/Logs/gym
+            ios/Podfile.lock
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Commit this once (docs/ios-testflight.md §7): a pinned Podfile.lock
+      # makes later builds install the same pod versions.
+      - name: Keep Podfile.lock
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Podfile.lock
+          path: ios/Podfile.lock
+          if-no-files-found: ignore
+          retention-days: 30

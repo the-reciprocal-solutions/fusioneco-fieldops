@@ -32,3 +32,16 @@ Runner/GeneratedPluginRegistrant.*
 !default.mode2v3
 !default.pbxuser
 !default.perspectivev3
+
+# fastlane (docs/ios-testflight.md): reports and anything signing-related
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+fastlane/README.md
+*.ipa
+*.dSYM.zip
+*.mobileprovision
+*.p8
+*.p12
+*.cer

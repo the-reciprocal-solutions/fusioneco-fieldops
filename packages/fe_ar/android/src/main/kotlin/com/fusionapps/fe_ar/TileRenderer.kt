@@ -178,7 +178,7 @@ internal class TileRenderer(
     }
 
     private fun configure(mi: MaterialInstance, entry: TileEntry, pass: Int) {
-        val style = LayerStyle.of(entry.layer)
+        val style = LayerStyle.of(entry.layer, layers.contrast)
         val c = style.color
         mi.setParameter("layerColor", c[0], c[1], c[2], c[3])
         mi.setParameter("ghostAlpha", style.ghostAlpha)
@@ -251,8 +251,21 @@ internal class TileRenderer(
     // -------------------------------------------------------- global state
 
     fun setLayers(state: LayerState, entries: Collection<TileEntry>) {
+        val restyle = state.contrast != layers.contrast
         layers = state
         updateSection()
+        if (restyle) {
+            // Sunlight mode: stronger per-layer colours on every material.
+            for (e in entries) {
+                val t = gpu[e.hash] ?: continue
+                val style = LayerStyle.of(e.layer, state.contrast)
+                val c = style.color
+                for (p in t.passes) for (mi in p.materials) {
+                    mi.setParameter("layerColor", c[0], c[1], c[2], c[3])
+                    mi.setParameter("ghostAlpha", style.ghostAlpha)
+                }
+            }
+        }
         for (t in gpu.values) for (p in t.passes) for (mi in p.materials) {
             mi.setParameter("opacity", state.opacity)
             mi.setParameter("sectionEnabled", if (state.sectionY != null) 1f else 0f)
@@ -390,6 +403,8 @@ internal data class LayerState(
     val opacity: Float = 1f,
     val sectionY: Float? = null,
     val grid: Boolean = true,
+    /** Sunlight mode (setLayers extra `contrast`): opaque MEP, white edges. */
+    val contrast: Boolean = false,
 ) {
     fun visible(layer: String): Boolean = when (layer) {
         "structure" -> structure
@@ -418,10 +433,17 @@ internal class LayerStyle(val color: FloatArray, val ghostAlpha: Float, val line
         private val STRUCTURE = LayerStyle(rgb(0xCBD5E1, 0.26f), 0.10f, lines = false, writesDepth = false)
         private val ARCHITECTURE = LayerStyle(rgb(0x38BDF8, 0.90f), 0.35f, lines = true, writesDepth = false)
 
-        fun of(layer: String): LayerStyle = when (layer) {
-            "structure" -> STRUCTURE
-            "architecture" -> ARCHITECTURE
-            else -> MEP
+        // Sunlight mode: a bright site washes out translucent colours, so MEP
+        // goes opaque, architecture edges pure white, structure and ghosts
+        // stronger.
+        private val MEP_SUN = LayerStyle(rgb(0x22D3EE, 1f), 0.30f, lines = false, writesDepth = true)
+        private val STRUCTURE_SUN = LayerStyle(rgb(0xE2E8F0, 0.45f), 0.20f, lines = false, writesDepth = false)
+        private val ARCHITECTURE_SUN = LayerStyle(rgb(0xFFFFFF, 1f), 0.55f, lines = true, writesDepth = false)
+
+        fun of(layer: String, contrast: Boolean = false): LayerStyle = when (layer) {
+            "structure" -> if (contrast) STRUCTURE_SUN else STRUCTURE
+            "architecture" -> if (contrast) ARCHITECTURE_SUN else ARCHITECTURE
+            else -> if (contrast) MEP_SUN else MEP
         }
     }
 }

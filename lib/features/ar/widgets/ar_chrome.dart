@@ -6,10 +6,16 @@ import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
 import '../../../widgets/motion.dart';
 import '../ar_ui.dart';
+import 'ar_sunlight.dart';
+
+export 'ar_sunlight.dart' show ArChromeStyle, ArSunlightHost, ArSunlightScope;
 
 /// The AR overlay's building blocks: glass controls that float on the camera
 /// and white cards for decisions (canvas rows 6–8). Touch targets are at
 /// least 48 px and primary buttons 54 px (§2.9 "Everywhere").
+///
+/// Everything here that floats on the camera follows [ArChromeStyle]: glass
+/// normally, opaque high-contrast in Sunlight mode (ar_sunlight.dart).
 
 /// A 48 px rounded glass button with an icon — back, menu, the phone's edge
 /// tools. [label] is always set: it becomes the tooltip and the semantics
@@ -36,7 +42,8 @@ class ArGlassButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fg = active ? FeColors.ink : Colors.white;
+    final st = ArChromeStyle.of(context);
+    final fg = active ? st.activeFg : st.icon;
     return Semantics(
       button: true,
       label: label,
@@ -44,8 +51,8 @@ class ArGlassButton extends StatelessWidget {
         message: label,
         child: PressableScale(
           child: Material(
-            color: active ? Colors.white : FeArColors.glass,
-            borderRadius: BorderRadius.circular(size * 0.3),
+            color: active ? st.activeBg : st.surface(),
+            shape: st.shape(size * 0.3),
             child: InkWell(
               borderRadius: BorderRadius.circular(size * 0.3),
               onTap: onTap,
@@ -55,7 +62,7 @@ class ArGlassButton extends StatelessWidget {
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    Icon(icon, size: 21, color: onTap == null ? fg.withValues(alpha: 0.4) : fg),
+                    Icon(icon, size: st.iconSize(21), color: onTap == null ? fg.withValues(alpha: st.sunlight ? 0.55 : 0.4) : fg),
                     if (badge != null && badge! > 0)
                       PositionedDirectional(
                         top: 6,
@@ -89,24 +96,27 @@ class ArGlassChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final st = ArChromeStyle.of(context);
     final chip = Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
       decoration: BoxDecoration(
-        color: strong ? FeArColors.glassStrong : FeArColors.glass,
+        color: st.surface(strong: strong),
         borderRadius: BorderRadius.circular(14),
+        border: st.border(),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 15, color: iconColor ?? FeArColors.onGlass),
+            Icon(icon, size: st.iconSize(15), color: iconColor ?? st.fg),
             const SizedBox(width: 7),
           ],
           Flexible(
             child: AppText.bodySmall(
               text,
-              color: FeArColors.onGlass,
-              weight: FontWeight.w600,
+              color: st.fg,
+              weight: st.weight(FontWeight.w600),
+              style: st.text(Theme.of(context).textTheme.bodySmall),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
@@ -135,6 +145,8 @@ class ArStatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final st = ArChromeStyle.of(context);
+    if (st.sunlight) return _sunlight(context, st);
     final (bg, fg, icon) = switch (tone) {
       ArBadgeTone.locked => (FeArColors.lockedBg, FeArColors.lockedFg, ArIcons.lock),
       ArBadgeTone.placed => (FeArColors.placedBg, FeArColors.placedFg, null),
@@ -174,11 +186,67 @@ class ArStatusBadge extends StatelessWidget {
         ],
       ),
     );
-    return Semantics(
-      liveRegion: true,
-      label: text,
-      child: onTap == null ? badge : GestureDetector(onTap: onTap, child: badge),
+    return _wrap(badge);
+  }
+
+  Widget _wrap(Widget badge) => Semantics(
+    liveRegion: true,
+    label: text,
+    child: onTap == null ? badge : GestureDetector(onTap: onTap, child: badge),
+  );
+
+  /// Sunlight: the pale tone fills (amber-50, green-50…) glare like the
+  /// wall behind them, so the badge goes opaque near-black with white text
+  /// and the tone moves to a saturated icon/dot and the outline. The honesty
+  /// rule still holds: green only when locked, red only on a mismatch.
+  Widget _sunlight(BuildContext context, ArChromeStyle st) {
+    final (Color signal, IconData? icon) = switch (tone) {
+      ArBadgeTone.locked => (FeArColors.drillSafe, ArIcons.lock),
+      ArBadgeTone.placed => (FeArColors.placedDot, null),
+      ArBadgeTone.drifting => (FeArColors.drillCaution, ArIcons.reSnap),
+      ArBadgeTone.manual => (FeArColors.sunlightOutline, ArIcons.fineTune),
+      ArBadgeTone.mismatch => (FeArColors.drillDanger, ArIcons.warning),
+      ArBadgeTone.none => (FeArColors.sunlightOutline, ArIcons.info),
+    };
+    final badge = AnimatedContainer(
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOut,
+      constraints: BoxConstraints(minHeight: dense ? 40 : 44),
+      padding: EdgeInsets.symmetric(horizontal: dense ? 12 : 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: st.surface(),
+        borderRadius: BorderRadius.circular(14),
+        // A coloured outline carries the tone at a glance; a touch thicker
+        // than the white one so amber/green/red read in glare.
+        border: st.border(colour: signal, width: signal == FeArColors.sunlightOutline ? null : 2),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (icon == null)
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(color: signal, shape: BoxShape.circle),
+            )
+          else
+            Icon(icon, size: st.iconSize(15), color: signal),
+          const SizedBox(width: 8),
+          Flexible(
+            child: AppText.bodySmall(
+              text,
+              color: st.fg,
+              weight: st.weight(FontWeight.w700),
+              style: st.text(Theme.of(context).textTheme.bodySmall),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
     );
+    return _wrap(badge);
   }
 }
 
@@ -287,22 +355,30 @@ class ArOnCameraButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final st = ArChromeStyle.of(context);
     return SizedBox(
       height: height,
       child: TextButton(
         onPressed: onPressed,
         style: TextButton.styleFrom(
-          backgroundColor: FeArColors.glass,
-          foregroundColor: Colors.white,
+          backgroundColor: st.surface(),
+          foregroundColor: st.icon,
           padding: const EdgeInsets.symmetric(horizontal: 18),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: st.shape(14),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (icon != null) ...[Icon(icon, size: 17, color: Colors.white), const SizedBox(width: 8)],
+            if (icon != null) ...[Icon(icon, size: st.iconSize(17), color: st.icon), const SizedBox(width: 8)],
             Flexible(
-              child: AppText.label(label, color: Colors.white, weight: FontWeight.w600, maxLines: 2, overflow: TextOverflow.ellipsis),
+              child: AppText.label(
+                label,
+                color: st.icon,
+                weight: st.weight(FontWeight.w600),
+                style: st.text(Theme.of(context).textTheme.labelLarge),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
@@ -478,13 +554,18 @@ class ArCameraTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final st = ArChromeStyle.of(context);
     return AppText.headlineSmall(
       text,
       color: Colors.white,
-      weight: FontWeight.w700,
+      weight: st.weight(FontWeight.w700),
       align: TextAlign.center,
       style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-        shadows: const [Shadow(color: Colors.black54, blurRadius: 12)],
+        // Sunlight: a tight dark halo instead of a soft glow, so white text
+        // keeps an edge against a bright wall.
+        shadows: st.sunlight
+            ? const [Shadow(color: Colors.black, blurRadius: 3), Shadow(color: Colors.black87, blurRadius: 10)]
+            : const [Shadow(color: Colors.black54, blurRadius: 12)],
       ),
     );
   }

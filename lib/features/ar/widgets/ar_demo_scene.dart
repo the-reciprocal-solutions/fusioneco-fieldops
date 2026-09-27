@@ -75,6 +75,19 @@ class ArDemoScene extends StatefulWidget {
     return out;
   }
 
+  /// Where a floating label hangs on a sample element (view fractions):
+  /// long runs near their start, where the lines are apart; boxes at the top
+  /// centre. Demo mode's stand-in for the engine's `projectTile`.
+  static Offset? demoAnchor(String globalId) {
+    for (final r in _regions) {
+      if (r.globalId != globalId) continue;
+      if (r.rect.width > 0.3) return Offset(r.rect.left + 0.14, r.rect.center.dy);
+      if (r.kind == 'ahu') return r.rect.topCenter;
+      return r.rect.center;
+    }
+    return null;
+  }
+
   @override
   State<ArDemoScene> createState() => _ArDemoSceneState();
 }

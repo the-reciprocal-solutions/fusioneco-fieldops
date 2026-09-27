@@ -82,8 +82,13 @@ internal class CornerDetector(private val emit: (Map<String, Any?>) -> Unit) {
         if (aimOnFloor) floorTap(session, aim, camPos, floorY)?.let { return it }
 
         val verticals = verticalPlanes(session).size
-        if (verticals < 2 && !depthEnabled) {
-            hint("corner-no-walls", "found $verticals wall(s): sweep slowly across both walls")
+        // Fewer than two tracked walls, and depth (tried first above) found
+        // no corner either: plain painted walls. Dart offers wall taps
+        // (depthPointAt + wall_fit.dart) on this code. It used to go out only
+        // without depth, so the OnePlus 7 Pro (depth, plain walls) only ever
+        // heard "corner-not-found".
+        if (verticals < 2) {
+            hint("corner-no-walls", "found $verticals wall(s): tap each wall near the corner instead")
         } else {
             hint("corner-not-found", "no corner under the pin")
         }

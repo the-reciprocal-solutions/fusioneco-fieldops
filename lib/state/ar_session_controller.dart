@@ -1,15 +1,18 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' show Size;
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../core/ar/alignment_estimator.dart';
 import '../core/ar/ar_engine.dart';
 import '../core/ar/corner_matcher.dart';
 import '../core/ar/marker_code.dart';
+import '../core/ar/reanchor_rule.dart';
 import '../core/ar/vec.dart';
 import 'ar_catalog_controller.dart';
 import 'ar_demo_director.dart';
@@ -122,6 +125,19 @@ class ArCornerSighting {
 
 enum ArToastTone { info, success, warning, error }
 
+/// "Re-check a corner or board": the fit was marked drifting because
+/// tracking was lost or relocalised, or the user walked far since the last
+/// reference ([ReanchorMonitor]). Shown once per [seq]; cleared by the next
+/// observation. The workspace dims the model while it is set.
+class ArRecheckPrompt {
+  const ArRecheckPrompt({required this.seq, required this.reason, this.walkedM = 0});
+  final int seq;
+  final ReanchorReason reason;
+
+  /// Metres walked since the last reference when it fired.
+  final double walkedM;
+}
+
 /// A one-shot message for the screen (shown once per [seq]).
 class ArToast {
   const ArToast({required this.seq, required this.key, this.args = const [], this.tone = ArToastTone.info});
@@ -181,6 +197,14 @@ class ArSessionState {
     this.gridVisible = true,
     this.driftM,
     this.paused = false,
+    this.pausedFor,
+    this.heatOverride = false,
+    this.torchOn = false,
+    this.recheck,
+    this.coachCode,
+    this.coachSeq = 0,
+    this.recordingPath,
+    this.playbackPath,
   });
 
   final ArSessionPhase phase;
@@ -225,6 +249,31 @@ class ArSessionState {
   /// Last measured drift, for the "Corrected 4 cm" / "re-snap" messages.
   final double? driftM;
   final bool paused;
+
+  /// Why AR paused itself to save power: `idle` (no movement for 2 min) or
+  /// `hot` (thermal severe+). Null for a normal pause (app in background).
+  final String? pausedFor;
+
+  /// The user chose "Continue anyway" on the heat pause: no thermal
+  /// auto-pause for the rest of this session, except the OS's own
+  /// emergency/shutdown levels.
+  final bool heatOverride;
+
+  /// The torch as the engine last applied it ([ArSessionController.setTorch]).
+  final bool torchOn;
+
+  /// Set while the model should be re-checked (fit is `drifting`).
+  final ArRecheckPrompt? recheck;
+
+  /// The last coaching code the engine sent (`corner-no-walls`, …) and a
+  /// counter bumped with each, so setup can react to a repeat.
+  final String? coachCode;
+  final int coachSeq;
+
+  /// Debug builds: the MP4 this session is being recorded to, or replayed
+  /// from (`docs/ar-recording-playback.md`).
+  final String? recordingPath;
+  final String? playbackPath;
 
   AlignmentQuality get quality => fit?.quality ?? AlignmentQuality.none;
   bool get isPlaced => quality != AlignmentQuality.none;
@@ -287,6 +336,18 @@ class ArSessionState {
     bool? gridVisible,
     double? driftM,
     bool? paused,
+    String? pausedFor,
+    bool clearPausedFor = false,
+    bool? heatOverride,
+    bool? torchOn,
+    ArRecheckPrompt? recheck,
+    bool clearRecheck = false,
+    String? coachCode,
+    int? coachSeq,
+    String? recordingPath,
+    bool clearRecording = false,
+    String? playbackPath,
+    bool clearPlayback = false,
   }) => ArSessionState(
     phase: phase ?? this.phase,
     stage: stage ?? this.stage,
@@ -317,6 +378,14 @@ class ArSessionState {
     gridVisible: gridVisible ?? this.gridVisible,
     driftM: driftM ?? this.driftM,
     paused: paused ?? this.paused,
+    pausedFor: clearPausedFor ? null : (pausedFor ?? this.pausedFor),
+    heatOverride: heatOverride ?? this.heatOverride,
+    torchOn: torchOn ?? this.torchOn,
+    recheck: clearRecheck ? null : (recheck ?? this.recheck),
+    coachCode: coachCode ?? this.coachCode,
+    coachSeq: coachSeq ?? this.coachSeq,
+    recordingPath: clearRecording ? null : (recordingPath ?? this.recordingPath),
+    playbackPath: clearPlayback ? null : (playbackPath ?? this.playbackPath),
   );
 }
 
@@ -325,6 +394,22 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   /// AR-world Y of the tracked floor (FloorPlaneEvent), or null before one.
   double? _floorAr;
+
+  /// The tracked floor for Dart-side geometry (the wall-taps corner sits on
+  /// it); null before the engine found one.
+  double? get floorAr => _floorAr;
+
+  /// Tracking losses and long walks → "Re-check a corner or board".
+  final _reanchor = ReanchorMonitor();
+
+  /// Set when [_reanchor] fired: every refit keeps the fit `drifting` until
+  /// a new observation arrives (an anchor or floor refit alone would
+  /// otherwise quietly clear it).
+  var _needsRecheck = false;
+
+  /// Debug builds: replay this recording instead of the camera. Survives
+  /// [restart] so a Demo toggle or a retry keeps replaying the same room.
+  String? _playbackFrom;
 
   /// A tracked plane further than this from the floor the observations imply
   /// is not the floor (a low false plane moved the model 27 cm on the first
@@ -355,7 +440,8 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     final lines = <String>[
       '[ar-fit] ${reason.name}: $fit floorAr=${_floorAr?.toStringAsFixed(3)}',
       for (final o in obs)
-        '[ar-fit]   ${o.kind} ${o.id} ${o is MarkerObs ? o.method : (o as CornerObs).method} '
+        '[ar-fit]   ${o.kind} ${o.id} ${o is MarkerObs ? o.method : (o as CornerObs).method}'
+            '${o is CornerObs && o.baselineM != null ? '+baseline ${o.baselineM!.toStringAsFixed(1)}m' : ''} '
             'ar=${v(o.aAr)} tile=${v(o.bTile)} '
             'res=${((fit.residualsM[o.id] ?? 0) * 1000).toStringAsFixed(0)}mm '
             'dy=${((fit.verticalErrorsM[o.id] ?? 0) * 1000).toStringAsFixed(0)}mm'
@@ -396,6 +482,36 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   var _reportedLock = false;
   DateTime _lastPoseAt = DateTime.fromMillisecondsSinceEpoch(0);
 
+  // ---- power (device test 2026-09-27: the phone ran hot in AR) ----
+  /// No movement for this long pauses AR ("tap to resume").
+  static const idlePause = Duration(minutes: 2);
+  DateTime _lastMoveAt = DateTime.now();
+  Vec3? _moveRefPos;
+  Vec3? _moveRefFwd;
+  Timer? _idleTimer;
+
+  /// Moving 5 cm or turning ~5° counts as use; a phone lying on a table
+  /// doesn't.
+  void _noteMovement(Vec3 cam, Vec3 forward) {
+    final p = _moveRefPos;
+    final f = _moveRefFwd;
+    final turned = f == null || forward.normalized.dot(f.normalized) < 0.996;
+    if (p == null || p.distanceTo(cam) >= 0.05 || turned) {
+      _moveRefPos = cam;
+      _moveRefFwd = forward;
+      _lastMoveAt = DateTime.now();
+    }
+    _idleTimer ??= Timer.periodic(const Duration(seconds: 10), (_) {
+      if (_disposed || state.paused || state.demo) return;
+      if (DateTime.now().difference(_lastMoveAt) >= idlePause) unawaited(_powerPause('idle'));
+    });
+  }
+
+  Future<void> _powerPause(String why) async {
+    _set(state.copyWith(pausedFor: why));
+    await pause();
+  }
+
   /// The AR view's size in logical pixels (set by the screen's layout):
   /// `pick` and `detectCornerAt` take view pixels.
   Size viewSize = const Size(390, 844);
@@ -407,6 +523,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   @override
   ArSessionState build() {
     ref.onDispose(_teardown);
+    ref.listen(arPrefsProvider.select((p) => p.sunlight), (_, _) => _onSunlightChanged());
     return const ArSessionState();
   }
 
@@ -429,11 +546,20 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     _loadedTiles.clear();
     _lockedResidualM = null;
     _reportedLock = false;
-    _set(ArSessionState(phase: ArSessionPhase.checking, args: args, tracking: ArTracking.initializing));
+    _reanchor.reset();
+    _needsRecheck = false;
+    _floorAr = null;
+    _set(ArSessionState(
+      phase: ArSessionPhase.checking,
+      args: args,
+      tracking: ArTracking.initializing,
+      playbackPath: _playbackFrom,
+    ));
     await ref.read(arPrefsProvider.notifier).ready;
     if (_disposed || token != _startToken) return;
     final demo = ref.read(arPrefsProvider).demo;
-    _set(state.copyWith(demo: demo));
+    // Demo mode never replays a recording (the fake engine has no camera).
+    _set(state.copyWith(demo: demo, clearPlayback: demo));
 
     final engine = demo ? makeFakeEngine() : ref.read(arEngineProvider);
     _engine = engine;
@@ -473,7 +599,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       if (_disposed || token != _startToken) return;
     }
     try {
-      await engine.startSession();
+      await engine.startSession(playbackFrom: demo ? null : _playbackFrom);
     } catch (e) {
       if (_disposed || token != _startToken) return;
       _set(state.copyWith(phase: ArSessionPhase.failed, error: arErrorKey(e)));
@@ -596,6 +722,10 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     // event is always safe to ignore here.
     if (e is TrackingEvent) {
       _set(state.copyWith(tracking: e.state, trackingReason: e.reason));
+      if (state.isPlaced) {
+        final why = _reanchor.tracking(DateTime.now(), e.state, e.reason);
+        if (why != null) _flagRecheck(why);
+      }
     } else if (e is MarkerSeenEvent) {
       // Demo sightings come from the director (see the class comment).
       if (state.demo) return;
@@ -621,6 +751,16 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       // Only a refit that already placed the model moves it; the floor alone
       // never places anything.
       if (state.observations.isNotEmpty) _refit(state.observations, reason: _RefitReason.floor);
+    } else if (e is ThermalEvent) {
+      if (state.demo) return;
+      // Overridden: only the OS's last-resort levels (emergency, shutdown)
+      // still pause; Android throttles or kills apps there anyway.
+      final pauseIt = state.heatOverride ? e.status >= 5 : e.isHot;
+      if (pauseIt && !state.paused) {
+        unawaited(_powerPause('hot'));
+      } else if (e.status == 2) {
+        toast('ar.toast.warm', tone: ArToastTone.warning);
+      }
     } else if (e is CameraPoseEvent) {
       // Demo: the fake's camera walks a different sample floor; the
       // director places the camera instead (see addObservation).
@@ -635,6 +775,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       // (corner-no-surface)" in red would read as a failure mid-aim.
       final coach = _coachKeyFor(e.code);
       if (coach != null) {
+        _set(state.copyWith(coachCode: e.code, coachSeq: state.coachSeq + 1));
         toast(coach);
       } else {
         toast('ar.toast.engine_error', args: [e.code], tone: ArToastTone.error);
@@ -643,7 +784,10 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   }
 
   static String? _coachKeyFor(String code) => switch (code) {
-        'corner-no-surface' || 'corner-no-walls' || 'corner-not-found' => 'ar.corner.coach',
+        'corner-no-surface' || 'corner-not-found' => 'ar.corner.coach',
+        // Plain painted walls: ARCore tracks no vertical plane at all. Say
+        // what works instead (setup offers the wall-taps corner).
+        'corner-no-walls' => 'ar.corner.coach_no_walls',
         'corner-no-floor' => 'ar.coach.floor',
         'corner-not-tracking' => 'ar.coach.tracking',
         'marker-unstable' => 'ar.lock.hold_still',
@@ -708,12 +852,41 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     final forward = Vec3(-m[8], -m[9], -m[10]);
     final prev = state.cameraAr;
     final step = prev == null ? 0.0 : prev.distanceXzTo(cam);
+    _noteMovement(cam, forward);
     // A tracking jump (relocalisation) is not walking.
     final walked = state.walkedM + (step < 3 ? step : 0);
     if (now.difference(_lastPoseAt) < const Duration(milliseconds: 180) && step < 0.05) return;
     _lastPoseAt = now;
     _set(state.copyWith(cameraAr: cam, cameraForwardAr: forward, walkedM: walked));
+    if (state.isPlaced && state.observations.isNotEmpty) {
+      final why = _reanchor.walked(walked - state.walkedAtCheckM);
+      if (why != null) _flagRecheck(why);
+    }
     unawaited(_updateResidency());
+  }
+
+  /// Marks the fit drifting and prompts a re-check (Rules in
+  /// [ReanchorMonitor]). The model is not moved: only a new corner or board
+  /// can say where it should be.
+  void _flagRecheck(ReanchorReason why) {
+    final fit = state.fit;
+    if (fit == null || !fit.isPlaced) return;
+    _needsRecheck = true;
+    final walked = math.max(0.0, state.walkedM - state.walkedAtCheckM);
+    _set(state.copyWith(
+      fit: fit.withQuality(AlignmentQuality.drifting),
+      recheck: ArRecheckPrompt(seq: ++_seq, reason: why, walkedM: walked),
+    ));
+    if (kDebugMode) debugPrint('[ar-fit] re-check: ${why.name} (walked ${walked.toStringAsFixed(1)} m)');
+    toast(
+      switch (why) {
+        ReanchorReason.walkedFar => 'ar.recheck.walked',
+        ReanchorReason.relocalized => 'ar.recheck.relocalized',
+        ReanchorReason.trackingLost => 'ar.recheck.tracking_lost',
+      },
+      args: why == ReanchorReason.walkedFar ? [walked.round()] : const [],
+      tone: ArToastTone.warning,
+    );
   }
 
   /// Pins a native anchor under a committed corner, so the tracker's map
@@ -748,7 +921,9 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       o,
     ];
     if (anchorId != null) _anchorToObs[anchorId] = o.id;
-    _set(state.copyWith(walkedAtCheckM: walked));
+    _reanchor.reset();
+    _needsRecheck = false;
+    _set(state.copyWith(walkedAtCheckM: walked, clearRecheck: true));
     final director = _director;
     if (state.demo && director != null) {
       // Stand where a person would to see it, facing it; the walk between
@@ -765,6 +940,8 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   void resetAlignment() {
     _anchorToObs.clear();
     _lockedResidualM = null;
+    _reanchor.reset();
+    _needsRecheck = false;
     _set(ArSessionState(
       phase: state.phase,
       stage: ArSessionStage.setup,
@@ -781,6 +958,9 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       walkedM: state.walkedM,
       target: state.target,
       gridVisible: state.gridVisible,
+      torchOn: state.torchOn,
+      recordingPath: state.recordingPath,
+      playbackPath: state.playbackPath,
     ));
   }
 
@@ -798,6 +978,12 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
             floorTileY: floorTileY,
           );
     _logFit(fit, obs, reason);
+
+    if (_needsRecheck && reason != _RefitReason.observation && fit.isPlaced && fit.quality != AlignmentQuality.manual) {
+      // Still waiting for the re-check: an anchor or floor refit must not
+      // turn the badge back to a calm amber or green.
+      fit = fit.withQuality(AlignmentQuality.drifting);
+    }
 
     if (reason == _RefitReason.anchor && _lockedResidualM != null && fit.quality == AlignmentQuality.locked) {
       // Runtime drift check: the anchors moved apart since the lock.
@@ -878,10 +1064,16 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   void enterWorkspace() {
     _set(state.copyWith(stage: ArSessionStage.work));
+    // Placed: depth only served setup (corner snaps, wall taps). Off saves
+    // a good share of the session's CPU/GPU; back on when setup returns.
+    unawaited(_engine?.setDepth(false));
     if (state.demo) _armDemoDrift();
   }
 
-  void backToSetup() => _set(state.copyWith(stage: ArSessionStage.setup));
+  void backToSetup() {
+    _set(state.copyWith(stage: ArSessionStage.setup));
+    unawaited(_engine?.setDepth(true));
+  }
 
   /// Demo only: one honest drift after a minute of work, so the re-snap
   /// prompt can be tried (the fake engine's own drift can't move the
@@ -970,6 +1162,9 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     unawaited(_updateResidency(force: true));
   }
 
+  /// The last layers sent, re-sent when Sunlight mode flips.
+  ({bool mep, bool structure, bool architecture, double opacity, double? sectionY})? _lastLayers;
+
   Future<void> setLayers({
     required bool mep,
     required bool structure,
@@ -977,6 +1172,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     required double opacity,
     double? sectionY,
   }) async {
+    _lastLayers = (mep: mep, structure: structure, architecture: architecture, opacity: opacity, sectionY: sectionY);
     try {
       await _engine?.setLayers(makeLayerState(
         mep: mep,
@@ -984,8 +1180,16 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
         architecture: architecture,
         opacity: opacity,
         sectionY: sectionY,
+        // Sunlight mode also strengthens the model itself (native `contrast`).
+        contrast: ref.read(arPrefsProvider).sunlight,
       ));
     } catch (_) {}
+  }
+
+  void _onSunlightChanged() {
+    final l = _lastLayers;
+    if (l == null) return;
+    unawaited(setLayers(mep: l.mep, structure: l.structure, architecture: l.architecture, opacity: l.opacity, sectionY: l.sectionY));
   }
 
   /// One build's feature-state texture ([buildId] scopes it; see
@@ -1032,6 +1236,111 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     }
   }
 
+  /// [pick] for many view points in one engine call (the lasso).
+  Future<List<ArPickHit?>> pickMany(List<(double, double)> points) async {
+    final e = _engine;
+    if (e == null || points.isEmpty) return [for (final _ in points) null];
+    try {
+      final r = await e.pickMany(points);
+      return [for (final p in r) p == null ? null : readPick(p)];
+    } catch (_) {
+      return [for (final _ in points) null];
+    }
+  }
+
+  /// The measured surface point under a view point: wall taps and the
+  /// long-baseline tap. Null in Demo mode (the director fakes those).
+  Future<ArDepthPoint?> depthPointAt(double x, double y) async {
+    final e = _engine;
+    if (e == null || state.demo) return null;
+    try {
+      return await e.depthPointAt(x, y);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Torch on/off (a dark plant room). [ArSessionState.torchOn] follows what
+  /// the engine actually applied; [ArCapabilities.torch] says whether to
+  /// offer it at all.
+  /// Restarts autofocus (double-tap on the camera, the Focus button).
+  Future<bool> refocus() async {
+    final e = _engine;
+    if (e == null || state.demo) return false;
+    try {
+      return await e.refocus();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> setTorch(bool on) async {
+    final e = _engine;
+    if (e == null) return false;
+    var applied = false;
+    try {
+      applied = await e.setTorch(on);
+    } catch (_) {}
+    _set(state.copyWith(torchOn: applied ? on : false));
+    return applied;
+  }
+
+  // ------------------------------------------------ recording (debug only)
+
+  /// Where debug recordings go: app-specific external storage on Android
+  /// (`adb pull /sdcard/Android/data/com.fusionapps.fieldops/files/ar_recordings/`),
+  /// app documents elsewhere. `docs/ar-recording-playback.md`.
+  static Future<Directory> recordingsDir() async {
+    Directory? base;
+    try {
+      if (Platform.isAndroid) base = await getExternalStorageDirectory();
+    } catch (_) {}
+    base ??= await getApplicationDocumentsDirectory();
+    final dir = Directory('${base.path}/ar_recordings');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return dir;
+  }
+
+  /// Recordings on the device, newest first.
+  static Future<List<File>> listRecordings() async {
+    final dir = await recordingsDir();
+    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.mp4')).toList()
+      ..sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+    return files;
+  }
+
+  /// Debug builds: records the running session (camera, IMU, tracking) to a
+  /// new MP4 until [debugStopRecording] or the session stops.
+  Future<void> debugStartRecording() async {
+    final e = _engine;
+    if (!kDebugMode || e == null || state.demo || state.recordingPath != null) return;
+    final dir = await recordingsDir();
+    final stamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
+    final path = '${dir.path}/ar_$stamp.mp4';
+    final ok = await e.startRecording(path);
+    if (ok) {
+      _set(state.copyWith(recordingPath: path));
+    } else {
+      toast('ar.debug.record_failed', tone: ArToastTone.error);
+    }
+  }
+
+  Future<void> debugStopRecording() async {
+    final e = _engine;
+    if (e == null) return;
+    final path = await e.stopRecording() ?? state.recordingPath;
+    _set(state.copyWith(clearRecording: true));
+    if (path != null) toast('ar.debug.record_saved', args: [path.split('/').last], tone: ArToastTone.success);
+  }
+
+  /// Debug builds: restarts the session from a recording instead of the
+  /// camera ([path] null: back to the live camera).
+  Future<void> debugReplay(String? path) async {
+    if (!kDebugMode) return;
+    _playbackFrom = path;
+    await restart();
+  }
+
   /// A snap request at a view point in pixels (the pin in the middle).
   Future<DetectedCorner?> detectCornerAt(double x, double y) async {
     final e = _engine;
@@ -1060,8 +1369,16 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     } catch (_) {}
   }
 
+  /// "Continue anyway" on the heat pause: resume and stop pausing for heat.
+  Future<void> continueDespiteHeat() async {
+    _set(state.copyWith(heatOverride: true));
+    toast('ar.power.override_on', tone: ArToastTone.warning);
+    await resume();
+  }
+
   Future<void> resume() async {
-    _set(state.copyWith(paused: false));
+    _lastMoveAt = DateTime.now();
+    _set(state.copyWith(paused: false, clearPausedFor: true));
     try {
       await _engine?.resume();
     } catch (_) {}
@@ -1120,6 +1437,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   void _teardown() {
     _disposed = true;
+    _idleTimer?.cancel();
     // A session that got placed reports its final state once more on exit
     // (the lock report above may have been before later observations).
     if (state.isPlaced && state.observations.isNotEmpty) unawaited(_reportAlignment());

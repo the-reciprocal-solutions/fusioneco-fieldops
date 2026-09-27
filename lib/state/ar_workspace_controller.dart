@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show Color;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,7 +9,11 @@ import '../core/ar/drill_check.dart';
 import '../core/ar/feature_state.dart';
 import '../core/c2o/c2o_asset_resolver.dart';
 import '../core/ar/vec.dart';
+import '../data/ar_repository.dart' show kArProgressEntity;
 import '../domain/snag.dart';
+import '../theme/fe_ar_colors.dart';
+import '../theme/fe_colors.dart';
+import 'ar_engine_extras.dart';
 import 'ar_session_controller.dart';
 import 'ar_view_models.dart';
 import 'auth_controller.dart';
@@ -28,6 +33,31 @@ enum ArPanel { none, menu, layers, more }
 
 enum ArColourBy { discipline, progress, system, snags }
 
+/// A queued progress write the server turned down when the queue replayed
+/// (the phone only learns it from the next `GET /progress`).
+const kArRefusedOnSync = 'REFUSED_ON_SYNC';
+
+/// Section cut height above the finished floor: default and slider range.
+const double kArSectionDefaultM = 1.5;
+const double kArSectionMinM = 0.3;
+const double kArSectionMaxM = 3.0;
+
+int _rgbOf(Color c) => c.toARGB32() & 0xFFFFFF;
+
+/// The model's progress tints, **the same colours as the screens' progress
+/// legend** (FeArColors.installed / verified, FeColors.danger). Core's
+/// `kProgressPalette` (amber / emerald) disagreed with the legend, so a
+/// green "Installed" dot sat next to amber pipes — fieldops AR agent C,
+/// 2026-09-27. Not-started elements are ghosted slate so progress reads.
+final Map<String, int> kArProgressRgb = {
+  ArProgressStatus.installed.wire: _rgbOf(FeArColors.installed),
+  ArProgressStatus.verified.wire: _rgbOf(FeArColors.verified),
+  ArProgressStatus.issue.wire: _rgbOf(FeColors.danger),
+};
+
+/// Not started, in Progress colouring: faint slate context.
+final int kArNotStartedRgb = _rgbOf(FeArColors.notStartedDot);
+
 class ArLayerState {
   const ArLayerState({
     this.mep = true,
@@ -44,6 +74,8 @@ class ArLayerState {
     this.colourBy = ArColourBy.discipline,
     this.opacity = 0.7,
     this.section = false,
+    this.sectionHeightM = kArSectionDefaultM,
+    this.xray = false,
     this.hiddenDisciplines = const {},
     this.solo,
   });
@@ -62,8 +94,21 @@ class ArLayerState {
   final ArColourBy colourBy;
   final double opacity;
 
-  /// A horizontal cut 1.2 m above the finished floor, like the web's cut plan.
+  /// A horizontal section cut [sectionHeightM] above the finished floor:
+  /// everything above it is clipped (CHANNEL.md `setLayers.sectionY`), so a
+  /// cluttered ceiling void stops hiding what is at working height.
   final bool section;
+
+  /// Where the cut sits above the finished floor (Layers panel slider,
+  /// [kArSectionMinM]–[kArSectionMaxM]). 1.5 m by default: above door
+  /// handles and switches, below the ceiling services. (The web's cut plan
+  /// uses 1.2 m; in AR the cut is a live tool, not a drawing convention.)
+  final double sectionHeightM;
+
+  /// "Show through walls": MEP the element facts call concealed (in a wall,
+  /// the floor, a slab or above the ceiling) is drawn in the highlight mode,
+  /// i.e. through walls and outlined, in its own colour (§2.9 X-ray).
+  final bool xray;
 
   /// MEP disciplines switched off in the legend ([ArDiscipline.name]s). Walls
   /// and structure are not in here: their chips drive [architecture] and
@@ -100,6 +145,8 @@ class ArLayerState {
     ArColourBy? colourBy,
     double? opacity,
     bool? section,
+    double? sectionHeightM,
+    bool? xray,
     Set<String>? hiddenDisciplines,
     String? solo,
     bool clearSolo = false,
@@ -118,6 +165,8 @@ class ArLayerState {
     colourBy: colourBy ?? this.colourBy,
     opacity: opacity ?? this.opacity,
     section: section ?? this.section,
+    sectionHeightM: sectionHeightM ?? this.sectionHeightM,
+    xray: xray ?? this.xray,
     hiddenDisciplines: hiddenDisciplines ?? this.hiddenDisciplines,
     solo: clearSolo ? null : (solo ?? this.solo),
   );
@@ -136,6 +185,7 @@ class ArWorkspaceState {
     this.rejections = const [],
     this.planInCorner = false,
     this.torch = false,
+    this.torchSupported,
     this.measuring = false,
     this.measureFrom,
     this.measureM,
@@ -149,6 +199,7 @@ class ArWorkspaceState {
     this.legendOpen = true,
     this.drilling = false,
     this.drill,
+    this.progressQueued = 0,
   });
 
   final ArMode mode;
@@ -164,6 +215,10 @@ class ArWorkspaceState {
   final List<ArProgressRejection> rejections;
   final bool planInCorner;
   final bool torch;
+
+  /// Null until the engine has been asked; false once it showed it has no
+  /// torch command (the button then says "coming in a later update").
+  final bool? torchSupported;
   final bool measuring;
   final ArPickHit? measureFrom;
   final double? measureM;
@@ -191,6 +246,11 @@ class ArWorkspaceState {
   /// Its latest reading, refreshed at most 5 times a second.
   final ArDrillReading? drill;
 
+  /// Progress writes made offline and still in the queue: their colours are
+  /// the phone's, not yet the server's (P-008 (2): a queued four-eyes
+  /// refusal is only known once the queue drains).
+  final int progressQueued;
+
   ArFeature? get primary => selection.isEmpty ? null : selection.first;
 
   ArWorkspaceState copyWith({
@@ -205,6 +265,7 @@ class ArWorkspaceState {
     List<ArProgressRejection>? rejections,
     bool? planInCorner,
     bool? torch,
+    bool? torchSupported,
     bool? measuring,
     ArPickHit? measureFrom,
     bool clearMeasure = false,
@@ -221,6 +282,7 @@ class ArWorkspaceState {
     bool? drilling,
     ArDrillReading? drill,
     bool clearDrill = false,
+    int? progressQueued,
   }) => ArWorkspaceState(
     mode: mode ?? this.mode,
     selectMode: selectMode ?? this.selectMode,
@@ -233,6 +295,7 @@ class ArWorkspaceState {
     rejections: rejections ?? this.rejections,
     planInCorner: planInCorner ?? this.planInCorner,
     torch: torch ?? this.torch,
+    torchSupported: torchSupported ?? this.torchSupported,
     measuring: measuring ?? this.measuring,
     measureFrom: clearMeasure ? null : (measureFrom ?? this.measureFrom),
     measureM: clearMeasure ? null : (measureM ?? this.measureM),
@@ -246,6 +309,7 @@ class ArWorkspaceState {
     legendOpen: legendOpen ?? this.legendOpen,
     drilling: drilling ?? this.drilling,
     drill: clearDrill ? null : (drill ?? this.drill),
+    progressQueued: progressQueued ?? this.progressQueued,
   );
 }
 
@@ -392,11 +456,38 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
   ArSessionController get _session => ref.read(arSessionProvider.notifier);
   ArSessionState get _s => ref.read(arSessionProvider);
 
+  /// Guarded `projectTile` for the session's current engine (floating
+  /// labels); rebuilt when the engine changes (a Demo toggle restarts the
+  /// session).
+  ArEngineExtras? _extras;
+  ArEngineExtras get extras {
+    final engine = _session.engine;
+    final e = _extras;
+    if (e != null && identical(e.engine, engine)) return e;
+    return _extras = ArEngineExtras(engine);
+  }
+
+  /// Queued progress writes (globalId → the status the phone shows), checked
+  /// against the server once the queue has drained (P-008 (2)).
+  final _queuedProgress = <String, ArProgressStatus>{};
+  String? _queuedFloor;
+  ProviderSubscription<Object?>? _queueSub;
+
   @override
   ArWorkspaceState build() {
+    // Captured now: providers can't be read while this one is disposing.
+    final session = ref.read(arSessionProvider.notifier);
     ref.onDispose(() {
       _disposed = true;
       _drillTimer?.cancel();
+      _queueSub?.close();
+      // The torch is the engine's (camera) state: never leave it burning
+      // after the workspace is gone.
+      if (state.torch) {
+        try {
+          unawaited(session.setTorch(false).catchError((_) => false));
+        } catch (_) {}
+      }
     });
     ref.listen<ArSessionState>(arSessionProvider, (prev, next) {
       // Drill check follows the camera (and a refit, a new plan).
@@ -429,6 +520,14 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
         }
       }
       if (prev?.features.length != next.features.length) unawaited(_loadSnagPins());
+      // Drifting (the session's re-anchor rule): dim the model until a
+      // corner or board re-checks it, then restore.
+      if ((prev?.recheck == null) != (next.recheck == null) && next.stage == ArSessionStage.work) {
+        unawaited(_pushFeatureState());
+      }
+      if (prev?.torchOn != next.torchOn && state.torch != next.torchOn) {
+        _set(state.copyWith(torch: next.torchOn));
+      }
       // Verify: any QR that isn't a board is an asset tag being checked.
       final m = next.lastMarker;
       if (m != null && m.seq != _lastMarkerSeq) {
@@ -516,38 +615,35 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
     unawaited(_pushFeatureState());
   }
 
-  /// Lasso: samples the drawn polygon (view pixels) on a grid and picks at
-  /// each sample, so the engine needs no projection API. Capped at about 120
-  /// picks so a huge lasso still finishes in a moment.
+  /// Lasso: samples the drawn polygon (view pixels) on a grid (up to ~400
+  /// points) and picks them in one batched `pickMany`, so the engine needs
+  /// no projection API.
   Future<void> lasso(List<(double, double)> polygon, {List<ArFeature> demoHits = const []}) async {
     if (polygon.length < 3 && demoHits.isEmpty) return;
     _set(state.copyWith(lassoBusy: true));
     final found = <ArFeature>[...demoHits];
     if (!_s.demo && polygon.length >= 3) {
-      var minX = double.infinity, minY = double.infinity, maxX = -double.infinity, maxY = -double.infinity;
-      for (final (x, y) in polygon) {
-        minX = math.min(minX, x);
-        minY = math.min(minY, y);
-        maxX = math.max(maxX, x);
-        maxY = math.max(maxY, y);
-      }
-      const maxSamples = 120;
-      final area = math.max(1.0, (maxX - minX) * (maxY - minY));
-      final step = math.max(24.0, math.sqrt(area / maxSamples));
-      for (var y = minY; y <= maxY; y += step) {
-        for (var x = minX; x <= maxX; x += step) {
-          if (!_inside(polygon, x, y)) continue;
-          final hit = await _session.pick(x, y);
-          if (_disposed) return;
-          final f = hit == null ? null : _featureFor(hit);
-          if (f != null && !found.any((e) => _same(e, f))) found.add(f);
-        }
+      // One batched `pickMany` (the session falls back to one pick per
+      // point on an older plugin), so the grid can be ~3× denser than the
+      // old ~120 sequential picks and thin pipes stop slipping through.
+      final samples = lassoSamples(polygon, maxSamples: 400, minStep: 12);
+      final hits = await _session.pickMany(samples);
+      if (_disposed) return;
+      for (final hit in hits) {
+        final f = hit == null ? null : _featureFor(hit);
+        if (f != null && !found.any((e) => _same(e, f))) found.add(f);
       }
     }
     final merged = state.selectMode == ArSelectMode.lasso && state.selection.isNotEmpty
         ? [...state.selection, ...found.where((f) => !state.selection.any((s) => _same(s, f)))]
         : found;
     _set(state.copyWith(selection: merged, lassoBusy: false, rejections: const []));
+    unawaited(_pushFeatureState());
+  }
+
+  /// A tap on a floating label: that element alone becomes the selection.
+  void selectOnly(ArFeature f) {
+    _set(state.copyWith(selection: [f], rejections: const []));
     unawaited(_pushFeatureState());
   }
 
@@ -580,6 +676,32 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
   }
 
   static bool _same(ArFeature a, ArFeature b) => a.featureId == b.featureId && a.buildId == b.buildId;
+
+  /// The lasso's sample grid: points inside [polygon] on a square grid whose
+  /// step keeps the count near [maxSamples] and never below [minStep] px.
+  static List<(double, double)> lassoSamples(
+    List<(double, double)> polygon, {
+    int maxSamples = 120,
+    double minStep = 24,
+  }) {
+    if (polygon.length < 3) return const [];
+    var minX = double.infinity, minY = double.infinity, maxX = -double.infinity, maxY = -double.infinity;
+    for (final (x, y) in polygon) {
+      minX = math.min(minX, x);
+      minY = math.min(minY, y);
+      maxX = math.max(maxX, x);
+      maxY = math.max(maxY, y);
+    }
+    final area = math.max(1.0, (maxX - minX) * (maxY - minY));
+    final step = math.max(minStep, math.sqrt(area / maxSamples));
+    final out = <(double, double)>[];
+    for (var y = minY; y <= maxY; y += step) {
+      for (var x = minX; x <= maxX; x += step) {
+        if (_inside(polygon, x, y)) out.add((x, y));
+      }
+    }
+    return out;
+  }
 
   static bool _inside(List<(double, double)> poly, double x, double y) {
     var inside = false;
@@ -632,6 +754,18 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
 
   void toggleSection() => setLayers(state.layers.copyWith(section: !state.layers.section));
 
+  /// The section slider: moves the cut (and turns it on). [push] false
+  /// while dragging updates the label only; the engine gets the value on
+  /// release, not 60 channel calls a second.
+  void setSectionHeight(double m, {bool push = true}) {
+    final v = m.clamp(kArSectionMinM, kArSectionMaxM).toDouble();
+    _set(state.copyWith(layers: state.layers.copyWith(sectionHeightM: v, section: true)));
+    if (push) unawaited(_pushLayers());
+  }
+
+  /// "Show through walls" (x-ray for concealed MEP).
+  void toggleXray() => setLayers(state.layers.copyWith(xray: !state.layers.xray));
+
   void setOpacity(double v) {
     _set(state.copyWith(layers: state.layers.copyWith(opacity: v.clamp(0.1, 1).toDouble())));
     unawaited(_pushLayers());
@@ -639,7 +773,23 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
 
   void togglePlanInCorner() => _set(state.copyWith(planInCorner: !state.planInCorner));
 
-  void toggleTorch() => _set(state.copyWith(torch: !state.torch));
+  /// Whether this device's engine can switch the torch
+  /// (`ArCapabilities.torch`; the fake engine says yes so Demo can try it).
+  bool get torchAvailable => _s.capabilities?.torch ?? false;
+
+  /// Torch on the AR camera, through the session ([ArSessionState.torchOn]
+  /// is what the engine actually applied). Returns false when this device
+  /// or plugin has no torch; the button then says so.
+  Future<bool> toggleTorch() async {
+    if (!torchAvailable) {
+      _set(state.copyWith(torch: false, torchSupported: false));
+      return false;
+    }
+    final ok = await _session.setTorch(!_s.torchOn);
+    if (_disposed) return ok;
+    _set(state.copyWith(torch: _s.torchOn, torchSupported: true));
+    return ok;
+  }
 
   void saveView() => _set(state.copyWith(savedViews: state.savedViews + 1));
 
@@ -657,7 +807,7 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
       structure: l.structure,
       architecture: l.architecture,
       opacity: l.opacity,
-      sectionY: l.section ? datum + 1.2 : null,
+      sectionY: l.section ? datum + l.sectionHeightM : null,
     );
   }
 
@@ -963,6 +1113,12 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
     _set(state.copyWith(progressBusy: true, rejections: const []));
     final result = await gateway.setProgress(floorId: floor.floorId, globalIds: ids, status: status, note: note);
     if (_disposed) return result;
+    if (result.errorCode != null) {
+      // Refused outright (or failed): nothing was stored, so nothing may be
+      // painted as done. It used to fall through and colour the selection.
+      _set(state.copyWith(progressBusy: false));
+      return result;
+    }
     // Optimistic: what the server accepted (or what is queued) shows now.
     final rejected = result.rejected.map((r) => r.globalId).toSet();
     final entries = {...state.progress.entries};
@@ -981,13 +1137,73 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
         note: note ?? prev?.note,
       );
     }
+    if (result.queued) {
+      // Parked in the queue: the server may still refuse some (four-eyes)
+      // inside a 200 the phone never sees. Remember what we showed and
+      // compare once the queue has drained (P-008 (2)).
+      if (_queuedFloor != floor.floorId) _queuedProgress.clear();
+      _queuedFloor = floor.floorId;
+      for (final id in ids) {
+        if (!rejected.contains(id)) _queuedProgress[id] = status;
+      }
+      _watchQueue();
+    }
     _set(state.copyWith(
       progress: _recount(entries, state.progress.total),
       progressBusy: false,
       rejections: result.rejected,
+      progressQueued: _queuedProgress.length,
     ));
     unawaited(_pushFeatureState());
     return result;
+  }
+
+  /// Starts listening to the offline queue (lazily: most sessions never
+  /// queue a progress write, and tests have no queue).
+  void _watchQueue() {
+    if (_queueSub != null) return;
+    try {
+      _queueSub = ref.listen<AsyncValue<int>>(queueChangedProvider, (_, next) {
+        if (next.hasValue) unawaited(recheckQueuedProgress());
+      });
+    } catch (_) {
+      // No queue in this container (a test): [recheckQueuedProgress] can
+      // still be called directly.
+    }
+  }
+
+  /// Once no progress write for this floor is left in the queue, re-reads
+  /// the server's statuses and reports every element the phone showed as
+  /// queued that the server now says otherwise (refused on replay, most
+  /// often four-eyes). Returns the refused GlobalIds.
+  Future<List<String>> recheckQueuedProgress() async {
+    final floorId = _queuedFloor;
+    if (_queuedProgress.isEmpty || floorId == null || _s.floor?.floorId != floorId) return const [];
+    try {
+      final pending = await ref.read(offlineDbProvider).pendingEntityIds(kArProgressEntity);
+      if (pending.contains(floorId)) return const [];
+    } catch (_) {
+      // No DB (tests): treat the queue as drained.
+    }
+    if (_disposed) return const [];
+    final expected = Map<String, ArProgressStatus>.of(_queuedProgress);
+    _queuedProgress.clear();
+    await loadProgress(force: true);
+    if (_disposed) return const [];
+    final refused = [
+      for (final e in expected.entries)
+        if (state.progress.statusOf(e.key) != e.value) e.key,
+    ];
+    _set(state.copyWith(
+      progressQueued: 0,
+      rejections: refused.isEmpty
+          ? state.rejections
+          : [for (final id in refused) ArProgressRejection(globalId: id, reason: kArRefusedOnSync)],
+    ));
+    if (refused.isNotEmpty) {
+      _session.toast('ar.progress.refused_on_sync', args: [refused.length], tone: ArToastTone.error);
+    }
+    return refused;
   }
 
   ArProgressSnapshot _recount(Map<String, ArProgressEntry> entries, int total) {
@@ -1138,79 +1354,143 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
     List<ArFeature> ofBuild, {
     required bool ghostOthers,
   }) async {
+    final tex = featureStateFor(
+      buildId: buildId,
+      ofBuild: ofBuild,
+      ws: state,
+      target: s.target,
+      ghostOthers: ghostOthers,
+      dimAll: s.recheck != null,
+      concealed: state.layers.xray ? _concealedFor(s, buildId) : const {},
+    );
+    await _session.setFeatureState(tex.rgba, tex.width, buildId: buildId);
+  }
+
+  /// One build's feature-state texture, pure (tested in
+  /// test/ar_workspace_controller_test.dart). Precedence, strongest first:
+  /// **hidden** (legend / SHOW filters) → **target** and **selection**
+  /// (highlight, sky blue) → **x-ray** (concealed MEP drawn through walls in
+  /// its own colour) → **colour-by** (progress palette, snags, system,
+  /// discipline) → base (normal, or ghost for Locate's x-ray context).
+  ///
+  /// [concealed] holds `featureId`s of this build (see [_concealedFor]).
+  /// [dimAll] (the fit is drifting, `ArSessionState.recheck`): everything
+  /// but the target and selection is ghosted, keeping its tint, so nobody
+  /// drills by a model that may have slid; hidden stays hidden.
+  static FeatureStateTexture featureStateFor({
+    required String buildId,
+    required List<ArFeature> ofBuild,
+    required ArWorkspaceState ws,
+    required ArFeature? target,
+    required bool ghostOthers,
+    Set<int> concealed = const {},
+    bool dimAll = false,
+  }) {
     var maxId = 0;
     for (final f in ofBuild) {
       maxId = math.max(maxId, f.featureId);
     }
-    final colourBy = state.mode == ArMode.progress ? ArColourBy.progress : state.layers.colourBy;
-    final statusByFeature = <int, String>{};
-    final hidden = <int>{};
+    final colourBy = ws.mode == ArMode.progress ? ArColourBy.progress : ws.layers.colourBy;
+    final l = ws.layers;
     final styles = <int, FeatureStyle>{};
-    final l = state.layers;
+    final hidden = <int>{};
     for (final f in ofBuild) {
       if (_filteredOut(f, l)) hidden.add(f.featureId);
+      final slab = _isSheet(f);
+      FeatureStyle? style;
       switch (colourBy) {
         case ArColourBy.progress:
-          final st = state.progress.statusOf(f.globalId);
-          if (st != ArProgressStatus.notStarted) statusByFeature[f.featureId] = st.wire;
+          final st = ws.progress.statusOf(f.globalId);
+          final rgb = kArProgressRgb[st.wire];
+          // Status elements drawn normally in their colour; everything not
+          // started (and every slab) is faint slate context, so what has
+          // been installed or verified is what the eye lands on.
+          style = rgb != null && !slab
+              ? FeatureStyle(rgb: rgb)
+              : FeatureStyle(display: FeatureDisplay.ghost, rgb: kArNotStartedRgb);
         case ArColourBy.snags:
-          if (state.snagPins.any((p) => p.feature.featureId == f.featureId && p.feature.buildId == f.buildId)) {
-            styles[f.featureId] = const FeatureStyle(rgb: 0xEF4444);
+          if (ws.snagPins.any((p) => p.feature.featureId == f.featureId && p.feature.buildId == f.buildId)) {
+            style = const FeatureStyle(rgb: 0xEF4444);
+          } else if (slab || ghostOthers) {
+            style = FeatureStyle.ghost;
           }
         case ArColourBy.system:
           final key = f.systemGlobalId;
-          if (key != null) styles[f.featureId] = FeatureStyle(rgb: (key.hashCode & 0xFFFFFF) | 0x010101);
+          if (key != null) {
+            style = FeatureStyle(display: ghostOthers ? FeatureDisplay.ghost : FeatureDisplay.normal, rgb: (key.hashCode & 0xFFFFFF) | 0x010101);
+          } else if (slab || ghostOthers) {
+            style = FeatureStyle.ghost;
+          }
         case ArColourBy.discipline:
           // Colour MEP by discipline and ghost the slabs. Without a tint the
           // material falls back to one colour per layer (all MEP cyan), which
           // read as "everything looks the same and pale" on the first device
           // run; full-width slabs drawn normally washed out the ceiling.
           final rgb = arDisciplineRgb(f.discipline);
-          final slab = _isSheet(f);
           if (rgb != null || slab) {
-            styles[f.featureId] = FeatureStyle(
-              display: (slab || ghostOthers) ? FeatureDisplay.ghost : FeatureDisplay.normal,
-              rgb: rgb,
-            );
+            style = FeatureStyle(display: (slab || ghostOthers) ? FeatureDisplay.ghost : FeatureDisplay.normal, rgb: rgb);
           }
       }
+      // X-ray: concealed services show through the wall in the colour they
+      // already have (or their discipline's), so a hidden cable still reads
+      // as "electrical" and a verified pipe as "verified".
+      if (concealed.contains(f.featureId) && ArDiscipline.of(f.discipline).isMep) {
+        final rgb = (style?.display == FeatureDisplay.ghost ? null : style?.rgb) ?? arDisciplineRgb(f.discipline) ?? ArDiscipline.otherMep.rgb;
+        style = FeatureStyle(display: FeatureDisplay.highlight, rgb: rgb);
+      }
+      if (dimAll) style = FeatureStyle(display: FeatureDisplay.ghost, rgb: style?.rgb);
+      if (style != null) styles[f.featureId] = style;
     }
-    final selected = state.selection.where((f) => f.buildId == buildId).map((f) => f.featureId).toSet();
+    final selected = ws.selection.where((f) => f.buildId == buildId).map((f) => f.featureId).toSet();
     // Drill check's nearest service is highlighted like a selection, and
     // shown even when the legend hides its discipline: it's the warning.
-    final drillHit = state.drilling ? state.drill?.feature : null;
+    final drillHit = ws.drilling ? ws.drill?.feature : null;
     if (drillHit != null && drillHit.buildId == buildId) {
       selected.add(drillHit.featureId);
       hidden.remove(drillHit.featureId);
     }
-    final target = <int>{if (s.target != null && s.target!.buildId == buildId) s.target!.featureId};
-    final FeatureStateTexture tex;
-    if (styles.isEmpty) {
-      tex = FeatureState.fromStatus(
-        featureCount: maxId + 1,
-        statusByFeature: statusByFeature,
-        selected: selected,
-        target: target,
-        hidden: hidden,
-        ghostOthers: ghostOthers,
-      );
-    } else {
-      for (final id in selected) {
-        styles[id] = const FeatureStyle(display: FeatureDisplay.highlight, rgb: kHighlightRgb);
-      }
-      for (final id in target) {
-        styles[id] = const FeatureStyle(display: FeatureDisplay.highlight, rgb: kHighlightRgb);
-      }
-      for (final id in hidden) {
-        styles[id] = FeatureStyle.hidden;
-      }
-      tex = FeatureState.build(
-        featureCount: maxId + 1,
-        styles: styles,
-        base: ghostOthers ? FeatureStyle.ghost : FeatureStyle.normal,
-      );
+    for (final id in selected) {
+      styles[id] = const FeatureStyle(display: FeatureDisplay.highlight, rgb: kHighlightRgb);
     }
-    await _session.setFeatureState(tex.rgba, tex.width, buildId: buildId);
+    if (target != null && target.buildId == buildId) {
+      styles[target.featureId] = const FeatureStyle(display: FeatureDisplay.highlight, rgb: kHighlightRgb);
+    }
+    for (final id in hidden) {
+      styles[id] = FeatureStyle.hidden;
+    }
+    return FeatureState.build(
+      featureCount: maxId + 1,
+      styles: styles,
+      base: ghostOthers || dimAll ? FeatureStyle.ghost : FeatureStyle.normal,
+    );
+  }
+
+  List<ArFeature>? _concealedOf;
+  ArPlan? _concealedPlan;
+  double? _concealedDatum;
+  Map<String, Set<int>> _concealedByBuild = const {};
+
+  /// This build's feature ids of MEP the element card would call concealed
+  /// (in a wall, the floor, a slab or above the ceiling). Cached per feature
+  /// list, plan and datum: placing every service against every wall is the
+  /// one costly step, and it only changes with a new floor.
+  Set<int> _concealedFor(ArSessionState s, String buildId) {
+    final datum = _datumOf(s);
+    if (!identical(s.features, _concealedOf) || !identical(s.plan, _concealedPlan) || datum != _concealedDatum) {
+      _concealedOf = s.features;
+      _concealedPlan = s.plan;
+      _concealedDatum = datum;
+      final walls = _wallsFor(s.plan);
+      final slabs = _slabsFor(s.features);
+      final byBuild = <String, Set<int>>{};
+      for (final f in s.features) {
+        if (!ArDiscipline.of(f.discipline).isMep) continue;
+        final p = _drill.place(bboxMin: f.bboxMin, bboxMax: f.bboxMax, floorY: datum, walls: walls, slabs: slabs);
+        if (p.zone != ServiceZone.room) (byBuild[f.buildId] ??= <int>{}).add(f.featureId);
+      }
+      _concealedByBuild = byBuild;
+    }
+    return _concealedByBuild[buildId] ?? const {};
   }
 
   /// Slabs, roofs and coverings: surfaces as big as the room. Drawn solid
@@ -1228,7 +1508,7 @@ class ArWorkspaceController extends AutoDisposeNotifier<ArWorkspaceState> {
   /// rest on where the user tapped the floor. Usable, but rough, and the
   /// badge alone ("Placed") doesn't say so: the workspace shows a hint.
   static bool roughPlacement(ArSessionState s) =>
-      s.isPlaced && s.observations.isNotEmpty && s.observations.every((o) => o is CornerObs && o.method == 'floorTap');
+      s.isPlaced && s.observations.isNotEmpty && s.observations.every((o) => o is CornerObs && o.roughHeading);
 
   /// The legend's discipline filters and the Layers panel's SHOW switches,
   /// per element. The SHOW switches are MEP switches: architecture and

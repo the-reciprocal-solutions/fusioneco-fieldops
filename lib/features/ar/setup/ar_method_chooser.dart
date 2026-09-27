@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -34,6 +35,7 @@ class ArMethodChooser extends ConsumerWidget {
     final recommended = setup.recommended;
     final floorName = floor?.floorName ?? '';
     final where = session.args?.spaceName ?? floorName;
+    final sunlight = ref.watch(arPrefsProvider.select((p) => p.sunlight));
 
     final options = <_MethodOption>[
       _MethodOption(
@@ -86,7 +88,24 @@ class ArMethodChooser extends ConsumerWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AppText.title('ar.method.title'.getString(context), weight: FontWeight.w800),
+          Row(
+            children: [
+              Expanded(child: AppText.title('ar.method.title'.getString(context), weight: FontWeight.w800)),
+              // Sunlight mode before the first scan: on a bright site the
+              // setup chips are the first thing that washes out.
+              IconButton(
+                tooltip: 'ar.menu.sunlight'.getString(context),
+                isSelected: sunlight,
+                onPressed: () => ref.read(arPrefsProvider.notifier).setSunlight(!sunlight),
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                style: IconButton.styleFrom(
+                  backgroundColor: sunlight ? FeColors.primary : FeArColors.manualBg,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: Icon(ArIcons.sunlight, size: 20, color: sunlight ? Colors.white : FeColors.ink),
+              ),
+            ],
+          ),
           const SizedBox(height: 4),
           AppText.bodySmall(
             where.isEmpty ? 'ar.method.subtitle_generic'.getString(context) : arTr(context, 'ar.method.subtitle', [where]),
@@ -134,9 +153,82 @@ class ArMethodChooser extends ConsumerWidget {
               ),
             ),
           ),
+          if (kDebugMode && !session.demo) const _DebugRecordingRow(),
         ],
       ),
     );
+  }
+}
+
+/// Debug builds only: record this room with ARCore Recording & Playback, or
+/// replay a recording instead of the camera, so one room can be re-run at a
+/// desk (docs/ar-recording-playback.md). Never in a release build.
+class _DebugRecordingRow extends ConsumerWidget {
+  const _DebugRecordingRow();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(arSessionProvider);
+    final ctrl = ref.read(arSessionProvider.notifier);
+    final recording = s.recordingPath != null;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AppText.caption('ar.debug.title'.getString(context), color: FeColors.ink2, weight: FontWeight.w700),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              if (s.capabilities?.recording ?? false)
+                Expanded(
+                  child: ArSecondaryButton(
+                    label: (recording ? 'ar.debug.stop' : 'ar.debug.record').getString(context),
+                    icon: recording ? ArIcons.close : ArIcons.capture,
+                    onPressed: s.playbackPath != null
+                        ? null
+                        : (recording ? ctrl.debugStopRecording : ctrl.debugStartRecording),
+                  ),
+                ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ArSecondaryButton(
+                  label: (s.playbackPath == null ? 'ar.debug.replay' : 'ar.debug.live').getString(context),
+                  icon: s.playbackPath == null ? ArIcons.resume : ArIcons.capture,
+                  onPressed: recording
+                      ? null
+                      : () => s.playbackPath == null ? _pick(context, ctrl) : ctrl.debugReplay(null),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pick(BuildContext context, ArSessionController ctrl) async {
+    final files = await ArSessionController.listRecordings();
+    if (!context.mounted) return;
+    final path = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: AppText.titleMedium('ar.debug.replay'.getString(context), weight: FontWeight.w800),
+        children: [
+          if (files.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              child: AppText.bodySmall('ar.debug.none'.getString(context), color: FeColors.ink2),
+            ),
+          for (final f in files)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop(f.path),
+              child: AppText.bodyMedium(f.path.split('/').last),
+            ),
+        ],
+      ),
+    );
+    if (path != null) await ctrl.debugReplay(path);
   }
 }
 

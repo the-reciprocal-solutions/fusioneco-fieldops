@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,6 +23,54 @@ class OfflineBanner extends ConsumerStatefulWidget {
 class _OfflineBannerState extends ConsumerState<OfflineBanner> {
   bool _syncing = false;
 
+  /// Shown state. Starts online: at a cold start connectivity_plus can answer
+  /// "none" before Android has registered its network callback, and a one-shot
+  /// check then pinned the bar on screen with nothing re-checking it (device
+  /// report 2026-09-27: "offline bar at the top by default").
+  bool _offline = false;
+  StreamSubscription<List<ConnectivityResult>>? _sub;
+  Timer? _confirm;
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = Connectivity().onConnectivityChanged.listen((_) => _check(), onError: (Object _) {});
+    _check();
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _confirm?.cancel();
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  /// Online is believed at once; offline only when a second check ~2 s later
+  /// agrees. While offline, re-check every 10 s: the stream can miss the
+  /// offline→online edge (see SyncClient.startAutoFlush).
+  Future<void> _check() async {
+    final sync = ref.read(syncClientProvider);
+    final offline = await sync.isOffline;
+    if (!mounted) return;
+    if (!offline) {
+      _confirm?.cancel();
+      _poll?.cancel();
+      _poll = null;
+      if (_offline) setState(() => _offline = false);
+      return;
+    }
+    if (_offline) return;
+    _confirm?.cancel();
+    _confirm = Timer(const Duration(seconds: 2), () async {
+      final still = await sync.isOffline;
+      if (!mounted || !still) return;
+      setState(() => _offline = true);
+      _poll ??= Timer.periodic(const Duration(seconds: 10), (_) => _check());
+    });
+  }
+
   Future<void> _syncNow(SyncClient sync) async {
     setState(() => _syncing = true);
     await sync.flushQueue();
@@ -31,10 +82,9 @@ class _OfflineBannerState extends ConsumerState<OfflineBanner> {
     final pending = ref.watch(pendingMutationCountProvider).valueOrNull ?? 0;
     final sync = ref.watch(syncClientProvider);
 
-    return FutureBuilder<bool>(
-      future: sync.isOffline,
-      builder: (context, snapshot) {
-        final offline = snapshot.data ?? false;
+    return Builder(
+      builder: (context) {
+        final offline = _offline;
         if (!offline && pending == 0) return const SizedBox.shrink();
 
         final text = offline

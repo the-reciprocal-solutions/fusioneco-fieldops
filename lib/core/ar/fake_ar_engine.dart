@@ -389,6 +389,8 @@ class FakeArEngine implements ArEngine {
               depth: true,
               lidar: true,
               platform: 'demo',
+              // So the torch button can be tried in Demo mode (it lights nothing).
+              torch: true,
             );
 
   final FakeArScript script;
@@ -427,6 +429,19 @@ class FakeArEngine implements ArEngine {
   /// on the mini plan, so the demo always agrees with the user.
   String? aimCornerId;
 
+  /// What the next `depthPointAt` calls answer, in order (tests queue wall
+  /// taps here); empty means "nothing measured" (null).
+  final List<ArDepthPoint?> depthPoints = [];
+
+  /// The torch as the last `setTorch` left it.
+  bool torchOn = false;
+
+  /// The `recordTo` / `playbackFrom` of the last `startSession`, and a
+  /// recording started with `startRecording` (Demo mode never writes one).
+  String? recordTo;
+  String? playbackFrom;
+  String? recordingPath;
+
   Timer? _timer;
   bool _running = false;
   bool _paused = false;
@@ -453,8 +468,11 @@ class FakeArEngine implements ArEngine {
   }
 
   @override
-  Future<void> startSession() async {
+  Future<void> startSession({String? recordTo, String? playbackFrom}) async {
     commands.add('startSession');
+    this.recordTo = recordTo;
+    this.playbackFrom = playbackFrom;
+    torchOn = false;
     _running = true;
     _paused = false;
     _elapsedMs = 0;
@@ -721,6 +739,69 @@ class FakeArEngine implements ArEngine {
   }
 
   @override
+  Future<List<(double, double, bool)?>> projectTile(List<Vec3> pointsTile) async {
+    commands.add('projectTile');
+    // Demo mode places its labels itself on the painted sample room.
+    return [for (final _ in pointsTile) null];
+  }
+
+  @override
+  Future<List<PickResult?>> pickMany(List<(double, double)> points) async {
+    commands.add('pickMany');
+    final pump = ArDemoScenario.features().first;
+    return [
+      for (final _ in points)
+        PickResult(
+          featureId: pump.featureId,
+          hitPointTile: pump.centre ?? Vec3.zero,
+          distanceM: 3.4,
+          buildId: ArDemoScenario.buildId,
+        ),
+    ];
+  }
+
+  @override
+  Future<ArDepthPoint?> depthPointAt(double x, double y) async {
+    commands.add('depthPointAt');
+    if (depthPoints.isEmpty) return null;
+    return depthPoints.removeAt(0);
+  }
+
+  @override
+  Future<bool> setDepth(bool on) async {
+    commands.add('setDepth');
+    return true;
+  }
+
+  @override
+  Future<bool> refocus() async {
+    commands.add('refocus');
+    return true;
+  }
+
+  @override
+  Future<bool> setTorch(bool on) async {
+    commands.add('setTorch');
+    torchOn = on;
+    return _capabilities.torch;
+  }
+
+  @override
+  Future<bool> startRecording(String path) async {
+    commands.add('startRecording');
+    recordingPath = path;
+    return true;
+  }
+
+  @override
+  Future<String?> stopRecording() async {
+    commands.add('stopRecording');
+    final path = recordingPath;
+    recordingPath = null;
+    return path;
+  }
+
+  @override
   Future<String?> capture() async {
     commands.add('capture');
     return null; // Demo mode has no camera frame to save.
@@ -742,6 +823,8 @@ class FakeArEngine implements ArEngine {
   Future<void> stop() async {
     commands.add('stop');
     _running = false;
+    torchOn = false;
+    recordingPath = null;
     _timer?.cancel();
     _timer = null;
   }

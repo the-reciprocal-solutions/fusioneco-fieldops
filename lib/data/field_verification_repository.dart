@@ -47,6 +47,7 @@ class FieldVerificationRequest {
     this.flagReason,
     this.claimedSerial,
     this.claimedTag,
+    this.arContext,
   });
 
   final VerificationResult result;
@@ -69,6 +70,12 @@ class FieldVerificationRequest {
   /// of what [result] itself says.
   final bool flagForReinspection;
   final String? flagReason;
+
+  /// docs/ar-bim-overlay.md §8: where the AR workspace put the asset, how
+  /// well it was aligned and the location check (`ArHandoff.toArContext`),
+  /// when the check was started in AR (P-006). The server ignores unknown
+  /// keys until AR-24 stores it.
+  final Map<String, dynamic>? arContext;
 
   /// Capped at 8 client-side (FR-3.4) — the server has no explicit limit.
   final List<VerificationPhoto> photos;
@@ -109,6 +116,7 @@ class FieldVerificationRequest {
         'serialNumber': ?claimedSerial,
         'assetReferenceId': ?claimedTag,
       },
+    'arContext': ?arContext,
   };
 
   /// The queued upload for each entry in [photos], keyed to the same

@@ -8,6 +8,7 @@ import '../../app/env.dart';
 import '../../app/router.dart';
 import '../../core/ar/marker_code.dart';
 import '../../state/ar_catalog_controller.dart';
+import '../../state/ar_permissions.dart';
 import '../../state/ar_view_models.dart';
 import '../../theme/fe_ar_colors.dart';
 import '../../theme/fe_colors.dart';
@@ -33,7 +34,8 @@ class ArMarkerScreen extends ConsumerWidget {
         : ref.watch(arResolveProvider(canonical));
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
-      child: Scaffold(
+      child: ArSunlightHost(
+        child: Scaffold(
         backgroundColor: FeArColors.cameraFloor,
         body: Stack(
           children: [
@@ -101,6 +103,7 @@ class ArMarkerScreen extends ConsumerWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -301,7 +304,8 @@ class _Failed extends ConsumerWidget {
         label: arTr(context, 'ar.resolve.open_nearest', [result.nearestLabel ?? MarkerCode.display(result.nearestCode!)]),
         onPressed: () => context.pushReplacement(Routes.arMarker(result.nearestCode!)),
       ));
-    } else if (result.code == 'SPARE_UNBOUND') {
+    } else if (result.code == 'SPARE_UNBOUND' && ref.watch(arInstallAllowedProvider)) {
+      // Registering a spare is an install action (P-007 `isArInstall`).
       actions.add(ArPrimaryButton(
         label: 'ar.resolve.spare_bind'.getString(context),
         icon: ArIcons.board,

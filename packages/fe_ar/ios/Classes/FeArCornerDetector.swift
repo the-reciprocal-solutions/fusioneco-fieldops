@@ -1,12 +1,21 @@
 import ARKit
+import Metal
 
 /// Corner snapping under a screen point (docs/ar-setup-and-gamma-parity.md
 /// §2.3), iPhone and iPad. Same order as android/.../CornerDetector.kt:
 ///
-/// 1. LiDAR (iPad Pro, iPhone Pro): scene depth in a window around the pin,
-///    two vertical planes fitted by the C core and intersected. Finds the
-///    corner line even when its base is hidden behind a bin or a pipe
-///    (GAMMA's "vertical snapping"). Method "lidar".
+/// 1. LiDAR (iPad Pro, iPhone Pro), two sources, both method "lidar":
+///    a. the reconstructed scene mesh (`sceneReconstruction =
+///       .meshWithClassification`): vertices of faces ARKit classified as
+///       wall (and unclassified near-vertical faces) around the pin go to the
+///       C core, which fits two vertical planes with RANSAC + least squares
+///       and intersects them; the floor height comes from a least-squares
+///       plane through the floor-classified faces under the pin. The mesh
+///       remembers walls the camera no longer sees, so it works from further
+///       back than a single depth frame;
+///    b. scene depth in a window around the pin, same core fit.
+///    Both find the corner line even when its base is hidden behind a bin or
+///    a pipe (GAMMA's "vertical snapping").
 /// 2. Two tracked vertical ARPlaneAnchors whose intersection is within 0.6 m
 ///    of the pin. Method "planes".
 /// 3. Floor tap: the pin is on the floor at the corner, heading from the one
@@ -44,11 +53,16 @@ final class FeArCornerDetector {
             return nil
         }
         let aim = SIMD3<Float>(aimT.columns.3.x, aimT.columns.3.y, aimT.columns.3.z)
-        guard let floor = floorY else {
+        let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+        let meshFloorY = meshes.isEmpty ? nil : Self.meshFloor(meshes, near: aim, cameraY: camPos.y)
+        guard let floor = floorY ?? meshFloorY else {
             hint("corner-no-floor", "no floor yet: point at the floor for a moment")
             return nil
         }
 
+        if !meshes.isEmpty, let c = meshCorner(meshes, aim: aim, camPos: camPos, floorY: meshFloorY ?? floor) {
+            return c
+        }
         if let c = lidarCorner(frame: frame, point: point, viewSize: viewSize, orientation: orientation, aim: aim, camPos: camPos, floorY: floor) {
             return c
         }
@@ -60,8 +74,12 @@ final class FeArCornerDetector {
             let p = SIMD3<Float>(f.worldTransform.columns.3.x, floor, f.worldTransform.columns.3.z)
             if let c = floorTap(walls: walls, at: p, camPos: camPos) { return c }
         }
-        if walls.count < 2 && frame.sceneDepth == nil && frame.smoothedSceneDepth == nil {
-            hint("corner-no-walls", "found \(walls.count) wall(s): sweep slowly across both walls")
+        // Fewer than two tracked walls, and depth / the mesh (tried first)
+        // found no corner either: plain painted walls. Dart offers wall taps
+        // (depthPointAt + wall_fit.dart) on this code. Sent with or without
+        // depth since 2026-09-27, as Android (CHANNEL.md).
+        if walls.count < 2 {
+            hint("corner-no-walls", "found \(walls.count) wall(s): tap each wall near the corner instead")
         } else {
             hint("corner-not-found", "no corner under the pin")
         }
@@ -113,6 +131,107 @@ final class FeArCornerDetector {
         let blob = pts.withUnsafeBufferPointer { Data(buffer: $0) }
         guard let c = FeArGeometry.corner(fromPoints: blob, hint: aim, camera: camPos, floorY: floorY, floorKnown: true, noiseM: 0.01) else { return nil }
         return Self.event(c, method: "lidar")
+    }
+
+    // MARK: LiDAR scene mesh
+
+    /// Wall points from the classified scene mesh within 1.5 m (horizontally)
+    /// of the aim point, fitted by the C core exactly like the depth-window
+    /// points (fe_corner_from_points: RANSAC on the floor plane, then least
+    /// squares, then the intersection, which must be within 0.6 m of the aim).
+    private func meshCorner(_ meshes: [ARMeshAnchor], aim: SIMD3<Float>, camPos: SIMD3<Float>, floorY: Float) -> [String: Any]? {
+        var pts: [Float] = []
+        pts.reserveCapacity(4096 * 3)
+        Self.forEachFace(meshes, near: aim, radius: 1.5) { a, b, c, cls in
+            let n = simd_cross(b - a, c - a)
+            let len = simd_length(n)
+            guard len > 1e-9 else { return }
+            let ny = abs(n.y / len)
+            // walls, plus unclassified faces that are clearly vertical (ARKit
+            // leaves fresh or cluttered wall patches as .none); never floor,
+            // ceiling, table, seat, door or window faces
+            let wall = cls == ARMeshClassification.wall.rawValue
+            let unclassified = cls == ARMeshClassification.none.rawValue
+            guard (wall && ny < 0.35) || (unclassified && ny < 0.15) else { return }
+            let centroid = (a + b + c) / 3
+            for p in [a, b, c, centroid] {
+                pts.append(p.x)
+                pts.append(p.y)
+                pts.append(p.z)
+            }
+        }
+        guard pts.count >= 60 * 3 else { return nil }
+        let blob = pts.withUnsafeBufferPointer { Data(buffer: $0) }
+        guard let c = FeArGeometry.corner(fromPoints: blob, hint: aim, camera: camPos, floorY: floorY, floorKnown: true, noiseM: 0.015) else { return nil }
+        return Self.event(c, method: "lidar")
+    }
+
+    /// Floor height under the aim point from the floor-classified mesh faces
+    /// (least-squares plane, must be level), a standing phone's height below
+    /// the camera. Nil when there aren't enough floor faces yet.
+    static func meshFloor(_ meshes: [ARMeshAnchor], near aim: SIMD3<Float>, cameraY: Float) -> Float? {
+        var pts: [Float] = []
+        forEachFace(meshes, near: aim, radius: 1.5) { a, b, c, cls in
+            guard cls == ARMeshClassification.floor.rawValue else { return }
+            let centroid = (a + b + c) / 3
+            let drop = cameraY - centroid.y
+            guard drop > 0.5, drop < 2.5 else { return }
+            pts.append(centroid.x)
+            pts.append(centroid.y)
+            pts.append(centroid.z)
+        }
+        guard pts.count >= 20 * 3 else { return nil }
+        var centroid = SIMD3<Float>(repeating: 0), n = SIMD3<Float>(repeating: 0)
+        var rms: Float = 0
+        let data = pts.withUnsafeBufferPointer { Data(buffer: $0) }
+        guard FeArGeometry.fitPlane(data, centroid: &centroid, normal: &n, rms: &rms), abs(n.y) > 0.97, rms < 0.03 else { return nil }
+        // the plane's height under the aim point
+        return centroid.y - (n.x * (aim.x - centroid.x) + n.z * (aim.z - centroid.z)) / n.y
+    }
+
+    /// Calls `body` with every mesh face (world-space corners and the face's
+    /// ARMeshClassification raw value, 0 when the mesh carries none) whose
+    /// first vertex lies within `radius` metres of `near`, horizontally.
+    /// Reads ARKit's shared-storage Metal buffers directly (Apple's
+    /// "Visualizing and interacting with a reconstructed scene" pattern).
+    static func forEachFace(_ meshes: [ARMeshAnchor], near: SIMD3<Float>, radius: Float,
+                            _ body: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Int) -> Void) {
+        let r2 = radius * radius
+        for anchor in meshes {
+            let g = anchor.geometry
+            let vertices = g.vertices
+            let faces = g.faces
+            guard vertices.format.rawValue == MTLVertexFormat.float3.rawValue, faces.indexCountPerPrimitive == 3,
+                  faces.bytesPerIndex == 4 || faces.bytesPerIndex == 2 else { continue }
+            let vBase = vertices.buffer.contents().advanced(by: vertices.offset)
+            let fBase = faces.buffer.contents()
+            let classes = g.classification
+            let cBase = classes.map { $0.buffer.contents().advanced(by: $0.offset) }
+            let t = anchor.transform
+            func vertex(_ i: Int) -> SIMD3<Float> {
+                let p = vBase.advanced(by: i * vertices.stride).assumingMemoryBound(to: Float.self)
+                let w = t * SIMD4<Float>(p[0], p[1], p[2], 1)
+                return SIMD3<Float>(w.x, w.y, w.z)
+            }
+            func index(_ f: Int, _ k: Int) -> Int {
+                let at = (f * 3 + k) * faces.bytesPerIndex
+                return faces.bytesPerIndex == 4
+                    ? Int(fBase.advanced(by: at).assumingMemoryBound(to: UInt32.self).pointee)
+                    : Int(fBase.advanced(by: at).assumingMemoryBound(to: UInt16.self).pointee)
+            }
+            for f in 0..<faces.count {
+                let i0 = index(f, 0), i1 = index(f, 1), i2 = index(f, 2)
+                guard i0 < vertices.count, i1 < vertices.count, i2 < vertices.count else { continue }
+                let a = vertex(i0)
+                let dx = a.x - near.x, dz = a.z - near.z
+                if dx * dx + dz * dz > r2 { continue }
+                var cls = 0
+                if let cb = cBase, let cs = classes, f < cs.count {
+                    cls = Int(cb.advanced(by: f * cs.stride).assumingMemoryBound(to: UInt8.self).pointee)
+                }
+                body(a, vertex(i1), vertex(i2), cls)
+            }
+        }
     }
 
     // MARK: planes
@@ -172,7 +291,9 @@ final class FeArCornerDetector {
     static func findFloor(_ planes: [ARPlaneAnchor], cameraY: Float) -> Float? {
         let horizontal = planes.filter { $0.alignment == .horizontal && $0.transform.columns.3.y < cameraY - 0.5 }
         if ARPlaneAnchor.isClassificationSupported {
-            let floors = horizontal.filter { $0.classification == .floor }
+            // pattern match, not `==`: Classification's Equatable conformance
+            // is iOS 16+ and the deployment target is lower
+            let floors = horizontal.filter { if case .floor = $0.classification { return true } else { return false } }
             if let f = floors.min(by: { $0.transform.columns.3.y < $1.transform.columns.3.y }) { return f.transform.columns.3.y }
         }
         return horizontal.min(by: { $0.transform.columns.3.y < $1.transform.columns.3.y })?.transform.columns.3.y

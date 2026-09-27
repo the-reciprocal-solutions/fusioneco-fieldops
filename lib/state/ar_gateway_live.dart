@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -12,6 +13,7 @@ import 'ar_gateway.dart';
 import 'ar_view_models.dart';
 import 'auth_controller.dart';
 import 'providers.dart';
+import 'snag_controller.dart' show snagBuildingsProvider;
 
 /// [ArGateway] over the real [repo.ArRepository]: the offline floor pack,
 /// the tile store and the offline queue. This is the only file that maps
@@ -20,13 +22,27 @@ import 'providers.dart';
 ArGateway createLiveArGateway(Ref ref) => LiveArGateway(
   repository: ref.watch(arRepositoryProvider),
   actorId: () => ref.read(authControllerProvider).session?.userId,
+  // P-008 (4): the building list the models picker and the snag module
+  // already load (and cache offline) names the building when no board has
+  // been resolved yet this run, so eyebrows aren't blank.
+  buildingNameOf: (id) {
+    try {
+      for (final b in ref.read(snagBuildingsProvider).valueOrNull ?? const []) {
+        if (b.id == id) return b.name;
+      }
+    } catch (_) {}
+    return null;
+  },
 );
 
 class LiveArGateway implements ArGateway {
-  LiveArGateway({required this.repository, required this.actorId});
+  LiveArGateway({required this.repository, required this.actorId, this.buildingNameOf});
 
   final repo.ArRepository repository;
   final String? Function() actorId;
+
+  /// A building's name from elsewhere in the app, when known.
+  final String? Function(String buildingId)? buildingNameOf;
 
   /// The last manifest per floor, so `download` and `features` don't refetch.
   final _manifests = <String, wire.Manifest>{};
@@ -90,7 +106,7 @@ class LiveArGateway implements ArGateway {
     final focus = focusCode == null ? null : m.markerByCode(focusCode)?.posTile;
     return ArFloorContext(
       buildingId: m.buildingId,
-      buildingName: _buildingNames[m.buildingId] ?? '',
+      buildingName: _buildingNames[m.buildingId] ?? buildingNameOf?.call(m.buildingId) ?? '',
       floorId: m.floorId,
       floorName: m.floorName,
       builds: [for (final b in m.builds) _build(b)],
@@ -176,6 +192,10 @@ class LiveArGateway implements ArGateway {
       // tiles already down stay and the next call resumes.
       throw ArDownloadStopped(interrupted: result.interrupted);
     }
+    // P-008 (3): keep the tile store under its 1 GB cap. Only tiles no
+    // stored manifest references go, least recently used first, so this
+    // floor (just stored) is safe. Off the critical path.
+    unawaited(repository.gcTiles().then<void>((_) {}, onError: (_) {}));
   }
 
   @override
@@ -232,6 +252,12 @@ class LiveArGateway implements ArGateway {
 
   // ---------------------------------------------------------------- plan
 
+  /// The full plans [floorPlan] fetched, for callers that need more than the
+  /// mini-plan reduction (the ghost-spot finder's door and equipment clearance).
+  final Map<String, wire.FloorPlan> _fullPlans = {};
+
+  wire.FloorPlan? cachedFloorPlan(String floorId) => _fullPlans[floorId];
+
   @override
   Future<ArPlan?> floorPlan(String floorId) async {
     final wire.FloorPlan p;
@@ -240,6 +266,7 @@ class LiveArGateway implements ArGateway {
     } catch (_) {
       return null;
     }
+    _fullPlans[floorId] = p;
     final points = <Vec2>[
       for (final w in p.walls) ...w.polyline,
       for (final s in p.spaces) ...s.polygon,

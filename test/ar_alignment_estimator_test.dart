@@ -300,4 +300,66 @@ void main() {
       expect(fit.quality, AlignmentQuality.placed);
     });
   });
+
+  group('rough corners (plain rooms)', () {
+    /// A corner seen through [_truth], its faces [errDeg] off.
+    CornerObs corner(String id, Vec3 bTile, {String method = 'floorTap', double errDeg = 0, double? baselineM}) {
+      final yaw = degToRad(30 + errDeg);
+      return CornerObs(
+        id: id,
+        aAr: _truth.transformPoint(bTile),
+        bTile: bTile,
+        sigmaM: ArSigma.forCorner(method),
+        faceAAr: rotateXz(const Vec2(0, 1), yaw),
+        faceBAr: rotateXz(const Vec2(1, 0), yaw),
+        faceATile: const Vec2(0, 1),
+        faceBTile: const Vec2(1, 0),
+        method: method,
+        baselineM: baselineM,
+      );
+    }
+
+    test('depthTaps sits between planes and floorTap', () {
+      expect(ArSigma.forCorner('depthTaps'), ArSigma.cornerDepthTaps);
+      expect(ArSigma.cornerDepthTaps, greaterThan(ArSigma.cornerPlanes));
+      expect(ArSigma.cornerDepthTaps, lessThan(ArSigma.cornerFloorTap));
+    });
+
+    test('two floor-tap corners 2.4 m apart: heading from positions, still amber', () {
+      final fit = _estimator.fit([
+        corner('a', const Vec3(0, 0, 0), errDeg: 6),
+        corner('b', const Vec3(2.4, 0, 0), errDeg: -5),
+      ]);
+      expect(fit.spreadM, closeTo(1.2, 1e-9));
+      expect(fit.method, 'positions');
+      expect(fit.yawDeg, closeTo(30, 1e-6), reason: 'the faces were 6° and 5° off');
+      expect(fit.quality, AlignmentQuality.placed, reason: 'green still needs 1.5 m of spread');
+    });
+
+    test('with a planes corner in the pair, close corners keep the measured directions', () {
+      final fit = _estimator.fit([
+        corner('a', const Vec3(0, 0, 0), method: 'planes'),
+        corner('b', const Vec3(2.4, 0, 0), errDeg: -5),
+      ]);
+      expect(fit.method, 'directions');
+    });
+
+    test('rough corners under 2 m apart still use directions', () {
+      final fit = _estimator.fit([
+        corner('a', const Vec3(0, 0, 0), errDeg: 2),
+        corner('b', const Vec3(1.6, 0, 0), errDeg: 2),
+      ]);
+      expect(fit.method, 'directions');
+      expect(fit.yawDeg, closeTo(32, 1e-6));
+    });
+
+    test('a baseline corner is not rough and outweighs a rough one in directions', () {
+      final a = corner('a', const Vec3(0, 0, 0), baselineM: 3.2);
+      expect(a.roughHeading, isFalse);
+      final fit = _estimator.fit([a, corner('b', const Vec3(1.2, 0, 0), errDeg: 10)]);
+      expect(fit.method, 'directions');
+      // Weights 4 : 1 by direction, equal σ: the mean sits near a's 30°.
+      expect(fit.yawDeg, closeTo(32, 0.1));
+    });
+  });
 }

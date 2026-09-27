@@ -5,7 +5,7 @@
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Used to take the verification photo and job photos your checklist requires.</string>
+	<string>Used to take the verification photo and job photos your checklist requires, to scan asset tags and markers, and to show the building model over the camera in AR.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Used to record voice notes on a checklist task.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
@@ -64,6 +64,8 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
@@ -71,6 +73,12 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>

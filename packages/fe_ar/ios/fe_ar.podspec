@@ -22,18 +22,25 @@ Pod::Spec.new do |s|
   s.swift_version    = '5.9'
   s.requires_arc     = true
 
+  # Classes/*_shim.c pull in ../src: fe_ar_core.c, fe_tag.c (board
+  # AprilTags + planar PnP) and fe_apriltag_unity.c (the vendored AprilTag 3
+  # detector, src/third_party/apriltag, BSD-2-Clause: its LICENSE.md must be
+  # reproduced in the app's acknowledgements / licences screen).
   s.source_files        = 'Classes/**/*.{h,m,mm,c,swift}'
   s.public_header_files = 'Classes/FeArCore.h', 'Classes/FeArRenderer.h'
   # Compiled Filament materials (tool/compile_materials.sh writes them here).
   s.resource_bundles    = { 'fe_ar_assets' => ['Assets/*.filamat'] }
 
   s.dependency 'Flutter'
-  # MUST match the Filament version SceneView uses on Android
-  # (android/build.gradle feArFilamentVersion) and the matc that compiled
-  # Assets/*.filamat. Bump all three together.
-  # TODO(slice-0): confirm 1.72.1 is on CocoaPods trunk (the repo's podspec is at 1.77.x).
-  s.dependency 'Filament/filament', '1.72.1'
-  s.dependency 'Filament/gltfio_core', '1.72.1'
+  # Must stay on the same MATERIAL_VERSION as the matc that compiled
+  # Assets/*.filamat (1.72.1, the version SceneView uses on Android:
+  # android/build.gradle feArFilamentVersion). 1.72.1 was never published to
+  # CocoaPods trunk (checked 2026-09-27: newest is 1.72.0), so iOS pins
+  # 1.72.0; both have MATERIAL_VERSION 72 (libs/filabridge MaterialEnums.h),
+  # so the same .filamat loads on both. FeArRenderer.mm syntax-checks clean
+  # against the 1.72.0 pod's headers. Bump all three together.
+  s.dependency 'Filament/filament', '1.72.0'
+  s.dependency 'Filament/gltfio_core', '1.72.0'
 
   s.frameworks = 'ARKit', 'Vision', 'Metal', 'MetalKit', 'CoreImage', 'CoreVideo', 'AVFoundation'
   s.libraries  = 'c++'
@@ -42,6 +49,11 @@ Pod::Spec.new do |s|
     'DEFINES_MODULE' => 'YES',
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++20',
     'GCC_C_LANGUAGE_STANDARD' => 'gnu99',
+    # The vendored AprilTag detector (../src/third_party/apriltag, BSD-2-Clause)
+    # includes "common/..." from its own root. Its sources come in through a
+    # Classes shim like the core's: #include "../../src/fe_tag.c" and
+    # #include "../../src/fe_apriltag_unity.c" (see ../src/fe_tag.h).
+    'HEADER_SEARCH_PATHS' => '$(inherited) "$(PODS_TARGET_SRCROOT)/../src/third_party/apriltag"',
     # Filament's prebuilt libraries are device + simulator xcframeworks, but
     # Metal-backed AR can't run in the simulator; don't try to link i386.
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',

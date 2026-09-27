@@ -14,6 +14,8 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
     private var paused = false
     private var running = false
     private var wantDepth = true
+    private var layerContrast = false
+    private var thermalObserver: NSObjectProtocol?
     private var needsReset = true
 
     private weak var platformView: FeArPlatformView?
@@ -22,9 +24,16 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
     private let states = FeArFeatureStates()
     private lazy var markers = FeArMarkerDetector(emit: { [weak self] in self?.emit($0) })
     private lazy var corners = FeArCornerDetector(emit: { [weak self] in self?.emit($0) })
+    private let depthProbe = FeArDepthProbe()
 
     // drawing state
     private var modelCurrent = matrix_identity_float4x4
+    /// True once Dart has sent a model transform this session (Android
+    /// TileRenderer.placed). Until then tiles, grid and pins are loaded but
+    /// hidden: the identity root would put the model at the session origin,
+    /// which read as "the overlay lands somewhere random" on the first
+    /// Android device run.
+    private var modelPlaced = false
     private var easeFrom = matrix_identity_float4x4
     private var easeTo = matrix_identity_float4x4
     private var easeStart: CFTimeInterval = 0
@@ -46,6 +55,21 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
     private var lastPose: CFTimeInterval = 0
     private var lastTarget: CFTimeInterval = 0
     private let startTime = CACurrentMediaTime()
+
+    // floor extension event (CHANNEL.md `floor`), as Android detectFloor
+    private var lastFloorCheck: CFTimeInterval = 0
+    private var lastFloorY: Float?
+    private var floorAnchorId: UUID?
+    static let floorMinAreaM2: Float = 0.25
+    static let floorMinDropM: Float = 0.8
+    static let floorMaxDropM: Float = 2.3
+    static let floorSwitchRatio: Float = 1.5
+
+    // torch (extension `setTorch`): as Android, reset by startSession/stop and
+    // kept across pause/resume. ARKit turns it off whenever the capture
+    // session restarts, so it is re-applied on the first frame after a run.
+    private var torchOn = false
+    private var torchNeedsApply = false
 
     override init() {
         super.init()
@@ -92,6 +116,7 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         renderer = r
         if !r.drawsCamera { view.container.enableCameraFallback() }
         r.setModelMatrix(modelCurrent)
+        r.setPlaced(modelPlaced)
         r.setOpacity(opacity, sectionY: sectionY.map { NSNumber(value: $0) })
         r.setGridGlb(gridGlb, visible: layerGrid)
         r.setPinsGlb(pinGlb)
@@ -148,14 +173,42 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         c.planeDetection = [.horizontal, .vertical]
         c.isAutoFocusEnabled = true
         c.environmentTexturing = .none
+        if let f = Self.preferredVideoFormat() { c.videoFormat = f }
         if wantDepth {
+            // Both when the device has them: smoothed for markers and corners,
+            // the per-frame map (with its own confidence) for depthPointAt's
+            // "rawDepth", as Android pairs smoothed and raw depth.
             if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
                 c.frameSemantics.insert(.smoothedSceneDepth)
-            } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            }
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
                 c.frameSemantics.insert(.sceneDepth)
+            }
+            // LiDAR devices: the classified scene mesh feeds corner snapping
+            // (FeArCornerDetector.meshCorner) with walls the camera saw earlier.
+            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
+                c.sceneReconstruction = .meshWithClassification
             }
         }
         return c
+    }
+
+    /// The QR must decode from ~2 m (docs/ar-markers-and-qr.md §2.2), so take
+    /// the largest back wide-angle format up to 1920 wide (Android
+    /// pickCameraConfig's 1080p cap), higher frame rate on a tie. ARKit's
+    /// captured image is also what Filament draws full-screen, so bigger is
+    /// sharper on screen too. 4K formats (iOS 16) are skipped: they cost
+    /// frame rate and the Vision pass for no QR gain at these distances.
+    static func preferredVideoFormat() -> ARConfiguration.VideoFormat? {
+        let formats = ARWorldTrackingConfiguration.supportedVideoFormats.filter { f in
+            if #available(iOS 16.0, *), f.captureDeviceType != .builtInWideAngleCamera { return false }
+            return f.captureDevicePosition == .back && f.imageResolution.width <= 1920
+        }
+        return formats.max { a, b in
+            let pa = a.imageResolution.width * a.imageResolution.height
+            let pb = b.imageResolution.width * b.imageResolution.height
+            return pa != pb ? pa < pb : a.framesPerSecond < b.framesPerSecond
+        }
     }
 
     private func updateRunning() {
@@ -164,6 +217,7 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             session.run(configuration(), options: needsReset ? [.resetTracking, .removeExistingAnchors] : [])
             needsReset = false
             running = true
+            torchNeedsApply = torchOn
         } else if !should && running {
             session.pause()
             running = false
@@ -217,10 +271,6 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         emitTracking("limited", "relocalizing")
     }
 
-    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-        markers.anchorsUpdated(anchors)
-    }
-
     func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
         markers.anchorsRemoved(anchors)
     }
@@ -261,15 +311,117 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             emit(["type": "pose", "arFromCamera": Self.list(frame.camera.transform)])
         }
         markers.onFrame(session: session, frame: frame, tracking: tracking)
+        if tracking && now - lastFloorCheck >= 1 {
+            lastFloorCheck = now
+            detectFloor(frame)
+        }
+        if torchNeedsApply {
+            torchNeedsApply = false
+            applyTorch()
+        }
         if targetIds != nil && tracking && now - lastTarget >= 0.1 {
             lastTarget = now
             if let e = targetScreen() { emit(e) }
         }
     }
 
+    // MARK: floor
+
+    /// The floor for the fit's height (extension event `floor`), as Android
+    /// FeArController.detectFloor: the largest tracked horizontal plane of at
+    /// least 0.25 m² that sits a standing phone's height (0.8-2.3 m) below the
+    /// camera. The largest, not the lowest: a small false plane under the
+    /// floor won on "lowest" in the first Android device run (27 cm too low).
+    /// Sticky: the current plane stays while ARKit still has it, unless
+    /// another is 1.5x bigger (two planes ~10 cm apart traded places as each
+    /// grew and the model bounced). Emitted when it first appears or moves by
+    /// 1 cm; called at most once a second.
+    private func detectFloor(_ frame: ARFrame) {
+        let cameraY = frame.camera.transform.columns.3.y
+        var best: ARPlaneAnchor?
+        var bestArea: Float = 0
+        var current: ARPlaneAnchor?
+        for case let p as ARPlaneAnchor in frame.anchors where p.alignment == .horizontal {
+            if p.identifier == floorAnchorId { current = p }
+            if ARPlaneAnchor.isClassificationSupported {
+                switch p.classification {
+                case .ceiling, .table, .seat: continue
+                default: break
+                }
+            }
+            let area = Self.planeArea(p)
+            if area < Self.floorMinAreaM2 { continue }
+            let drop = cameraY - FeArCornerDetector.centre(p).y
+            if drop < Self.floorMinDropM || drop > Self.floorMaxDropM { continue }
+            if area > bestArea {
+                best = p
+                bestArea = area
+            }
+        }
+        // ARKit removes a plane anchor it merged into another (didRemove), so
+        // "still in frame.anchors" is the equivalent of ARCore's TRACKING and
+        // the merged-into plane competes on its own.
+        if let c = current, let b = best, b.identifier != c.identifier, bestArea < Self.floorSwitchRatio * Self.planeArea(c) {
+            best = c
+        }
+        guard let floor = best else { return }
+        floorAnchorId = floor.identifier
+        let y = FeArCornerDetector.centre(floor).y
+        if let last = lastFloorY, abs(y - last) < 0.01 { return }
+        lastFloorY = y
+        emit(["type": "floor", "yAr": Double(y), "areaM2": Double(Self.planeArea(floor))])
+    }
+
+    static func planeArea(_ p: ARPlaneAnchor) -> Float {
+        if #available(iOS 16.0, *) { return p.planeExtent.width * p.planeExtent.height }
+        return p.extent.x * p.extent.z
+    }
+
+    // MARK: torch
+
+    /// The back camera's torch while ARKit owns the capture session. iOS 16+
+    /// hands out the exact AVCaptureDevice ARKit runs
+    /// (configurableCaptureDeviceForPrimaryCamera); before that the default
+    /// video device is the same back wide-angle camera.
+    private static func torchDevice() -> AVCaptureDevice? {
+        if #available(iOS 16.0, *), let d = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera { return d }
+        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+    }
+
+    /// Applies `torchOn` now; false with no running session (it is applied
+    /// when one runs) or no torch. `torch-failed` when the device refuses.
+    @discardableResult
+    private func applyTorch() -> Bool {
+        guard running, let d = Self.torchDevice(), d.hasTorch else { return false }
+        do {
+            try d.lockForConfiguration()
+            defer { d.unlockForConfiguration() }
+            if torchOn {
+                guard d.isTorchAvailable else { return false }
+                try d.setTorchModeOn(level: AVCaptureDevice.maxAvailableTorchLevel)
+            } else if d.torchMode != .off {
+                d.torchMode = .off
+            }
+            return true
+        } catch {
+            emitError("torch-failed", error.localizedDescription)
+            return false
+        }
+    }
+
     // MARK: model transform
 
     private func setModel(_ m: simd_float4x4, easeMs: Int) {
+        if !modelPlaced {
+            // First placement: jump straight there (never ease in from the
+            // session origin), then show the model. As Android.
+            modelPlaced = true
+            modelCurrent = m
+            easeDuration = 0
+            renderer?.setModelMatrix(m)
+            renderer?.setPlaced(true)
+            return
+        }
         if easeMs <= 0 || !Self.isYawTranslation(modelCurrent) || !Self.isYawTranslation(m) {
             modelCurrent = m
             easeDuration = 0
@@ -445,6 +597,17 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         return ["type": "targetScreen", "x": s.0, "y": s.1, "onScreen": s.2]
     }
 
+    /// `pickMany` point list: `[[x, y]]` or `[{x, y}]`, logical pixels.
+    static func points(_ raw: Any?) -> [CGPoint?] {
+        (raw as? [Any] ?? []).map { item -> CGPoint? in
+            if let v = vec2(item) { return CGPoint(x: CGFloat(v.x), y: CGFloat(v.y)) }
+            if let m = item as? [String: Any], let x = (m["x"] as? NSNumber)?.doubleValue, let y = (m["y"] as? NSNumber)?.doubleValue {
+                return CGPoint(x: x, y: y)
+            }
+            return nil
+        }
+    }
+
     // MARK: capabilities
 
     private func capabilities() -> [String: Any] {
@@ -452,6 +615,7 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         let auth = AVCaptureDevice.authorizationStatus(for: .video)
         let denied = auth == .denied || auth == .restricted
         let lidar = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+        let mesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
         let reason: Any = !supported ? "device-not-supported" as Any : denied ? "camera-denied" as Any : NSNull() as Any
         let ok = supported && !denied
         return [
@@ -463,6 +627,9 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             "reason": reason,
             "featureMaterial": renderer?.hasFeatureMaterial ?? Self.bundledMaterial("fe_feature"),
             "cameraMaterial": renderer?.drawsCamera ?? Self.bundledMaterial("fe_camera_feed"),
+            // extras: the classified LiDAR mesh (corner snaps), a torch to switch
+            "mesh": ok && mesh,
+            "torch": Self.torchDevice()?.hasTorch ?? false,
         ]
     }
 
@@ -523,7 +690,10 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
                 return
             }
             sessionWanted = true
+            startThermal()
             paused = false
+            torchOn = false // reset by startSession, as Android
+            if running { applyTorch() }
             lastState = nil
             emitTracking("initializing", "initializing")
             updateRunning()
@@ -570,7 +740,9 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             layerGrid = (a["grid"] as? Bool) ?? true
             opacity = min(max((a["opacity"] as? NSNumber)?.floatValue ?? 1, 0), 1)
             sectionY = (a["sectionY"] as? NSNumber)?.floatValue
+            layerContrast = (a["contrast"] as? Bool) ?? false
             renderer?.setOpacity(opacity, sectionY: sectionY.map { NSNumber(value: $0) })
+            renderer?.setContrast(layerContrast)
             renderer?.setGridGlb(gridGlb, visible: layerGrid)
             for e in tiles.entries { sync(e) }
             result(nil)
@@ -629,6 +801,7 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             updateRunning()
             result(nil)
         case "stop":
+            stopThermal()
             stop()
             result(nil)
         // ---- extensions (CHANNEL.md "Extensions"; not in C8)
@@ -642,6 +815,64 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             result(pts)
         case "installArCore":
             result(false)
+        case "anchorAt":
+            guard let p = Self.vec3(a["posAr"]) else {
+                result(nil)
+                return
+            }
+            result(markers.anchorAt(session: session, p))
+        case "pickMany":
+            // Batched `pick` for lasso selection (one channel round trip
+            // instead of ~120): results in the same order, null for a miss.
+            let hits: [Any] = Self.points(a["points"]).map { p in
+                if let p = p, let hit = pick(p) { return hit }
+                return NSNull()
+            }
+            result(hits)
+        case "depthPointAt":
+            guard let x = (a["x"] as? NSNumber)?.doubleValue, let y = (a["y"] as? NSNumber)?.doubleValue else {
+                result(nil)
+                return
+            }
+            let p = CGPoint(x: x, y: y)
+            guard let frame = session.currentFrame, let pv = platformView, let r = ray(p) else {
+                result(nil)
+                return
+            }
+            result(depthProbe.pointAt(session: session, frame: frame, point: p, viewSize: pv.container.bounds.size,
+                                      orientation: pv.container.interfaceOrientation, rayOrigin: r.0, rayDir: r.1))
+        case "refocus":
+            // ARKit has no focus-at-point either: rerun with autofocus off, then
+            // on again a moment later, which restarts the sweep. Same config
+            // type and no reset options, so tracking and anchors continue.
+            guard running else { result(false); return }
+            let fixed = configuration()
+            fixed.isAutoFocusEnabled = false
+            session.run(fixed, options: [])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self = self, self.running else { return }
+                self.session.run(self.configuration(), options: [])
+            }
+            result(true)
+        case "setDepth":
+            // Depth and the scene mesh are the costly parts; Dart turns them
+            // off once the model is placed and back on for setup.
+            let on = (a["on"] as? Bool) ?? true
+            if on != wantDepth {
+                wantDepth = on
+                if running { session.run(configuration(), options: []) }
+            }
+            result(true)
+        case "setTorch":
+            // Remembered while paused (re-applied on the next run's first
+            // frame); the answer says whether it is applied now.
+            torchOn = (a["on"] as? Bool) ?? false
+            result(applyTorch())
+        case "startRecording":
+            // ARKit sessions can't be recorded in-app (Reality Composer does it)
+            result(false)
+        case "stopRecording":
+            result(nil)
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -658,8 +889,14 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         tiles.clear { [weak self] e in self?.renderer?.removeTile(e.hash) }
         states.clear()
         modelCurrent = matrix_identity_float4x4
+        modelPlaced = false
         easeDuration = 0
         renderer?.setModelMatrix(modelCurrent)
+        renderer?.setPlaced(false)
+        lastFloorY = nil
+        floorAnchorId = nil
+        torchOn = false
+        torchNeedsApply = false
         layerMep = true
         layerStructure = true
         layerArchitecture = true
@@ -698,4 +935,36 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
                                             pins: data.withUnsafeBufferPointer { Data(buffer: $0) },
                                             pinRgb: rgb.withUnsafeBufferPointer { Data(buffer: $0) })
     }
+
+    // MARK: thermal (fe_ar extension event `thermal`)
+
+    /// ProcessInfo's thermal state as Android's PowerManager levels, so Dart
+    /// pauses AR on both platforms before the OS throttles it.
+    private func startThermal() {
+        guard thermalObserver == nil else { return }
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.emitThermal()
+        }
+        emitThermal()
+    }
+
+    private func stopThermal() {
+        if let o = thermalObserver { NotificationCenter.default.removeObserver(o) }
+        thermalObserver = nil
+    }
+
+    private func emitThermal() {
+        let (status, level): (Int, String)
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal: (status, level) = (0, "none")
+        case .fair: (status, level) = (1, "light")
+        case .serious: (status, level) = (3, "severe")
+        case .critical: (status, level) = (4, "critical")
+        @unknown default: (status, level) = (0, "none")
+        }
+        emit(["type": "thermal", "status": status, "level": level])
+    }
+
 }

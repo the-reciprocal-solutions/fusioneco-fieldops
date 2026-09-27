@@ -82,11 +82,61 @@ A4 portrait, drawn at true scale on the canvas:
 
 - The label, large (`L03-M07`); building and floor; space and wall ("Plant Room B · East wall · centre at 1.50 m").
 - A **170 mm textured frame** around the 115 mm QR. The frame's high-contrast, non-repeating pattern gives ARCore and ARKit visual features on a plain painted wall. The pattern is **seeded by the code**, so no two boards look alike. That matters for tracking, and it lets a person tell boards apart.
+- **Four AprilTag fiducials** (tag36h11), one in each frame corner, where the quadrant targets used to be (from 2026-09-27; §2.4).
 - Registration ticks. The registration point is the **QR centre**.
 - Three install steps, a mini placement map, and a **100 mm scale line** ("must measure exactly 100 mm").
 - The short URL as text, and "Please don't remove or move this board".
 
 A 200 mm QR plus a frame does **not** fit A4 portrait (210 mm wide). v3 of the overlay plan said "150–200 mm". The real A4 numbers are the ones above.
+
+### 2.4 Board fiducials: AprilTags for the pose (2026-09-27)
+
+The QR is for **identity**. Its four corners, as ML Kit and Vision report them, are too rough for a precise pose, and Google advises against QR codes as ARCore Augmented Images. So every board now also carries four **AprilTag tag36h11** fiducials. The detector finds their corners to a fraction of a pixel, and one planar PnP over all 16 corners, spread over about 150 mm, gives the board centre far more tightly than the QR. Published AprilTag results are about 1 cm at 0.3–0.7 m with a median rotation error near 0.5° for a single tag; averaging 20–30 frames in world space, and solving several boards metres apart together (the 4-DoF fit, §4 of the overlay plan), does better than any single marker.
+
+```mermaid
+flowchart LR
+  IMG["CPU camera image"] --> QR["ML Kit QR<br/>payload + 4 rough corners"]
+  QR --> ROI["search region<br/>1.65 QR half-diagonals"]
+  IMG --> ROI
+  ROI --> AT["AprilTag tag36h11<br/>(vendored C, BSD-2)"]
+  AT --> PAIR{"id in the payload's group<br/>AND at a frame corner?"}
+  PAIR -- "≥ 2 tags" --> PNP["planar PnP, 16 corners<br/>→ world via camera pose"]
+  PNP --> AVG["20–30 samples: median centre,<br/>mean normal, spread ≤ 10 mm"]
+  AVG --> EV["marker event, method: tag"]
+  PAIR -- "no / 1 tag" --> OLD["QR path: plane → depth → pnp<br/>(15 samples, ≤ 15 mm)"]
+  OLD --> EV2["marker event, method: plane | depth | pnp"]
+```
+
+**Layout.** Each frame corner square (side (frame − QR) / 2) holds one tag centred in it, black edge 0.8 × the side, so one tag cell of white is left all round. Every tag is printed upright.
+
+| Board | Corner square | Tag (black edge) | Cell | Tag centre from the QR centre |
+|---|---|---|---|---|
+| **A4** | 27.5 mm | **22 mm** | 2.75 mm | ±71.25 mm in x and y |
+| A3 | 40 mm | **32 mm** | 4 mm | ±105 mm in x and y |
+
+Corners are numbered as printed: 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left.
+
+**Ids (no schema change).** The id is derived from the code, never stored:
+
+- `g = FNV-1a-32(canonical code, ASCII) mod 146`
+- `G = g` on A4, `(g + 73) mod 146` on A3. The two are never equal, so a code's A4 and A3 ids are disjoint and a detected id also tells the app the print format (and so the tag size).
+- `id = 4·G + corner`. Ids 0–583 of tag36h11's 587.
+
+With 146 groups, two boards in a building can share a group. That is harmless: the QR identifies the board, and the app uses a tag only when its id is in **that payload's** group **and** it sits at one of **that QR's** frame corners in the same camera image. Golden values are shared by the server test (`src/services/ar/print/__tests__/aprilTag.test.ts`) and the C test (`packages/fe_ar/src/test/fe_tag_test.c`): `7K3QX9R` → g 96, A4 ids 384–387, A3 ids 92–95.
+
+**Where the code lives.**
+
+| Part | File |
+|---|---|
+| Print (vector cells, exact size) | server `src/services/ar/print/aprilTag.ts`, `markerBoardPdfService.ts` (`tags: false` prints the older layout) |
+| Web preview | client `components/ar-markers/lib/aprilTag.ts` (a copy), `BoardPreview.tsx` |
+| Detector + pose (C, both platforms) | `packages/fe_ar/src/fe_tag.{h,c}`, `src/fe_apriltag_unity.c`, `src/third_party/apriltag/` (AprilTag 3, BSD-2-Clause, tag36h11 only, licence file alongside) |
+| Android pipeline | `packages/fe_ar/android/.../MarkerDetector.kt` (`FeArTagCore` JNI) |
+| iOS | not wired yet: a Classes shim including `../../src/fe_tag.c` and `../../src/fe_apriltag_unity.c`, plus the podspec's header path (already added) |
+
+**Old boards.** Boards printed before 2026-09-27 have quadrant targets, no tags, and lock exactly as before (QR path). A mis-scaled print (say 94 %) would move a tag pose along the view ray by the same factor. When ARCore also measures the wall on the tag's ray, the ratio is the print scale; off by more than 4 %, that board's tags are ignored for the session and it locks by the QR path.
+
+**Range.** On a 1080p CPU image, the 22 mm A4 tags decode to about 2 m in synthetic renders (with sub-millimetre centre error). On a 640 × 480 CPU image they would be about 2 px per cell at 0.7 m (an estimate, not measured), so beyond that the board locks by the QR path. None of this has run on a device yet.
 
 ---
 

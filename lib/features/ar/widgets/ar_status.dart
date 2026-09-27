@@ -5,7 +5,6 @@ import '../../../core/ar/alignment_estimator.dart';
 import '../../../state/ar_catalog_controller.dart' show arOfflineProvider;
 import '../../../state/ar_session_controller.dart';
 import '../../../state/providers.dart';
-import '../../../theme/fe_ar_colors.dart';
 import '../../../widgets/app_text.dart';
 import '../ar_ui.dart';
 import 'ar_chrome.dart';
@@ -104,16 +103,22 @@ class ArSyncChip extends ConsumerWidget {
     final text = offline
         ? (queued > 0 ? arTr(context, 'ar.sync.offline_queued', [queued]) : arTr(context, 'ar.sync.offline'))
         : arTr(context, 'ar.sync.queued', [queued]);
+    final st = ArChromeStyle.of(context);
     return Container(
       constraints: const BoxConstraints(minHeight: 44),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(color: FeArColors.glass, borderRadius: BorderRadius.circular(14)),
+      decoration: BoxDecoration(color: st.surface(), borderRadius: BorderRadius.circular(14), border: st.border()),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(offline ? ArIcons.offline : ArIcons.sync, size: 15, color: FeArColors.onGlass),
+          Icon(offline ? ArIcons.offline : ArIcons.sync, size: st.iconSize(15), color: st.fg),
           const SizedBox(width: 6),
-          AppText.bodySmall(text, color: FeArColors.onGlass, weight: FontWeight.w600),
+          AppText.bodySmall(
+            text,
+            color: st.fg,
+            weight: st.weight(FontWeight.w600),
+            style: st.text(Theme.of(context).textTheme.bodySmall),
+          ),
         ],
       ),
     );

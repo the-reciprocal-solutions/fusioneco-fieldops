@@ -22,9 +22,42 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-014**
+Next number: **P-018**
 
 ## Open
+
+### P-017 · AR Sunlight mode (high-contrast chrome + model contrast): not run on a device
+- **Status:** done 2026-09-27 (lead switched the tablet grid rail box to ArChromeStyle) · was: needs verification · **Priority:** P2 · **Area:** AR (`lib/features/ar/widgets/ar_sunlight.dart`, `ar_chrome.dart`, workspace rails/legend/labels/drill, `lib/state/ar_prefs_controller.dart`)
+- **Found:** 2026-09-27 (field request: glass chrome unreadable in sunlight)
+- **Done so far:** persisted pref `ArPrefsState.sunlight` (`ar_prefs` key `sunlight`), toggles in Menu → View, the phone's More panel and the method chooser's title row; `ArChromeStyle.of(context)` read by every camera-floating control; `ArSunlightHost` on `ArSessionScreen` and `ArMarkerScreen`. `test/ar_sunlight_test.dart` (12) + all `test/ar_*_test.dart` pass on Flutter 3.47.5; analyze clean on touched files.
+- **Left:** a bright-site device check (is 92 % enough; do outlines read); the lead's native model-colour boost reading `arPrefsProvider.select((s) => s.sunlight)`; setup-overlay side buttons get the style centrally, but its own inline glass box (`ar_setup_overlay.dart:454`) was left as glass (overlay was locked to another session).
+- **Where:** lib/features/ar/widgets/ar_sunlight.dart, lib/features/ar/workspace/ar_menu_panel.dart, lib/features/ar/setup/ar_method_chooser.dart
+- **Next step:** run the AR demo outdoors with Sunlight on; then convert the setup overlay's leftover glass box.
+
+### P-016 · AR accuracy round (2026-09-27): built, not yet run on a device
+- **Status:** built · **Priority:** P1 · **Area:** AR (Android, iOS, server, web)
+- **Found:** 2026-09-27 (GAMMA research: LiDAR-only corner snap/drift correction; Android needs other methods)
+- **Done so far:** Android wall-taps corner from Raw Depth (`DepthProbe.kt`, `wall_fit.dart`), long-baseline heading tap, re-anchor/drift rule (`reanchor_rule.dart`), coaching, torch, `pickMany`, typed `projectTile`, record/replay rig (docs/ar-recording-playback.md); AprilTag boards (P-015; Dart σ 0.7× applied, iOS half done); workspace floating labels, x-ray + section cut, progress palette fix, landscape AR screen, coach tips, P-006 hand-off, P-007 `isArInstall` gating, P-008 items 2–4; iOS parity incl. LiDAR mesh corner snap + TestFlight pipeline (docs/ios-testflight.md). Tests: 329 AR/snag/verify pass; server AR 266; C core 131 + tag 91.
+- **Left:** device run of every item above (Raw Depth pixel alignment `TODO(slice-0)`, wall-taps accuracy, tag range/CPU); first iOS CI build (its "verify on first CI build" list); reprint boards to get tags; re-run "Prepare for AR" for element props.
+- **Also done 2026-09-27:** server APNs copy is now an alert push (+ app routes FCM `onMessageOpenedApp`/`getInitialMessage` taps, Darwin local notifications); side-docked setup card for landscape phones; P-008 closed; AprilTag licence on the licence page.
+- **Commit note (2026-09-27):** `lib/state/providers.dart` (the P-008 (2) `sync.onReplayed` re-read of AR progress) is NOT in the AR commit: it needs `SyncClient.onReplayed` from the offline-sync work (`sync_client.dart`, `replay_hooks.dart`), still uncommitted by that session. Commit it with or after that work.
+- **Where:** packages/fe_ar (android, ios, src), lib/core/ar, lib/state/ar_*, lib/features/ar, fusion-eco-server src/services/ar/print, fusion-eco-client components/ar-markers/BoardPreview.tsx
+- **Next step:** Android room test (wall taps, two tagged boards), then trigger the iOS TestFlight workflow.
+
+> **HIGH PRIORITY — reality-check plan (2026-09-27).** On 2026-09-27 the user asked to make every recommendation in [../docs/bim-market-reality-check-2026-09.md](../docs/bim-market-reality-check-2026-09.md) a high-priority item and to start now. Items are tagged `[HIGH · Phase n]`.
+>
+> - **Here:** P-014 (CI), P-002 (logout wipes unsynced snags), P-008 item (2) (a queued four-eyes rejection shows a false status), P-003 (the failing tests block CI).
+> - **Server:** P-044…P-061.
+> - **Client:** P-035…P-039.
+
+### P-015 · Board AprilTag lock (method `tag`): never run on a device; iOS and Dart halves owed
+- **Status:** needs verification · **Priority:** P2 · **Area:** AR / fe_ar markers
+- **Found:** 2026-09-27 (agent B, board fiducials; docs/ar-markers-and-qr.md §2.4)
+- **Done so far:** vendored AprilTag 3 (tag36h11, BSD-2) + `fe_tag.c` (ids, detector wrapper, planar PnP) with laptop tests on rendered boards (`src/test/fe_tag_test.c`, also under ASan/UBSan); JNI + CMake; `MarkerDetector.kt` tag path (20–30 samples, 10 mm spread, print-scale distrust); Gradle `compileDebugKotlin` + `externalNativeBuildDebug` pass; the server PDF rasterised at 300 dpi decodes with the right ids and 22.00 mm tags.
+- **Left:** (1) device run: lock on a printed A4 board, compare `method: tag` vs `plane` centres and spread, check detection range at the phone's real CPU-image size and the tag-thread cost; (2) merge `packages/fe_ar/CHANNEL.agentB.md` into CHANNEL.md; (3) `ArSigma.forMarker` + `ar_setup_controller.dart` `_markerObs` handle `tag` (diff in agent B's report); (4) iOS: a Classes shim including `../../src/fe_tag.c` + `../../src/fe_apriltag_unity.c` and the same pipeline in `FeArMarkerDetector.swift` (podspec header path already added).
+- **Why deferred:** no device install in that session; the Dart and iOS files belong to other agents.
+- **Where:** packages/fe_ar/src/fe_tag.c, packages/fe_ar/android/src/main/kotlin/com/fusionapps/fe_ar/MarkerDetector.kt, lib/core/ar/alignment_estimator.dart:33
+- **Next step:** print one A4 spare board at 100 %, lock it at 0.5, 1 and 1.5 m and read the `marker` events.
 
 ### P-013 · Permit to Work (PTW): never run on a device, no live API run
 - **Status:** needs verification · **Priority:** P2 · **Area:** Permit to Work (`lib/domain/permit.dart`, `lib/core/permit/permit_gas.dart`, `lib/data/permit_repository.dart`, `lib/state/permit_controller.dart`, `lib/features/permits/**`)
@@ -91,8 +124,14 @@ Next number: **P-014**
 - **Where:** [ar_entry_widgets.dart](lib/features/ar/widgets/ar_entry_widgets.dart), `lib/core/storage/session_store.dart`
 - **Next step:** confirm the auth-config payload, then add the two flags like `isDigitalTwin`.
 
-### P-008 · AR offline gaps: spares, queued four-eyes rejections, tile GC, building name, ghost-spot clearance
-- **Status:** partial · **Priority:** P1 for (2), P2 for the rest · **Area:** AR data (`ar_repository.dart`, `ar_gateway_live.dart`)
+### P-008 · [HIGH · Phase 0, item (2)] AR offline gaps: spares, queued four-eyes rejections, tile GC, building name, ghost-spot clearance
+- **Status:** partial · **Priority:** P1 for (2) — fixed in code, needs a device run; P2 for the rest · **Area:** AR data (`ar_repository.dart`, `ar_gateway_live.dart`)
+- **2026-09-27 — (2) fixed in code:**
+  - **Telling the user:** `SyncClient.flushQueue` logs a per-item refusal in a replayed 200 (`rejected[]` as `{globalId, reason}`, from `lib/core/offline/replay_notices.dart`) to the Sync Center as "could not be saved". A numeric `rejected` count (alignment events) is ignored. The online path still logs only `captureConflict`, because its caller shows refusals itself.
+  - **Correcting the screen:** after the flush, `ReplayHooks` (`lib/core/offline/replay_hooks.dart`) re-reads each replayed `ArProgress` floor via `ArRepository.fetchProgress`, registered in `providers.dart` (`sync.onReplayed`). The server copy wins right away.
+  - No edits to `ar_gateway_live.dart`, which another session is changing.
+  - Tests: `replay_notices_test.dart` (5), `replay_hooks_test.dart` (4).
+  - **Left:** a device run (queue a four-eyes verify offline, reconnect), and the WorkManager background engine, which builds its own `SyncClient` without hooks. There the refusal is still logged, but the floor is re-read only on the next open.
 - **Found:** 2026-09-26 (fieldops-core, fieldops-ui)
 - **Done so far:** local-first resolve, ETag manifests, verified tile store, queued writes with rollback on online rejection.
 - **Left:**
@@ -103,7 +142,7 @@ Next number: **P-014**
   - (5) the live `GhostSpotFinder` call gets no `FloorPlan`, so door and equipment clearance isn't applied.
 - **Why deferred:** contract gaps found while building in parallel.
 - **Where:** [ar_repository.dart](lib/data/ar_repository.dart), [ar_gateway_live.dart](lib/state/ar_gateway_live.dart)
-- **Next step:** (2) first: it can show a technician a "verified" the server refused.
+- **Closed 2026-09-27:** (2)(3)(4) by the workspace pass; (5) the live gateway keeps the full plan (`LiveArGateway.cachedFloorPlan`) and the ghost-spot finder gets it; (1) inside a placed session an unresolved code offline already falls through to "register this board" — only a scan outside AR needs signal once, which is the intended message. A spare registered offline is saved as a new board, not a spare bind: revisit if spares are common offline.
 
 ### P-009 · AR tests owed, and one sample dataset for Demo mode
 - **Status:** not started · **Priority:** P3 · **Area:** AR tests

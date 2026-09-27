@@ -12,6 +12,8 @@ import '../../core/capture/capture_services.dart';
 import '../../core/ocr/nameplate_reader.dart';
 import '../../core/offline/sync_client.dart' show kOfflineQueuedMessage;
 import '../../data/field_verification_repository.dart';
+import '../../domain/ar_handoff.dart';
+import '../ar/widgets/ar_handoff_card.dart';
 import '../../state/auth_controller.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
@@ -39,6 +41,7 @@ class FieldVerificationScreen extends ConsumerStatefulWidget {
     this.claimedSerial,
     this.claimedTag,
     this.floorId,
+    this.arHandoff,
   });
 
   final String assetId;
@@ -46,6 +49,11 @@ class FieldVerificationScreen extends ConsumerStatefulWidget {
   final String? claimedSerial;
   final String? claimedTag;
   final String? floorId;
+
+  /// Opened from the AR workspace's Verify mode (P-006): its location check
+  /// is shown, its capture attached as a photo, and it is submitted as the
+  /// request's `arContext` (docs/ar-bim-overlay.md §8). Null otherwise.
+  final ArHandoff? arHandoff;
 
   @override
   ConsumerState<FieldVerificationScreen> createState() => _FieldVerificationScreenState();
@@ -90,7 +98,17 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
     _observedTag.addListener(_scheduleAutosave);
     _notes.addListener(_scheduleAutosave);
     _flagReason.addListener(_scheduleAutosave);
-    unawaited(_loadDraft());
+    unawaited(_loadDraft().then((_) => _attachArPhoto()));
+  }
+
+  /// The AR capture joins the photos once (after a restored draft, which may
+  /// already hold it under the same `ar-…` name).
+  Future<void> _attachArPhoto() async {
+    final photo = await arHandoffPhoto(widget.arHandoff);
+    if (photo == null || !mounted) return;
+    if (_photos.any((p) => p.fileName == photo.fileName) || _photos.length >= _maxPhotos) return;
+    setState(() => _photos.insert(0, photo));
+    _scheduleAutosave();
   }
 
   @override
@@ -318,6 +336,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
         flagReason: _flagReinspection ? _emptyToNull(_flagReason.text) : null,
         claimedSerial: widget.claimedSerial,
         claimedTag: widget.claimedTag,
+        arContext: widget.arHandoff?.toArContext(),
       );
 
       final write = await ref
@@ -364,6 +383,10 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
           children: [
+            if (widget.arHandoff != null) ...[
+              ArHandoffCard(handoff: widget.arHandoff!),
+              const SizedBox(height: 20),
+            ],
             _SectionLabel('fieldVerify.result'.getString(context)),
             const SizedBox(height: 10),
             _ResultGrid(value: _result, onChanged: _setResult),

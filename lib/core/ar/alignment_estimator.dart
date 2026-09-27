@@ -13,6 +13,10 @@ abstract final class ArSigma {
   static const cornerPlanes = 0.04;
   static const cornerFloorTap = 0.06;
 
+  /// Two walls fitted from 3–5 Raw Depth taps each (`wall_fit.dart`): better
+  /// than a floor tap's one borrowed wall, worse than tracked planes.
+  static const cornerDepthTaps = 0.05;
+
   /// σ grows by this much per metre walked since the observation: tracking
   /// drift is proportional to distance, so an old observation from across
   /// the building counts for less than the board you just scanned.
@@ -26,15 +30,22 @@ abstract final class ArSigma {
 
   /// A marker observed by PnP (the last-resort method, orientation from the
   /// four QR corners) counts double: its centre sits on no measured surface.
+  /// A board locked on its AprilTags (16 corners, median of 20–30 frames)
+  /// counts 0.7×, never better than a surveyed board's own position.
   static double forMarker(String accuracyClass, String method) {
     final base = forMarkerClass(accuracyClass);
-    return method == 'pnp' ? base * 2 : base;
+    return switch (method) {
+      'pnp' => base * 2,
+      'tag' => math.max(surveyed, base * 0.7),
+      _ => base,
+    };
   }
 
   /// An unknown method is treated as the weakest (floor tap), never the best.
   static double forCorner(String method) => switch (method.toLowerCase()) {
         'lidar' || 'depth' => cornerLidar,
         'plane' || 'planes' => cornerPlanes,
+        'depthtaps' => cornerDepthTaps,
         _ => cornerFloorTap,
       };
 }
@@ -140,6 +151,7 @@ final class CornerObs extends ArObservation {
     required this.faceATile,
     required this.faceBTile,
     this.method = 'planes',
+    this.baselineM,
   });
 
   final Vec2 faceAAr;
@@ -147,8 +159,17 @@ final class CornerObs extends ArObservation {
   final Vec2 faceATile;
   final Vec2 faceBTile;
 
-  /// `lidar | planes | floorTap`.
+  /// `lidar | planes | floorTap | depthTaps`.
   final String method;
+
+  /// Set when the faces were turned to a long-baseline heading
+  /// (`BaselineHeading`): the corner → far-point distance it came from. The
+  /// faces are then far better than [method] says, and no longer "rough".
+  final double? baselineM;
+
+  /// The heading comes from a short look at the walls (a borrowed plane or a
+  /// few taps), not from tracked planes, LiDAR or a long baseline.
+  bool get roughHeading => baselineM == null && (method == 'floorTap' || method == WallFitMethod.depthTaps);
 
   @override
   String get kind => 'corner';
@@ -165,6 +186,7 @@ final class CornerObs extends ArObservation {
         faceATile: faceATile,
         faceBTile: faceBTile,
         method: method,
+        baselineM: baselineM,
       );
 
   @override
@@ -179,7 +201,14 @@ final class CornerObs extends ArObservation {
         faceATile: faceATile,
         faceBTile: faceBTile,
         method: method,
+        baselineM: baselineM,
       );
+}
+
+/// The wall-taps corner method (`wall_fit.dart`), here so the estimator does
+/// not depend on the fitter.
+abstract final class WallFitMethod {
+  static const depthTaps = 'depthTaps';
 }
 
 /// The badge states (docs/ar-setup-and-gamma-parity.md §2.7).
@@ -337,6 +366,16 @@ class AlignmentEstimator {
   /// Heading switches from directions to positions at this spread.
   static const spreadForPositionsM = 1.5;
 
+  /// When every direction is rough ([CornerObs.roughHeading]: floor taps and
+  /// wall taps, no boards), positions win from this spread (two corners 2 m
+  /// apart): 5 cm at each end over 2 m is about 2°, a floor tap's borrowed
+  /// wall often worse. The badge still needs [spreadForPositionsM] for green.
+  static const spreadForRoughPositionsM = 1.0;
+
+  /// A long-baseline corner's faces count this much more than an ordinary
+  /// observation's directions when several are averaged.
+  static const baselineDirectionWeight = 4.0;
+
   /// Green needs every kept residual at or under this; red above it.
   static const lockResidualM = 0.05;
 
@@ -482,7 +521,8 @@ class AlignmentEstimator {
 
     double yaw;
     String method;
-    if (obs.length >= 2 && spread >= spreadForPositionsM) {
+    final roughDirections = obs.every((o) => o is CornerObs && o.roughHeading);
+    if (obs.length >= 2 && (spread >= spreadForPositionsM || (roughDirections && spread >= spreadForRoughPositionsM))) {
       yaw = _yawFromPositions(obs, weights, aBar, bBar);
       method = 'positions';
     } else {
@@ -543,9 +583,10 @@ class AlignmentEstimator {
       switch (obs[i]) {
         case MarkerObs(:final normalTile, :final normalAr):
           add(normalTile.xz, normalAr.xz, w);
-        case CornerObs(:final faceATile, :final faceAAr, :final faceBTile, :final faceBAr):
-          add(faceATile, faceAAr, w / 2);
-          add(faceBTile, faceBAr, w / 2);
+        case CornerObs(:final faceATile, :final faceAAr, :final faceBTile, :final faceBAr, :final baselineM):
+          final cw = baselineM == null ? w / 2 : w * baselineDirectionWeight / 2;
+          add(faceATile, faceAAr, cw);
+          add(faceBTile, faceBAr, cw);
       }
     }
     if (!any || (s.abs() < 1e-12 && c.abs() < 1e-12)) return null;

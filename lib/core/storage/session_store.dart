@@ -108,7 +108,7 @@ class Session {
       );
 }
 
-/// Feature flags from GET /api/auth/config. Only these six reach the technician UI.
+/// Feature flags from GET /api/auth/config. Only these reach the technician UI.
 class Permissions {
   const Permissions({
     this.isAiAgent = false,
@@ -116,6 +116,7 @@ class Permissions {
     this.isAssetReport = false,
     this.isDigitalTwin,
     this.isArView,
+    this.isArInstall = false,
     this.currencyType,
     this.currencyRates = const {},
   });
@@ -135,6 +136,11 @@ class Permissions {
   // A door also needs the floor/building to have a published AR model — see
   // state/ar_availability.dart; this flag is the per-client switch on top.
   final bool? isArView;
+  // FieldOps install runs and turning spare boards into markers (server
+  // `isArInstall`, default **off**): opt-in, like isAiAgent — only an
+  // explicit `true` shows the install list, the dashboard install tile and
+  // "save a board here" (ar-markers-and-qr.md §3.3 decision 3, PENDING P-007).
+  final bool isArInstall;
   final String? currencyType;
   final Map<String, double> currencyRates;
 
@@ -153,6 +159,7 @@ class Permissions {
       isAssetReport: json['isAssetReport'] == true,
       isDigitalTwin: json['isDigitalTwin'] as bool?,
       isArView: json['isArView'] as bool?,
+      isArInstall: json['isArInstall'] == true,
       currencyType: json['currencyType']?.toString(),
       currencyRates: rates,
     );
@@ -164,6 +171,7 @@ class Permissions {
         'isAssetReport': isAssetReport,
         'isDigitalTwin': isDigitalTwin,
         'isArView': isArView,
+        'isArInstall': isArInstall,
         'currencyType': currencyType,
         'currencyRates': currencyRates,
       };

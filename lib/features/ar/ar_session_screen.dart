@@ -15,6 +15,7 @@ import '../../theme/fe_ar_colors.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/tech_popup.dart';
+import 'ar_coach_overlay.dart';
 import 'ar_ui.dart';
 import 'install/ar_install_check_overlay.dart';
 import 'setup/ar_setup_overlay.dart';
@@ -62,6 +63,8 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+    // The one screen allowed to turn sideways (ArOrientation).
+    ArOrientation.enter();
   }
 
   ArSessionArgs get _args => ArSessionArgs(
@@ -93,13 +96,15 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       session.pause();
     } else if (state == AppLifecycleState.resumed) {
-      session.resume();
+      // A power pause (idle / hot) waits for the user's tap, not the app coming back.
+      if (ref.read(arSessionProvider).pausedFor == null) session.resume();
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ArOrientation.leave();
     super.dispose();
   }
 
@@ -148,13 +153,17 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
-      child: Scaffold(
+      // Sunlight mode reaches every piece of chrome on this screen from here.
+      child: ArSunlightHost(
+        child: Scaffold(
         backgroundColor: FeArColors.cameraFloor,
         resizeToAvoidBottomInset: false,
         body: LayoutBuilder(
           builder: (context, constraints) {
-            final tablet = arIsTablet(constraints);
             final size = constraints.biggest;
+            // A phone on its side is wide but short: not a tablet.
+            final layout = arLayoutFor(size);
+            final tablet = layout == ArLayout.tablet;
             ref.read(arSessionProvider.notifier).viewSize = size;
 
             if (s.phase == ArSessionPhase.unsupported) {
@@ -179,6 +188,8 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
             final topInset = MediaQuery.paddingOf(context).top + 64;
             final running = s.phase == ArSessionPhase.running;
             final working = running && s.stage == ArSessionStage.work && widget.installCode == null;
+            final prefs = ref.watch(arPrefsProvider);
+            final coach = running && widget.installCode == null && prefs.loaded && !prefs.coachSeen;
 
             return Stack(
               children: [
@@ -189,13 +200,30 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
                 else if (running && s.stage == ArSessionStage.setup)
                   Positioned.fill(child: ArSetupOverlay(tablet: tablet, topInset: topInset)),
                 if (working)
-                  Positioned.fill(child: ArWorkspace(tablet: tablet, viewSize: size, onBack: () => context.pop()))
+                  Positioned.fill(
+                    child: ArWorkspace(
+                      tablet: tablet,
+                      landscape: layout == ArLayout.landscapePhone,
+                      viewSize: size,
+                      onBack: () => context.pop(),
+                    ),
+                  )
                 else
                   _SetupTopBar(demo: s.demo, placed: s.isPlaced, tablet: tablet),
+                if (coach)
+                  Positioned.fill(
+                    child: ArCoachOverlay(
+                      key: ValueKey(s.stage),
+                      startAtWork: s.stage == ArSessionStage.work,
+                    ),
+                  ),
+                if (s.paused && s.pausedFor != null)
+                  Positioned.fill(child: _PowerPaused(reason: s.pausedFor!)),
               ],
             );
           },
         ),
+      ),
       ),
     );
   }
@@ -253,7 +281,8 @@ class _Camera extends ConsumerWidget {
             if ((!ws.layers.mep && ArDiscipline.of(f.discipline).isMep) || ArWorkspaceController.filteredOut(f, ws.layers))
               f.globalId,
         },
-        opacity: ws.layers.opacity,
+        // Drifting: dimmed like the live model until re-checked.
+        opacity: s.recheck != null ? ws.layers.opacity * 0.35 : ws.layers.opacity,
         nudgePx: s.nudgeM * 600,
       ),
       ),
@@ -317,7 +346,11 @@ class _Starting extends StatelessWidget {
       child: Center(
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          decoration: BoxDecoration(color: FeArColors.glassStrong, borderRadius: BorderRadius.circular(18)),
+          decoration: BoxDecoration(
+            color: ArChromeStyle.of(context).surface(strong: true),
+            borderRadius: BorderRadius.circular(18),
+            border: ArChromeStyle.of(context).border(),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -329,6 +362,66 @@ class _Starting extends StatelessWidget {
               const SizedBox(width: 12),
               AppText.bodyMedium(key.getString(context), color: Colors.white, weight: FontWeight.w600),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// AR paused itself to save power: no movement for 2 minutes, or the phone
+/// reported a severe thermal status. The camera and tracking are stopped; a
+/// tap brings them back (tracking relocalises and anchors keep the model).
+class _PowerPaused extends ConsumerWidget {
+  const _PowerPaused({required this.reason});
+  final String reason;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final hot = reason == 'hot';
+    return Material(
+      color: Colors.black.withValues(alpha: 0.78),
+      child: InkWell(
+        onTap: () => ref.read(arSessionProvider.notifier).resume(),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(hot ? Icons.thermostat_rounded : Icons.battery_saver_rounded, color: Colors.white, size: 48),
+                const SizedBox(height: 14),
+                AppText.titleMedium(
+                  (hot ? 'ar.power.hot_title' : 'ar.power.idle_title').getString(context),
+                  color: Colors.white,
+                  weight: FontWeight.w800,
+                  align: TextAlign.center,
+                ),
+                const SizedBox(height: 6),
+                AppText.bodyMedium(
+                  (hot ? 'ar.power.hot_body' : 'ar.power.idle_body').getString(context),
+                  color: Colors.white70,
+                  align: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                ArPrimaryButton(
+                  label: 'ar.power.resume'.getString(context),
+                  icon: ArIcons.sync,
+                  onPressed: () => ref.read(arSessionProvider.notifier).resume(),
+                ),
+                if (hot) ...[
+                  const SizedBox(height: 10),
+                  // Some jobs must be finished in one go: the user can take
+                  // the risk; the OS's emergency level still pauses.
+                  TextButton(
+                    onPressed: () => ref.read(arSessionProvider.notifier).continueDespiteHeat(),
+                    style: TextButton.styleFrom(foregroundColor: Colors.white, minimumSize: const Size.fromHeight(48)),
+                    child: AppText.label('ar.power.continue_anyway'.getString(context), color: Colors.white, weight: FontWeight.w700),
+                  ),
+                  AppText.caption('ar.power.continue_note'.getString(context), color: Colors.white60, align: TextAlign.center),
+                ],
+              ],
+            ),
           ),
         ),
       ),

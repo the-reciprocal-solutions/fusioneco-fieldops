@@ -56,6 +56,14 @@ class PushService {
     // Tapped a tray notification while the app was alive in the background.
     final launchPayload = await LocalNotifications.launchPayload();
     if (launchPayload != null) _routeFromPayload(launchPayload);
+
+    // iOS: the server's APNs copy is an alert the OS shows itself while the
+    // app is in the background or closed, so its tap arrives through FCM, not
+    // the local-notifications plugin. (Android pushes are data-only and never
+    // reach these.)
+    FirebaseMessaging.onMessageOpenedApp.listen((m) => _routeFromPayload(jsonEncode(m.data)));
+    final initial = await _messaging.getInitialMessage();
+    if (initial != null) _routeFromPayload(jsonEncode(initial.data));
   }
 
   Future<void> _register(String token) async {

@@ -240,3 +240,122 @@ JNIEXPORT jbyteArray JNICALL FN(nativeOverlayGlb)(JNIEnv* env, jclass cls, jfloa
     free(pp);
     return out;
 }
+
+/* ------------------------------------------------------------------------ */
+/* Board AprilTags (../../../../src/fe_tag.c), bound to                      */
+/* com.fusionapps.fe_ar.FeArTagCore (declared in MarkerDetector.kt).         */
+/* ------------------------------------------------------------------------ */
+
+#include "fe_tag.h"
+
+#define TFN(name) Java_com_fusionapps_fe_1ar_FeArTagCore_##name
+
+/* Floats per detection in nativeTagDetect's output. */
+#define TAG_STRIDE 13
+
+JNIEXPORT jlong JNICALL TFN(nativeTagDetectorCreate)(JNIEnv* env, jclass cls) {
+    (void) env;
+    (void) cls;
+    return (jlong) (intptr_t) fe_tag_detector_create();
+}
+
+JNIEXPORT void JNICALL TFN(nativeTagDetectorFree)(JNIEnv* env, jclass cls, jlong handle) {
+    (void) env;
+    (void) cls;
+    fe_tag_detector_free((fe_tag_detector*) (intptr_t) handle);
+}
+
+/*
+ * grey: a DIRECT buffer (the camera image's Y plane), row_stride bytes per
+ * row, pixel stride 1. roi4 = [x, y, w, h] (w or h <= 0: whole image).
+ * out: TAG_STRIDE floats per detection
+ *   [id, hamming, margin, blx, bly, brx, bry, trx, try, tlx, tly, cx, cy]
+ * Returns the number of detections written.
+ */
+JNIEXPORT jint JNICALL TFN(nativeTagDetect)(JNIEnv* env, jclass cls, jlong handle, jobject grey, jint width, jint height, jint row_stride,
+                                            jintArray roi4, jfloat decimate, jfloatArray out) {
+    (void) cls;
+    fe_tag_detector* d = (fe_tag_detector*) (intptr_t) handle;
+    if (!d || !grey || !out || width <= 0 || height <= 0 || row_stride < width) return 0;
+    const uint8_t* data = (const uint8_t*) (*env)->GetDirectBufferAddress(env, grey);
+    const jlong cap = (*env)->GetDirectBufferCapacity(env, grey);
+    if (!data || cap < (jlong) (height - 1) * row_stride + width) return 0;
+    jint roi[4] = {0, 0, 0, 0};
+    if (roi4 && (*env)->GetArrayLength(env, roi4) >= 4) (*env)->GetIntArrayRegion(env, roi4, 0, 4, roi);
+    const jsize cap_out = (*env)->GetArrayLength(env, out) / TAG_STRIDE;
+    if (cap_out <= 0) return 0;
+    fe_tag_detection dets[16];
+    const int max_out = cap_out < 16 ? (int) cap_out : 16;
+    const int n = fe_tag_detect(d, data, width, height, row_stride, roi[0], roi[1], roi[2], roi[3], decimate, dets, max_out);
+    for (int i = 0; i < n; i++) {
+        float v[TAG_STRIDE];
+        v[0] = (float) dets[i].id;
+        v[1] = (float) dets[i].hamming;
+        v[2] = dets[i].margin;
+        for (int k = 0; k < 8; k++) v[3 + k] = dets[i].corners[k];
+        v[11] = dets[i].centre[0];
+        v[12] = dets[i].centre[1];
+        (*env)->SetFloatArrayRegion(env, out, i * TAG_STRIDE, TAG_STRIDE, v);
+    }
+    return n;
+}
+
+/* The payload's tag group (0..145), or -1 when it isn't a marker code (asset tags, anything else). */
+JNIEXPORT jint JNICALL TFN(nativeTagGroup)(JNIEnv* env, jclass cls, jstring payload) {
+    (void) cls;
+    if (!payload) return -1;
+    const char* p = (*env)->GetStringUTFChars(env, payload, NULL);
+    if (!p) return -1;
+    char code[8];
+    const int g = fe_marker_code_from_payload(p, code) ? fe_tag_group(code) : -1;
+    (*env)->ReleaseStringUTFChars(env, payload, p);
+    return g;
+}
+
+/* -1 when tag_id isn't one of this payload's board tags, else format * 4 + corner. */
+JNIEXPORT jint JNICALL TFN(nativeTagMatch)(JNIEnv* env, jclass cls, jstring payload, jint tag_id) {
+    (void) cls;
+    if (!payload) return -1;
+    const char* p = (*env)->GetStringUTFChars(env, payload, NULL);
+    if (!p) return -1;
+    char code[8];
+    int f = -1, k = -1, r = -1;
+    if (fe_marker_code_from_payload(p, code) && fe_tag_match(code, tag_id, &f, &k)) r = f * 4 + k;
+    (*env)->ReleaseStringUTFChars(env, payload, p);
+    return r;
+}
+
+/*
+ * Board pose from detections (TAG_STRIDE floats each) of this payload's
+ * tags. out13 = [cx, cy, cz, nx, ny, nz, ux, uy, uz, distance, rmsPx, nTags,
+ * format], camera space (+X right, +Y up, -Z forward).
+ */
+JNIEXPORT jboolean JNICALL TFN(nativeTagBoardPose)(JNIEnv* env, jclass cls, jstring payload, jfloatArray dets_in, jint n, jfloat fx, jfloat fy,
+                                                   jfloat cx, jfloat cy, jfloatArray out13) {
+    (void) cls;
+    if (!payload || !dets_in || !out13 || n <= 0 || n > 16) return JNI_FALSE;
+    if ((*env)->GetArrayLength(env, dets_in) < n * TAG_STRIDE || (*env)->GetArrayLength(env, out13) < 13) return JNI_FALSE;
+    float raw[16 * TAG_STRIDE];
+    (*env)->GetFloatArrayRegion(env, dets_in, 0, n * TAG_STRIDE, raw);
+    fe_tag_detection dets[16];
+    for (int i = 0; i < n; i++) {
+        const float* s = raw + i * TAG_STRIDE;
+        dets[i].id = (int) s[0];
+        dets[i].hamming = (int) s[1];
+        dets[i].margin = s[2];
+        for (int k = 0; k < 8; k++) dets[i].corners[k] = s[3 + k];
+        dets[i].centre[0] = s[11];
+        dets[i].centre[1] = s[12];
+    }
+    const char* p = (*env)->GetStringUTFChars(env, payload, NULL);
+    if (!p) return JNI_FALSE;
+    char code[8];
+    fe_board_pose pose;
+    const int ok = fe_marker_code_from_payload(p, code) && fe_board_pose_from_tags(dets, n, code, fx, fy, cx, cy, &pose);
+    (*env)->ReleaseStringUTFChars(env, payload, p);
+    if (!ok) return JNI_FALSE;
+    const float v[13] = {pose.centre[0], pose.centre[1], pose.centre[2], pose.normal[0], pose.normal[1], pose.normal[2], pose.up[0],
+                         pose.up[1],     pose.up[2],     pose.distance,  pose.rms_px,    (float) pose.n_tags, (float) pose.format};
+    (*env)->SetFloatArrayRegion(env, out13, 0, 13, v);
+    return JNI_TRUE;
+}

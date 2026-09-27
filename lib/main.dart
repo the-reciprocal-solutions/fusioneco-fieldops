@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/app.dart';
 import 'app/env.dart';
+import 'core/legal/third_party_licenses.dart';
 import 'core/network/api_client.dart';
 import 'core/offline/background_sync.dart';
 import 'core/offline/offline_db.dart';
@@ -17,6 +18,7 @@ import 'state/providers.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  registerThirdPartyLicenses();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
   // Restores any previously-saved language choice (see app/app.dart) before

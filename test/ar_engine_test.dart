@@ -272,4 +272,123 @@ void main() {
       await engine.dispose();
     });
   });
+
+  group('fe_ar extensions (torch, pickMany, depthPointAt, recording)', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    test('wire shapes', () async {
+      const channel = MethodChannel('test/ar-ext');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async {
+          calls.add(call);
+          switch (call.method) {
+            case 'capabilities':
+              return {'supported': true, 'platform': 'android', 'torch': true};
+            case 'pickMany':
+              return [
+                {'featureId': 3, 'hitPointTile': [1, 2, 3], 'distanceM': 1.5},
+                null,
+              ];
+            case 'depthPointAt':
+              return {
+                'posAr': [0.5, -0.2, -1.8],
+                'normalAr': [0, 0, 1],
+                'confidence': 0.82,
+                'method': 'rawDepth',
+                'samples': 61,
+              };
+            case 'setTorch':
+            case 'startRecording':
+              return true;
+            case 'stopRecording':
+              return '/files/ar_recordings/ar_1.mp4';
+          }
+          return null;
+        },
+      );
+      final engine = ChannelArEngine(methods: channel);
+      expect((await engine.capabilities()).torch, isTrue);
+      await engine.startSession(playbackFrom: '/files/ar_recordings/ar_1.mp4');
+      await engine.startSession();
+      final picks = await engine.pickMany(const [(10, 20), (30, 40)]);
+      final dp = await engine.depthPointAt(100, 200);
+      expect(await engine.setTorch(true), isTrue);
+      expect(await engine.startRecording('/files/ar_recordings/ar_2.mp4'), isTrue);
+      expect(await engine.stopRecording(), '/files/ar_recordings/ar_1.mp4');
+
+      Map args(String method, [int nth = 0]) => calls.where((c) => c.method == method).elementAt(nth).arguments as Map;
+      expect(args('startSession'), {'playbackFrom': '/files/ar_recordings/ar_1.mp4'});
+      expect(args('startSession', 1), isEmpty, reason: 'no nulls on the wire');
+      expect(args('pickMany')['points'], [
+        [10, 20],
+        [30, 40],
+      ]);
+      expect(picks, hasLength(2));
+      expect(picks[0]?.featureId, 3);
+      expect(picks[1], isNull);
+      expect(args('depthPointAt'), {'x': 100, 'y': 200});
+      expect(dp?.posAr, const Vec3(0.5, -0.2, -1.8));
+      expect(dp?.normalAr, const Vec3(0, 0, 1));
+      expect(dp?.confidence, closeTo(0.82, 1e-12));
+      expect(dp?.method, 'rawDepth');
+      expect(args('setTorch'), {'on': true});
+      expect(args('startRecording'), {'path': '/files/ar_recordings/ar_2.mp4'});
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    });
+
+    test('an older plugin: pickMany falls back to single picks, the rest to null/false', () async {
+      const channel = MethodChannel('test/ar-old');
+      final methods = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async {
+          methods.add(call.method);
+          if (call.method == 'pick') {
+            final a = call.arguments as Map;
+            return {'featureId': (a['x'] as num).toInt(), 'hitPointTile': [0, 0, 0], 'distanceM': 1};
+          }
+          if (call.method == 'capabilities') return {'supported': true};
+          throw MissingPluginException(); // what notImplemented() looks like to Dart
+        },
+      );
+      final engine = ChannelArEngine(methods: channel);
+      final picks = await engine.pickMany(const [(7, 0), (8, 0)]);
+      expect(picks.map((p) => p?.featureId), [7, 8]);
+      expect(methods.where((m) => m == 'pick'), hasLength(2));
+      expect(await engine.depthPointAt(1, 2), isNull);
+      expect(await engine.setTorch(true), isFalse);
+      expect(await engine.startRecording('/x.mp4'), isFalse);
+      expect(await engine.stopRecording(), isNull);
+      expect((await engine.capabilities()).torch, isFalse);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    });
+
+    test('ArDepthPoint and capabilities round-trip; a point without posAr is null', () {
+      const p = ArDepthPoint(posAr: Vec3(1, 2, 3), normalAr: Vec3(0, 1, 0), confidence: 0.5, method: 'plane');
+      final back = ArDepthPoint.fromMap(p.toMap())!;
+      expect(back.toMap(), p.toMap());
+      expect(ArDepthPoint.fromMap({'confidence': 1}), isNull);
+      const caps = ArCapabilities(supported: true, torch: true);
+      expect(ArCapabilities.fromMap(caps.toMap()).torch, isTrue);
+    });
+
+    test('FakeArEngine: queued depth points, torch, recording', () async {
+      final engine = FakeArEngine(autoplay: false, script: FakeArScript.manual);
+      await engine.startSession(playbackFrom: '/r.mp4');
+      expect(engine.playbackFrom, '/r.mp4');
+      expect(await engine.depthPointAt(0, 0), isNull);
+      engine.depthPoints.add(const ArDepthPoint(posAr: Vec3(1, 0, 0), confidence: 0.9));
+      expect((await engine.depthPointAt(0, 0))?.posAr, const Vec3(1, 0, 0));
+      expect(await engine.setTorch(true), isTrue, reason: 'Demo reports a torch');
+      expect(engine.torchOn, isTrue);
+      expect(await engine.startRecording('/a.mp4'), isTrue);
+      expect(await engine.stopRecording(), '/a.mp4');
+      expect(await engine.pickMany(const [(1, 1), (2, 2)]), hasLength(2));
+      await engine.stop();
+      expect(engine.torchOn, isFalse);
+      await engine.dispose();
+    });
+  });
 }

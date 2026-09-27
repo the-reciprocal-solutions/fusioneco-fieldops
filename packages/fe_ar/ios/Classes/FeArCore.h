@@ -96,4 +96,42 @@ NS_ASSUME_NONNULL_BEGIN
                              pinRgb:(nullable NSData*)pinRgb;
 @end
 
+/// A board pose from its AprilTag fiducials (src/fe_tag.h), camera space
+/// (+X right, +Y up, -Z forward).
+@interface FeArTagPose : NSObject
+/// The board centre (the QR centre).
+@property(nonatomic, readonly) simd_float3 centre;
+/// Unit normal out of the board, toward the camera.
+@property(nonatomic, readonly) simd_float3 normal;
+@property(nonatomic, readonly) float rmsPx;
+/// Tags used (2..4).
+@property(nonatomic, readonly) NSInteger tags;
+/// The tag ids say the board is the A3 print.
+@property(nonatomic, readonly) BOOL a3;
+@end
+
+/// The board-tag search Android's MarkerDetector.tagPose does, in one call
+/// (same constants): tag36h11 detection in a region around the QR on the
+/// camera image's luma plane, keeping only this payload's tags that sit at
+/// the QR frame's corners, then the C core's planar PnP. NOT thread-safe
+/// (AprilTag isn't re-entrant): use one instance from one queue.
+@interface FeArTagDetector : NSObject
+/// nil when the detector can't be allocated.
++ (nullable FeArTagDetector*)create;
+/// qrCorners: 8 floats (x, y), image pixels, clockwise from top-left (the
+/// Vision corners). luma: 8-bit Y plane of the same image. Returns nil for a
+/// non-marker payload, fewer than 2 matching tags, or a poor fit (RMS over
+/// 1.5 px).
+- (nullable FeArTagPose*)boardPoseForPayload:(NSString*)payload
+                                   qrCorners:(const float*)qrCorners
+                                        luma:(const uint8_t*)luma
+                                       width:(NSInteger)width
+                                      height:(NSInteger)height
+                                 bytesPerRow:(NSInteger)bytesPerRow
+                                          fx:(float)fx
+                                          fy:(float)fy
+                                          cx:(float)cx
+                                          cy:(float)cy;
+@end
+
 NS_ASSUME_NONNULL_END

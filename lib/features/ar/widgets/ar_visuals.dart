@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../theme/fe_ar_colors.dart';
 import '../../../theme/fe_colors.dart';
+import 'ar_sunlight.dart';
 
 /// The snap pin in the middle of the view (§2.3). Idle it breathes; when a
 /// corner is snapped it tightens, turns solid and draws the two detected
@@ -378,12 +379,18 @@ class ArEdgeArrow extends StatelessWidget {
             const SizedBox(height: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(color: FeArColors.glassStrong, borderRadius: BorderRadius.circular(8)),
+              decoration: BoxDecoration(
+                color: ArChromeStyle.of(context).surface(strong: true),
+                borderRadius: BorderRadius.circular(8),
+                border: ArChromeStyle.of(context).border(),
+              ),
               child: Text(
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
+                style: (ArChromeStyle.of(context).text(Theme.of(context).textTheme.labelSmall) ??
+                        Theme.of(context).textTheme.labelSmall)
+                    ?.copyWith(color: Colors.white, fontWeight: ArChromeStyle.of(context).weight(FontWeight.w700)),
               ),
             ),
           ],

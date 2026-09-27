@@ -8,6 +8,7 @@ import '../../../domain/snag.dart' show SnagBuilding;
 import '../../../state/ar_catalog_controller.dart';
 import '../../../state/ar_demo_gateway.dart';
 import '../../../state/ar_install_controller.dart';
+import '../../../state/ar_permissions.dart';
 import '../../../state/snag_controller.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
@@ -16,6 +17,7 @@ import '../../../widgets/fe_header.dart';
 import '../../../widgets/motion.dart';
 import '../ar_ui.dart';
 import '../widgets/ar_chrome.dart';
+import '../widgets/ar_entry_widgets.dart' show ArInstallNotEnabled;
 import '../widgets/ar_mini_plan.dart';
 
 /// `/ar/install?floorId=` — I1 Install run: the floor's boards still to go
@@ -49,7 +51,9 @@ class _ArInstallListScreenState extends ConsumerState<ArInstallListScreen> {
       appBar: FeHeader(title: 'ar.install.header'.getString(context)),
       body: SafeArea(
         top: false,
-        child: floorId == null ? _pickFloor(context) : _RunView(floorId: floorId),
+        child: !ref.watch(arInstallAllowedProvider)
+            ? const ArInstallNotEnabled()
+            : (floorId == null ? _pickFloor(context) : _RunView(floorId: floorId)),
       ),
     );
   }

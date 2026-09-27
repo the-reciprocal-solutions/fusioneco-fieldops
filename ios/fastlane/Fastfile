@@ -1,0 +1,178 @@
+# FieldOps iOS release lanes. Step-by-step setup, secrets and common
+# failures: docs/ios-testflight.md. Normally run by
+# .github/workflows/ios-testflight.yml; runs the same on any Mac with Xcode:
+#
+#   cd ios && fastlane beta
+#
+# Signing is MANUAL with an Apple Distribution certificate (.p12 in a secret)
+# and an App Store profile that `get_provisioning_profile` fetches or creates
+# through the App Store Connect API key. Not automatic signing: an Xcode
+# archive on a fresh CI machine needs a signing identity in the keychain, and
+# Xcode's cloud-managed distribution signing refuses API keys below the Admin
+# role ("Cloud signing permission error"). A p12 + App Manager key works on
+# every run and never mints a new certificate.
+#
+# Environment (all required unless marked):
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_BASE64   App Store Connect API key
+#   APPLE_TEAM_ID                                   10-character team id
+#   DIST_CERT_P12_BASE64, DIST_CERT_PASSWORD        Apple Distribution cert
+#   API_BASE_URL, WEB_BASE_URL                      dart-defines (no /api suffix)
+#   GOOGLE_SERVICE_INFO_PLIST_BASE64                only if Runner/GoogleService-Info.plist isn't committed
+#   BUILD_NUMBER (optional)                         floor for CFBundleVersion; CI passes the run number
+#   BRAND_NAME (optional)                           dart-define, default "Fusion Eco"
+
+require "base64"
+require "fileutils"
+require "tmpdir"
+
+default_platform(:ios)
+
+# Absolute paths: fastlane runs Fastfile code from ios/fastlane but actions
+# from ios/, so nothing here relies on the working directory.
+IOS_DIR = File.expand_path("..", __dir__)
+ROOT_DIR = File.expand_path("../..", __dir__)
+APP_ID = CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+
+def env!(name)
+  value = ENV[name].to_s.strip
+  UI.user_error!("Missing environment variable #{name} (see docs/ios-testflight.md)") if value.empty?
+  value
+end
+
+# Firebase.initializeApp() (lib/main.dart) needs Runner/GoogleService-Info.plist
+# for THIS bundle id, and the Xcode project lists it as a resource: the
+# build fails without it. Committed, or written from a base64 secret.
+def ensure_google_service_info!
+  path = File.join(IOS_DIR, "Runner", "GoogleService-Info.plist")
+  unless File.exist?(path)
+    encoded = ENV["GOOGLE_SERVICE_INFO_PLIST_BASE64"].to_s.strip
+    UI.user_error!("ios/Runner/GoogleService-Info.plist is missing and GOOGLE_SERVICE_INFO_PLIST_BASE64 is not set (docs/ios-testflight.md §3)") if encoded.empty?
+    File.binwrite(path, Base64.decode64(encoded))
+  end
+  bundle = get_info_plist_value(path: path, key: "BUNDLE_ID")
+  if bundle != APP_ID
+    UI.user_error!("GoogleService-Info.plist is for #{bundle.inspect}, the app is #{APP_ID}: register an iOS app with this bundle id in Firebase and download its plist")
+  end
+end
+
+platform :ios do
+  desc "Build the app with the CI's dart-defines and upload it to TestFlight"
+  lane :beta do
+    team_id = env!("APPLE_TEAM_ID")
+    api_base = env!("API_BASE_URL")
+    web_base = env!("WEB_BASE_URL")
+    UI.user_error!("API_BASE_URL must not end in /api (lib/app/env.dart)") if api_base.sub(%r{/+\z}, "").end_with?("/api")
+
+    api_key = app_store_connect_api_key(
+      key_id: env!("ASC_KEY_ID"),
+      issuer_id: env!("ASC_ISSUER_ID"),
+      key_content: env!("ASC_KEY_P8_BASE64"),
+      is_key_content_base64: true,
+      duration: 1200,
+      in_house: false
+    )
+
+    ensure_google_service_info!
+
+    # CFBundleVersion must grow with every upload of the same version. The
+    # CI run number is the floor; TestFlight's latest + 1 wins if higher
+    # (a re-run, or builds uploaded from elsewhere).
+    build_number = ENV["BUILD_NUMBER"].to_i
+    begin
+      latest = latest_testflight_build_number(api_key: api_key, app_identifier: APP_ID, initial_build_number: 0)
+      build_number = [build_number, latest.to_i + 1].max
+    rescue StandardError => e
+      UI.important("Couldn't read TestFlight's latest build number (#{e.message}); using #{build_number}")
+    end
+    build_number = 1 if build_number < 1
+    UI.message("CFBundleVersion #{build_number} (CFBundleShortVersionString from pubspec.yaml)")
+
+    # Dart side: writes ios/Flutter/Generated.xcconfig (build number,
+    # base64 dart-defines, FLUTTER_ROOT) and runs `pod install` for the
+    # CocoaPods plugins; the Xcode archive below compiles the Dart code in
+    # its "Run Script" phase from those settings. --no-codesign: the tool's
+    # own development-certificate lookup has nothing to find on CI.
+    defines = {
+      "API_BASE_URL" => api_base,
+      "WEB_BASE_URL" => web_base,
+      "BRAND_NAME" => ENV["BRAND_NAME"].to_s.strip
+    }.reject { |_, v| v.empty? }.map { |k, v| "--dart-define=#{k}=#{v}" }
+    Dir.chdir(ROOT_DIR) do
+      sh("flutter", "build", "ios", "--config-only", "--release", "--no-codesign",
+         "--build-number=#{build_number}", *defines)
+    end
+    # Idempotent after Flutter's own run; guarantees the Pods project exists.
+    cocoapods(podfile: File.join(IOS_DIR, "Podfile"), try_repo_update_on_error: true)
+
+    # Signing: temporary keychain + the distribution certificate.
+    setup_ci(force: true)
+    p12 = File.join(Dir.tmpdir, "fe_dist.p12")
+    File.binwrite(p12, Base64.decode64(env!("DIST_CERT_P12_BASE64")))
+    import_certificate(
+      certificate_path: p12,
+      certificate_password: ENV["DIST_CERT_PASSWORD"].to_s,
+      keychain_name: "fastlane_tmp_keychain",
+      keychain_password: ""
+    )
+    FileUtils.rm_f(p12)
+
+    # The App Store profile: reuses a valid one, creates one if needed. It
+    # carries Push Notifications only if the App ID has that capability.
+    profiles_dir = File.join(ROOT_DIR, "build", "ios", "profiles")
+    FileUtils.mkdir_p(profiles_dir)
+    get_provisioning_profile(
+      api_key: api_key,
+      app_identifier: APP_ID,
+      team_id: team_id,
+      platform: "ios",
+      output_path: profiles_dir
+    )
+    profile_name = lane_context[SharedValues::SIGH_NAME]
+
+    # Only the Runner target gets manual signing; pods and Swift packages keep
+    # their own settings (a profile on a pod target fails the build).
+    update_code_signing_settings(
+      path: File.join(IOS_DIR, "Runner.xcodeproj"),
+      use_automatic_signing: false,
+      targets: ["Runner"],
+      build_configurations: ["Release"],
+      sdk: "iphoneos*",
+      team_id: team_id,
+      code_sign_identity: "Apple Distribution",
+      profile_name: profile_name,
+      bundle_identifier: APP_ID
+    )
+    # A distribution profile grants aps-environment = production; say so
+    # rather than rely on Xcode rewriting the committed "development".
+    update_plist(
+      plist_path: File.join(IOS_DIR, "Runner", "Runner.entitlements"),
+      block: proc { |plist| plist["aps-environment"] = "production" }
+    )
+
+    ipa = build_app(
+      workspace: File.join(IOS_DIR, "Runner.xcworkspace"),
+      scheme: "Runner",
+      configuration: "Release",
+      clean: false,
+      export_method: "app-store",
+      export_team_id: team_id,
+      export_options: {
+        signingStyle: "manual",
+        teamID: team_id,
+        provisioningProfiles: { APP_ID => profile_name },
+        uploadSymbols: true,
+        manageAppVersionAndBuildNumber: false
+      },
+      output_directory: File.join(ROOT_DIR, "build", "ios", "ipa"),
+      output_name: "FieldOps.ipa"
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: ipa,
+      skip_waiting_for_build_processing: true,
+      distribute_external: false
+    )
+    UI.success("Uploaded #{APP_ID} build #{build_number}. It appears in TestFlight after Apple's processing (usually 5-30 min).")
+  end
+end

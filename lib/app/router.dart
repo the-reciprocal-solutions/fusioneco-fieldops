@@ -24,6 +24,7 @@ import '../features/order_detail/order_detail_screen.dart';
 import '../features/orders/orders_screen.dart';
 import '../features/overview/overview_screen.dart';
 import '../core/c2o/route_pack.dart';
+import '../domain/ar_handoff.dart';
 import '../features/permits/permit_detail_screen.dart';
 import '../features/permits/permit_resolve_screen.dart';
 import '../features/permits/permits_hub_screen.dart';
@@ -115,6 +116,7 @@ abstract final class Routes {
     String? assetReferenceId,
     String? workOrderId,
     String? context,
+    Map<String, String>? ar,
   }) {
     final query = {
       'buildingId': ?buildingId,
@@ -124,6 +126,8 @@ abstract final class Routes {
       'assetRef': ?assetReferenceId,
       'workOrderId': ?workOrderId,
       'context': ?context,
+      // P-006: the AR hand-off (`ArHandoff.toQuery`), when raised in AR.
+      ...?ar,
     };
     return Uri(path: '/snags/new', queryParameters: query.isEmpty ? null : query).toString();
   }
@@ -429,6 +433,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           claimedSerial: state.uri.queryParameters['claimedSerial'],
           claimedTag: state.uri.queryParameters['claimedTag'],
           floorId: state.uri.queryParameters['floorId'],
+          // P-006: the AR workspace's `ar*` params (null from a scan).
+          arHandoff: ArHandoff.fromQuery(state.uri.queryParameters),
         ),
       ),
       // Snag Assistant — the fixed segments must stay above `/snags/:id`.
@@ -465,6 +471,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             assetReferenceId: q['assetRef'],
             workOrderId: q['workOrderId'],
             contextWire: q['context'],
+            arHandoff: ArHandoff.fromQuery(q),
           );
         },
       ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +14,7 @@ import '../../core/capture/capture_services.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/snag/snag_rules.dart';
 import '../../data/snag_repository.dart';
+import '../../domain/ar_handoff.dart';
 import '../../domain/snag.dart';
 import '../../state/snag_controller.dart';
 import '../../theme/fe_colors.dart';
@@ -20,6 +23,7 @@ import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../../widgets/tech_popup.dart';
 import '../../widgets/voice_waveform.dart';
+import '../ar/widgets/ar_handoff_card.dart';
 import '../field_verification/camera_capture_screen.dart';
 import '../field_verification/photo_annotation_screen.dart';
 import 'snag_plan_screen.dart';
@@ -43,6 +47,7 @@ class SnagRaiseScreen extends ConsumerStatefulWidget {
     this.assetReferenceId,
     this.workOrderId,
     this.contextWire,
+    this.arHandoff,
   });
 
   final String? buildingId;
@@ -52,6 +57,12 @@ class SnagRaiseScreen extends ConsumerStatefulWidget {
   final String? assetReferenceId;
   final String? workOrderId;
   final String? contextWire;
+
+  /// Raised from the AR workspace (P-006, AR-47): the AR capture becomes the
+  /// first photo and the element (name + GlobalId) and alignment fill the
+  /// "exact spot" line. `SnagDraft` has no structured AR field yet, so the
+  /// GlobalId travels in that text until the snag model grows one.
+  final ArHandoff? arHandoff;
 
   @override
   ConsumerState<SnagRaiseScreen> createState() => _SnagRaiseScreenState();
@@ -90,6 +101,26 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
               ? SnagContext.operations
               : SnagContext.fmTakeover);
     _buildingId = widget.buildingId ?? ref.read(snagBuildingIdProvider);
+    final ar = widget.arHandoff;
+    if (ar != null) {
+      // After the first frame: the words are translated, and a translation
+      // can't be read from initState.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _spot.text.isNotEmpty) return;
+        _spot.text = ar.summaryLine(
+          elementWord: 'ar.handoff.element_word'.getString(context),
+          aligned: 'ar.handoff.aligned_word'.getString(context),
+        );
+      });
+      unawaited(_attachArPhoto(ar));
+    }
+  }
+
+  Future<void> _attachArPhoto(ArHandoff ar) async {
+    final photo = await arHandoffPhoto(ar);
+    if (photo == null || !mounted) return;
+    if (_photos.any((p) => p.fileName == photo.fileName)) return;
+    setState(() => _photos.insert(0, photo));
   }
 
   @override
@@ -328,6 +359,10 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
+          if (widget.arHandoff != null) ...[
+            ArHandoffCard(handoff: widget.arHandoff!, showLocationCheck: false),
+            const SizedBox(height: 12),
+          ],
           if (widget.assetName != null || widget.workOrderId != null)
             TechCard(
               tint: FeColors.infoSoft,

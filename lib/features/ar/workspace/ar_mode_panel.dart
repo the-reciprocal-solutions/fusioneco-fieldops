@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/router.dart';
+import '../../../domain/ar_handoff.dart';
 import '../../../state/ar_session_controller.dart';
 import '../../../state/ar_view_models.dart';
 import '../../../state/ar_workspace_controller.dart';
@@ -89,8 +90,36 @@ Future<void> arPushFromSession(BuildContext context, WidgetRef ref, String route
   final session = ref.read(arSessionProvider.notifier);
   await session.pause();
   if (!context.mounted) return;
+  // Forms are portrait screens; only the AR view itself turns sideways.
+  await ArOrientation.pushPortrait();
+  if (!context.mounted) return;
   await context.push(route);
+  await ArOrientation.popBack();
   await session.resume();
+}
+
+/// The AR context of the current workspace, for a hand-off (P-006).
+ArHandoff arHandoffFor(ArSessionState s, ArWorkspaceState ws, ArFeature? f, {ArVerifyCheck? check, String? photoPath}) {
+  final fit = s.fit;
+  final cam = s.cameraTile;
+  final fwd = fit == null || s.cameraForwardAr == null || !s.isPlaced ? null : fit.dirArToTile(s.cameraForwardAr!);
+  return ArHandoff(
+    check: check?.result ?? 'unchecked',
+    offsetM: check?.offsetM,
+    toleranceM: check?.toleranceM ?? (s.isLocked ? 0.35 : 0.75),
+    tagMatches: check?.tagMatches,
+    buildId: f?.buildId,
+    globalId: f?.globalId,
+    featureId: f?.featureId,
+    elementName: f?.displayName,
+    fitMethod: fit?.method,
+    maxResidualMm: fit?.maxResidualMm.round(),
+    quality: s.quality.name,
+    mappingConfirmed: f == null ? null : ws.mappingConfirmed,
+    photoPath: photoPath,
+    cameraTile: cam == null ? null : [cam.x, cam.y, cam.z],
+    cameraDirTile: fwd == null ? null : [fwd.x, fwd.y, fwd.z],
+  );
 }
 
 class _NotPlaced extends StatelessWidget {
@@ -226,25 +255,14 @@ class _VerifyPanelState extends ConsumerState<_VerifyPanel> {
       showTechPopup(context, message: 'ar.demo.verify'.getString(context));
       return;
     }
-    final fit = s.fit;
     final base = Uri.parse(Routes.verifyAsset(f.assetId!, assetName: f.displayName, floorId: s.floor?.floorId));
     // The AR pre-fill rides as query params (only strings cross the router);
-    // the verification form reads them to fill its location check.
+    // the verification form reads them (ArHandoff.fromQuery), shows the
+    // location check, attaches the AR photo and submits `arContext`.
     final uri = base.replace(
       queryParameters: {
         ...base.queryParameters,
-        'arCheck': check?.result ?? 'unchecked',
-        if (check?.offsetM != null) 'arOffsetM': check!.offsetM!.toStringAsFixed(2),
-        'arToleranceM': (check?.toleranceM ?? 0.35).toStringAsFixed(2),
-        if (check?.tagMatches != null) 'arTagMatches': check!.tagMatches! ? '1' : '0',
-        'arBuildId': f.buildId,
-        'arGlobalId': f.globalId,
-        'arFeatureId': '${f.featureId}',
-        if (fit != null) 'arFitMethod': fit.method,
-        if (fit != null) 'arMaxResidualMm': fit.maxResidualMm.round().toString(),
-        'arQuality': s.quality.name,
-        'arMapping': ws.mappingConfirmed ? '1' : '0',
-        'arPhoto': ?_photo,
+        ...arHandoffFor(s, ws, f, check: check, photoPath: _photo).toQuery(),
       },
     );
     await arPushFromSession(context, ref, uri.toString());
@@ -533,6 +551,10 @@ class _ProgressPanel extends ConsumerWidget {
           const SizedBox(height: 10),
           ArHintRow(text: arTr(context, 'ar.progress.some_blocked', [blockers.length])),
         ],
+        if (ws.progressQueued > 0) ...[
+          const SizedBox(height: 8),
+          ArHintRow(text: arTr(context, 'ar.progress.queued_hint', [ws.progressQueued]), icon: ArIcons.offline),
+        ],
         if (!tablet) ...[
           const SizedBox(height: 10),
           _Legend(progress: ws.progress, loaded: ws.progressLoaded),
@@ -544,9 +566,11 @@ class _ProgressPanel extends ConsumerWidget {
   String _rejectionText(BuildContext context, List<ArProgressRejection> r) {
     final second = r.where((x) => x.reason == 'SECOND_PERSON_REQUIRED').length;
     final notInstalled = r.where((x) => x.reason == 'NOT_INSTALLED').length;
+    final onSync = r.where((x) => x.reason == kArRefusedOnSync).length;
     return [
       if (second > 0) arTr(context, 'ar.progress.rejected_second', [second]),
       if (notInstalled > 0) arTr(context, 'ar.progress.rejected_not_installed', [notInstalled]),
+      if (onSync > 0) arTr(context, 'ar.progress.refused_on_sync', [onSync]),
     ].join(' · ');
   }
 }
@@ -557,6 +581,12 @@ Future<void> _raiseSnag(BuildContext context, WidgetRef ref, ArFeature? f) async
     showTechPopup(context, message: 'ar.demo.snag'.getString(context));
     return;
   }
+  // The AR view itself is the snag's first photo (camera + model, AR-47):
+  // taken before the form covers it. No photo (engine without capture) is
+  // fine; the form asks for one as usual.
+  final photo = await ref.read(arSessionProvider.notifier).capture();
+  if (!context.mounted) return;
+  final handoff = arHandoffFor(s, ref.read(arWorkspaceProvider), f, photoPath: photo);
   final route = Routes.snagNew(
     buildingId: s.floor?.buildingId,
     floorId: s.floor?.floorId,
@@ -564,6 +594,7 @@ Future<void> _raiseSnag(BuildContext context, WidgetRef ref, ArFeature? f) async
     assetName: f?.displayName,
     workOrderId: s.args?.workOrderId,
     context: 'operations',
+    ar: handoff.toQuery(),
   );
   await arPushFromSession(context, ref, route);
 }

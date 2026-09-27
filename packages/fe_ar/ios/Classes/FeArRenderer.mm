@@ -57,6 +57,12 @@ constexpr int kPassGhost = 1;
 constexpr int kPassXray = 2;
 constexpr uint8_t kPassPriority[3] = {2, 4, 6};
 constexpr int kStateWidth = 256;
+// Layer bits: every model renderable (tiles, grid, pins; gltfio's default
+// mask) is on kLayerModel, the camera triangle on kLayerCamera. setPlaced
+// flips the view's visible layers, so hiding the unplaced model never
+// touches the per-tile pass masks applyVisibility owns.
+constexpr uint8_t kLayerModel = 0x01;
+constexpr uint8_t kLayerCamera = 0x02;
 
 struct Pass {
     std::vector<Entity> entities;
@@ -91,10 +97,18 @@ struct LayerLook {
     bool writesDepth;
 };
 
-LayerLook lookFor(const std::string& layer) {
-    if (layer == "structure") return {linearRgb(0xCBD5E1, 0.26f), 0.10f, false, false};
-    if (layer == "architecture") return {linearRgb(0x38BDF8, 0.90f), 0.35f, true, false};
-    return {linearRgb(0x22D3EE, 0.62f), 0.16f, false, true};
+// Sunlight mode (setLayers extra `contrast`), as Android LayerStyle *_SUN:
+// opaque MEP, white architecture edges, stronger structure and ghosts. MEP
+// normal alpha 0.88 matches Android (was 0.62: washed out in a bright room).
+LayerLook lookFor(const std::string& layer, bool contrast = false) {
+    if (layer == "structure")
+        return contrast ? LayerLook{linearRgb(0xE2E8F0, 0.45f), 0.20f, false, false}
+                        : LayerLook{linearRgb(0xCBD5E1, 0.26f), 0.10f, false, false};
+    if (layer == "architecture")
+        return contrast ? LayerLook{linearRgb(0xFFFFFF, 1.0f), 0.55f, true, false}
+                        : LayerLook{linearRgb(0x38BDF8, 0.90f), 0.35f, true, false};
+    return contrast ? LayerLook{linearRgb(0x22D3EE, 1.0f), 0.30f, false, true}
+                    : LayerLook{linearRgb(0x22D3EE, 0.88f), 0.16f, false, true};
 }
 
 struct CamVertex {
@@ -163,6 +177,7 @@ struct CaptureRequest {
     FilamentAsset* _pins;
 
     float _opacity;
+    bool _contrast;
     bool _sectionEnabled;
     float _sectionY;
     float _translationY;
@@ -204,6 +219,7 @@ struct CaptureRequest {
     _view->setScene(_scene);
     _view->setCamera(_camera);
     _view->setShadowingEnabled(false);
+    _view->setVisibleLayers(0xff, kLayerCamera); // unplaced: camera only
     if (!_drawsCamera) _view->setBlendMode(View::BlendMode::TRANSLUCENT);
     // LINEAR tone mapping: overlay colours come out exactly as Dart asked
     // (fe_camera_feed.mat decodes the camera from sRGB to match).
@@ -278,6 +294,7 @@ struct CaptureRequest {
         .castShadows(false)
         .receiveShadows(false)
         .priority(0)
+        .layerMask(0xff, kLayerCamera)
         .build(*_engine, _cameraTriangle);
     _cameraInstance->setParameter("cameraFeed", _cameraTexture, TextureSampler());
     _scene->addEntity(_cameraTriangle);
@@ -416,7 +433,7 @@ struct CaptureRequest {
     GpuTile tile;
     tile.asset = asset;
     tile.layer = layer.UTF8String;
-    const LayerLook look = lookFor(tile.layer);
+    const LayerLook look = lookFor(tile.layer, _contrast);
     auto& tcm = _engine->getTransformManager();
     auto& rcm = _engine->getRenderableManager();
     for (size_t p = 0; p < passCount; p++) {
@@ -563,6 +580,10 @@ struct CaptureRequest {
     }
 }
 
+- (void)setPlaced:(BOOL)placed {
+    _view->setVisibleLayers(0xff, placed ? (uint8_t)(kLayerCamera | kLayerModel) : kLayerCamera);
+}
+
 - (void)setOpacity:(float)opacity sectionY:(nullable NSNumber*)sectionY {
     _opacity = opacity;
     _sectionEnabled = sectionY != nil;
@@ -574,6 +595,19 @@ struct CaptureRequest {
                 mi->setParameter("sectionEnabled", _sectionEnabled ? 1.0f : 0.0f);
             }
     [self pushSection];
+}
+
+- (void)setContrast:(BOOL)contrast {
+    if (_contrast == (bool)contrast) return;
+    _contrast = contrast;
+    for (auto& kv : _tiles) {
+        const LayerLook look = lookFor(kv.second.layer, _contrast);
+        for (auto& p : kv.second.passes)
+            for (MaterialInstance* mi : p.materials) {
+                mi->setParameter("layerColor", look.color);
+                mi->setParameter("ghostAlpha", look.ghostAlpha);
+            }
+    }
 }
 
 - (void)pushSection {

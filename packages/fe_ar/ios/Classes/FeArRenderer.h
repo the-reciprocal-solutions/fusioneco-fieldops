@@ -61,8 +61,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// The (eased) arFromTile transform every tile hangs from.
 - (void)setModelMatrix:(simd_float4x4)matrix;
 
+/// Shows or hides everything under the model root (tiles, grid, pins).
+/// Starts hidden: until Dart's first setModelTransform the identity root
+/// would draw the model at the session origin (Android TileRenderer.placed).
+- (void)setPlaced:(BOOL)placed;
+
 /// Global opacity and the section plane (tile-frame Y, or nil for none).
 - (void)setOpacity:(float)opacity sectionY:(nullable NSNumber*)sectionY;
+/// Sunlight mode (setLayers extra `contrast`): stronger per-layer colours.
+- (void)setContrast:(BOOL)contrast;
 
 - (void)setGridGlb:(nullable NSData*)glb visible:(BOOL)visible;
 - (void)setPinsGlb:(nullable NSData*)glb;

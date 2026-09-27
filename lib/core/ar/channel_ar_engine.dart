@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import 'ar_engine.dart';
+import '../network/envelope.dart';
 import 'vec.dart';
 
 /// Thrown by a command when the native engine refused it or isn't there.
@@ -36,7 +37,12 @@ class ArEngineException implements Exception {
 ///   `detectCornerAt {x, y}` → corner map or null · `pick {x, y}` →
 ///   `{featureId, hitPointTile, distanceM, tileHash?, buildId?}` or null ·
 ///   `capture` → JPEG path or null · `capabilities` →
-///   `{supported, depth, lidar, recording, platform, reason}`.
+///   `{supported, depth, lidar, recording, platform, reason, torch}`.
+///   Extensions (CHANNEL.md): `startSession {recordTo?, playbackFrom?}` ·
+///   `pickMany {points: [[x,y]]}` → `[pick map | null]` ·
+///   `depthPointAt {x, y}` → `{posAr, normalAr?, confidence, method}` or
+///   null · `setTorch {on}` → bool · `startRecording {path}` → bool ·
+///   `stopRecording` → path or null.
 /// - Vectors are `[x, y, z]` lists, matrices 16-number **column-major**
 ///   lists, the feature state a `Uint8List` (StandardMessageCodec).
 /// - `EventChannel('fusioneco/ar/events')`: maps with `type` in
@@ -75,7 +81,8 @@ class ChannelArEngine implements ArEngine {
   }
 
   @override
-  Future<void> startSession() => _call('startSession');
+  Future<void> startSession({String? recordTo, String? playbackFrom}) =>
+      _call('startSession', {'recordTo': ?recordTo, 'playbackFrom': ?playbackFrom});
 
   @override
   Future<void> loadTiles(List<TileRef> tiles) =>
@@ -131,6 +138,101 @@ class ChannelArEngine implements ArEngine {
   @override
   Future<PickResult?> pick(double x, double y) async =>
       PickResult.fromMap(await _call<Object?>('pick', {'x': x, 'y': y}));
+
+  /// Falls back to one `pick` per point on a plugin without `pickMany` (the
+  /// iOS half until it mirrors the extension).
+  @override
+  Future<List<(double, double, bool)?>> projectTile(List<Vec3> pointsTile) async {
+    if (pointsTile.isEmpty) return const [];
+    try {
+      final raw = await _call<Object?>('projectTile', {
+        'points': [for (final p in pointsTile) p.toList()],
+      });
+      if (raw is List) {
+        return [
+          for (final r in raw)
+            if (r is List && r.length >= 2 && asDouble(r[0]) != null && asDouble(r[1]) != null)
+              (asDouble(r[0])!, asDouble(r[1])!, r.length < 3 || (asBool(r[2]) ?? true))
+            else
+              null,
+        ];
+      }
+    } on ArEngineException {
+      // An older plugin without the extension.
+    }
+    return [for (final _ in pointsTile) null];
+  }
+
+  @override
+  Future<List<PickResult?>> pickMany(List<(double, double)> points) async {
+    if (points.isEmpty) return const [];
+    try {
+      final raw = await _call<Object?>('pickMany', {
+        'points': [for (final (x, y) in points) [x, y]],
+      });
+      if (raw is List && raw.length == points.length) {
+        return [for (final r in raw) PickResult.fromMap(r)];
+      }
+    } on ArEngineException {
+      // Older plugin: fall through.
+    }
+    return [for (final (x, y) in points) await pick(x, y)];
+  }
+
+  @override
+  Future<ArDepthPoint?> depthPointAt(double x, double y) async {
+    try {
+      return ArDepthPoint.fromMap(await _call<Object?>('depthPointAt', {'x': x, 'y': y}));
+    } on ArEngineException {
+      return null; // an older plugin without the extension
+    }
+  }
+
+  @override
+  Future<bool> setDepth(bool on) async {
+    try {
+      return await _call<Object?>('setDepth', {'on': on}) == true;
+    } on ArEngineException {
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> refocus() async {
+    try {
+      return await _call<Object?>('refocus') == true;
+    } on ArEngineException {
+      return false; // an older plugin without the extension
+    }
+  }
+
+  @override
+  Future<bool> setTorch(bool on) async {
+    try {
+      return await _call<Object?>('setTorch', {'on': on}) == true;
+    } on ArEngineException {
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> startRecording(String path) async {
+    try {
+      return await _call<Object?>('startRecording', {'path': path}) == true;
+    } on ArEngineException {
+      return false;
+    }
+  }
+
+  @override
+  Future<String?> stopRecording() async {
+    try {
+      final path = await _call<Object?>('stopRecording');
+      return path is String && path.isNotEmpty ? path : null;
+    } on ArEngineException {
+      return null;
+    }
+  }
 
   @override
   Future<String?> capture() async {

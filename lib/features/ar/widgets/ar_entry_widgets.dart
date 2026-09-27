@@ -5,11 +5,13 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/router.dart';
 import '../../../state/ar_availability.dart';
+import '../../../state/ar_permissions.dart';
 import '../../../state/ar_demo_gateway.dart';
 import '../../../state/ar_prefs_controller.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../theme/theme_extensions.dart';
 import '../../../widgets/app_text.dart';
+import '../../../widgets/common.dart';
 import '../../../widgets/motion.dart';
 import '../ar_ui.dart';
 
@@ -114,6 +116,8 @@ class ArDashboardCard extends ConsumerWidget {
     // always be switched off again.
     final hasAr = ref.watch(arAnyBuildingProvider).valueOrNull ?? false;
     if (!hasAr && !demo) return const SizedBox.shrink();
+    // Installs are opt-in per client (`isArInstall`, P-007).
+    final install = ref.watch(arInstallAllowedProvider);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -177,14 +181,16 @@ class ArDashboardCard extends ConsumerWidget {
                   onTap: () => context.push(Routes.arModels()),
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _CardAction(
-                  icon: ArIcons.install,
-                  label: 'ar.dashboard.install'.getString(context),
-                  onTap: () => context.push(Routes.arInstall()),
+              if (install) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _CardAction(
+                    icon: ArIcons.install,
+                    label: 'ar.dashboard.install'.getString(context),
+                    onTap: () => context.push(Routes.arInstall()),
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ],
@@ -256,6 +262,27 @@ class _CardAction extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Shown by the install screens when the account may not install boards
+/// (`isArInstall` off, P-007): a push link or an old bookmark can still
+/// land there, so the screen explains instead of listing.
+class ArInstallNotEnabled extends StatelessWidget {
+  const ArInstallNotEnabled({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        TechEmptyState(
+          icon: ArIcons.lock,
+          title: 'ar.install.not_enabled'.getString(context),
+          subtitle: 'ar.install.not_enabled_body'.getString(context),
+        ),
+      ],
     );
   }
 }

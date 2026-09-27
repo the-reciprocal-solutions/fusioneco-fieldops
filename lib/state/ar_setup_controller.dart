@@ -4,11 +4,15 @@ import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/ar/alignment_estimator.dart';
+import '../core/ar/ar_engine.dart' show ArDepthPoint;
+import '../core/ar/baseline_heading.dart';
 import '../core/ar/corner_matcher.dart';
 import '../core/ar/ghost_spot.dart';
 import '../core/ar/vec.dart';
+import '../core/ar/wall_fit.dart';
 import '../domain/ar_models.dart' show ManifestMarker;
 import 'ar_demo_gateway.dart' show DemoArGateway;
+import 'ar_gateway_live.dart' show LiveArGateway;
 import 'ar_prefs_controller.dart';
 import 'ar_session_controller.dart';
 import 'ar_view_models.dart';
@@ -54,6 +58,14 @@ enum ArSetupStep {
 
   /// Observations disagree by more than 5 cm (§2.7 red).
   mismatch,
+
+  /// Plain walls, no corner snap: tap each wall 3–5 times near the corner
+  /// and Dart fits the corner (`wall_fit.dart`). Returns to [wallsFor].
+  wallTaps,
+
+  /// After a rough corner: tap a wall's base 2–5 m along it to fix the
+  /// heading from positions (`baseline_heading.dart`). Returns to cornerB.
+  baseline,
 }
 
 class ArSetupState {
@@ -92,6 +104,14 @@ class ArSetupState {
     this.saveError,
     this.saveQueued = false,
     this.returnToWork = false,
+    this.wallsMissing = false,
+    this.wallsFor,
+    this.tapsA = const [],
+    this.tapsB = const [],
+    this.wallIndex = 0,
+    this.measuring = false,
+    this.cornerAMethod,
+    this.baselineDone = false,
   });
 
   final ArSetupStep step;
@@ -153,6 +173,37 @@ class ArSetupState {
   /// Fine-tune): finishing goes back to work instead of the next step.
   final bool returnToWork;
 
+  /// The engine said `corner-no-walls` while aiming: offer the wall taps.
+  final bool wallsMissing;
+
+  /// The corner step the wall taps belong to (and return to).
+  final ArSetupStep? wallsFor;
+
+  /// Wall taps so far on wall 1 and wall 2, and which wall is being tapped.
+  final List<WallTap> tapsA;
+  final List<WallTap> tapsB;
+  final int wallIndex;
+
+  /// A depth measurement is in flight (taps are ignored meanwhile).
+  final bool measuring;
+
+  /// How corner A was snapped. A rough one (`floorTap`, `depthTaps`) makes
+  /// the corner-B card ask for a long baseline first.
+  final String? cornerAMethod;
+
+  /// Corner A's heading was already set from a long baseline.
+  final bool baselineDone;
+
+  /// The wall-taps offer: walls not tracked, or the snap fell back to a
+  /// floor tap (one borrowed wall for heading).
+  bool get offerWallTaps => wallsMissing || snapped?.method == 'floorTap';
+
+  /// Corner A's heading is rough and no baseline fixed it yet.
+  bool get wantsBaseline =>
+      !baselineDone && (cornerAMethod == 'floorTap' || cornerAMethod == WallFitter.method);
+
+  List<WallTap> get currentTaps => wallIndex == 0 ? tapsA : tapsB;
+
   ArSetupState copyWith({
     ArSetupStep? step,
     ArPlaceMethod? method,
@@ -196,6 +247,14 @@ class ArSetupState {
     bool clearSaveError = false,
     bool? saveQueued,
     bool? returnToWork,
+    bool? wallsMissing,
+    ArSetupStep? wallsFor,
+    List<WallTap>? tapsA,
+    List<WallTap>? tapsB,
+    int? wallIndex,
+    bool? measuring,
+    String? cornerAMethod,
+    bool? baselineDone,
   }) => ArSetupState(
     step: step ?? this.step,
     method: method ?? this.method,
@@ -231,6 +290,14 @@ class ArSetupState {
     saveError: clearSaveError ? null : (saveError ?? this.saveError),
     saveQueued: saveQueued ?? this.saveQueued,
     returnToWork: returnToWork ?? this.returnToWork,
+    wallsMissing: wallsMissing ?? this.wallsMissing,
+    wallsFor: wallsFor ?? this.wallsFor,
+    tapsA: tapsA ?? this.tapsA,
+    tapsB: tapsB ?? this.tapsB,
+    wallIndex: wallIndex ?? this.wallIndex,
+    measuring: measuring ?? this.measuring,
+    cornerAMethod: cornerAMethod ?? this.cornerAMethod,
+    baselineDone: baselineDone ?? this.baselineDone,
   );
 }
 
@@ -244,7 +311,14 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
   ArFloorContext? _initialisedFor;
   var _lastCornerSeq = -1;
   var _lastMarkerSeq = -1;
+  var _lastCoachSeq = 0;
   var _disposed = false;
+
+  static const _fitter = WallFitter();
+  static const _baseline = BaselineHeading();
+
+  /// A wall tap needs at least this depth confidence ([ArDepthPoint.confidence]).
+  static const minTapConfidence = 0.3;
 
   ArSessionController get _session => ref.read(arSessionProvider.notifier);
   ArSessionState get _s => ref.read(arSessionProvider);
@@ -259,6 +333,7 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     ref.listen<ArSessionState>(arSessionProvider, _onSession);
     // Created after the session was already running (a rebuild): catch up.
     final now = ref.read(arSessionProvider);
+    _lastCoachSeq = now.coachSeq;
     if (now.phase == ArSessionPhase.running && now.floor != null) {
       Future.microtask(() => _onSession(null, ref.read(arSessionProvider)));
     }
@@ -286,6 +361,13 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     if (corner != null && corner.seq != _lastCornerSeq) {
       _lastCornerSeq = corner.seq;
       _onCorner(corner.corner);
+    }
+    if (next.coachSeq != _lastCoachSeq) {
+      _lastCoachSeq = next.coachSeq;
+      final aiming = state.step == ArSetupStep.cornerA || state.step == ArSetupStep.cornerB;
+      if (next.coachCode == 'corner-no-walls' && aiming && !state.wallsMissing) {
+        _set(state.copyWith(wallsMissing: true));
+      }
     }
     final marker = next.lastMarker;
     if (marker != null && marker.seq != _lastMarkerSeq) {
@@ -431,10 +513,16 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
   }
 
   void _onCorner(DetectedCorner d) {
+    // The poll keeps snapping while the user decides; a floor-tap fallback
+    // must not replace the corner just fitted from wall taps (a better one,
+    // from tracked planes or LiDAR, still may).
+    final keep = state.snapped?.method == WallFitter.method && d.method == 'floorTap';
     switch (state.step) {
       case ArSetupStep.cornerA:
+        if (keep) return;
         _set(state.copyWith(snapped: d, snapSeq: state.snapSeq + 1));
       case ArSetupStep.cornerB:
+        if (keep) return;
         _matchB(d);
       default:
         // A snap outside setup (auto re-snap) refines the fit when it matches.
@@ -515,6 +603,9 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     _set(state.copyWith(
       step: ArSetupStep.cornerB,
       cornerAId: a.id,
+      cornerAMethod: d.method,
+      baselineDone: false,
+      wallsMissing: false,
       clearSnapped: true,
       clearMatchedB: true,
       ambiguousB: const [],
@@ -539,6 +630,184 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     unawaited(_session.anchorObservation(obsB));
     _stopSnapPolling();
     _afterFit(fit, via: 'corner');
+  }
+
+  // ------------------------------------------------------------ wall taps
+
+  /// "Tap the walls": plain walls gave no corner (or only a floor tap).
+  void startWallTaps() {
+    final back = state.step == ArSetupStep.cornerB ? ArSetupStep.cornerB : ArSetupStep.cornerA;
+    _stopSnapPolling();
+    _set(state.copyWith(
+      step: ArSetupStep.wallTaps,
+      wallsFor: back,
+      tapsA: const [],
+      tapsB: const [],
+      wallIndex: 0,
+      measuring: false,
+    ));
+  }
+
+  /// A tap on the camera view at ([x], [y]) view pixels while tapping walls.
+  Future<void> addWallTap(double x, double y) async {
+    if (state.step != ArSetupStep.wallTaps || state.measuring) return;
+    _set(state.copyWith(measuring: true));
+    final p = await _session.depthPointAt(x, y);
+    if (_disposed) return;
+    _set(state.copyWith(measuring: false));
+    if (state.step != ArSetupStep.wallTaps) return;
+    final reject = wallTapRejection(p, _session.floorAr);
+    if (reject != null) {
+      _session.toast(reject, tone: ArToastTone.warning);
+      return;
+    }
+    final tap = WallTap(p!.posAr, p.normalAr);
+    if (state.wallIndex == 0) {
+      final taps = [...state.tapsA, tap];
+      _set(state.copyWith(tapsA: taps));
+      if (taps.length >= WallFitter.maxTaps) nextWall();
+    } else {
+      final taps = [...state.tapsB, tap];
+      _set(state.copyWith(tapsB: taps));
+      if (taps.length >= WallFitter.maxTaps) fitWallCorner();
+    }
+  }
+
+  /// Why a measured point can't be a wall tap (an `ar.walls.*` key), or null.
+  static String? wallTapRejection(ArDepthPoint? p, double? floorY) {
+    if (p == null) return 'ar.walls.no_depth';
+    if (p.confidence < minTapConfidence) return 'ar.walls.low_confidence';
+    if (WallFitter.looksLikeFloor(p.normalAr) || (floorY != null && p.posAr.y - floorY < 0.03)) {
+      return 'ar.walls.floor';
+    }
+    return null;
+  }
+
+  /// Wall 1 done ("Next wall"): checked on its own first, so a bad wall is
+  /// redone before the second one is tapped.
+  void nextWall() {
+    if (state.tapsA.length < WallFitter.minTaps) return;
+    final r = _fitter.fit(state.tapsA, cameraAr: _s.cameraAr);
+    if (!r.ok) {
+      _session.toast(_wallFailureKey(r.failure!), tone: ArToastTone.warning);
+      _set(state.copyWith(tapsA: const []));
+      return;
+    }
+    _set(state.copyWith(wallIndex: 1));
+  }
+
+  void undoWallTap() {
+    if (state.wallIndex == 1 && state.tapsB.isEmpty) {
+      _set(state.copyWith(wallIndex: 0));
+      return;
+    }
+    final taps = List<WallTap>.of(state.currentTaps);
+    if (taps.isEmpty) return;
+    taps.removeLast();
+    _set(state.wallIndex == 0 ? state.copyWith(tapsA: taps) : state.copyWith(tapsB: taps));
+  }
+
+  /// Both walls tapped: fit them, intersect on the tracked floor, and hand
+  /// the corner to the step that asked, exactly like a native snap.
+  void fitWallCorner() {
+    final cam = _s.cameraAr;
+    // The tracked floor; without one, the floor-tap snap that led here.
+    final floorY = _session.floorAr ?? state.snapped?.posAr.y;
+    if (floorY == null) {
+      _session.toast('ar.coach.floor', tone: ArToastTone.warning);
+      return;
+    }
+    if (cam == null) {
+      _session.toast('ar.coach.tracking', tone: ArToastTone.warning);
+      return;
+    }
+    final r = _fitter.corner(state.tapsA, state.tapsB, floorY: floorY, cameraAr: cam);
+    if (!r.ok) {
+      _session.toast(_wallFailureKey(r.failure!), tone: ArToastTone.warning);
+      if (r.failure == WallFitFailure.parallel || r.failure == WallFitFailure.tooFar) {
+        // Most likely both walls were the same wall, or one tap hit a door:
+        // redo wall 2, keep wall 1.
+        _set(state.copyWith(tapsB: const []));
+      }
+      return;
+    }
+    final corner = r.value!;
+    _set(state.copyWith(
+      step: state.wallsFor ?? ArSetupStep.cornerA,
+      wallsMissing: false,
+      tapsA: const [],
+      tapsB: const [],
+      wallIndex: 0,
+      clearSnapped: true,
+    ));
+    _onCorner(corner.toDetected());
+    _session.toast('ar.walls.fitted', args: [math.max(1, (corner.rmsM * 1000).round())], tone: ArToastTone.success);
+    _startSnapPolling();
+  }
+
+  /// Back to aiming without a fitted corner.
+  void cancelWallTaps() {
+    _set(state.copyWith(step: state.wallsFor ?? ArSetupStep.cornerA, tapsA: const [], tapsB: const [], wallIndex: 0));
+    _startSnapPolling();
+  }
+
+  static String _wallFailureKey(WallFitFailure f) => switch (f) {
+        WallFitFailure.tooFewTaps => 'ar.walls.too_few',
+        WallFitFailure.noDirection => 'ar.walls.spread_out',
+        WallFitFailure.parallel => 'ar.walls.parallel',
+        WallFitFailure.tooFar => 'ar.walls.too_far',
+      };
+
+  // ------------------------------------------------------------- baseline
+
+  /// "Tap a wall base instead" (after a rough corner A).
+  void startBaseline() {
+    _stopSnapPolling();
+    _set(state.copyWith(step: ArSetupStep.baseline, measuring: false));
+  }
+
+  /// A tap where a wall of corner A meets the floor, 2–5 m along it.
+  Future<void> addBaselineTap(double x, double y) async {
+    if (state.step != ArSetupStep.baseline || state.measuring) return;
+    _set(state.copyWith(measuring: true));
+    final p = await _session.depthPointAt(x, y);
+    if (_disposed) return;
+    _set(state.copyWith(measuring: false));
+    if (state.step != ArSetupStep.baseline) return;
+    if (p == null || p.confidence < minTapConfidence) {
+      _session.toast('ar.walls.no_depth', tone: ArToastTone.warning);
+      return;
+    }
+    CornerObs? a;
+    for (final o in _s.observations) {
+      if (o is CornerObs && o.id == state.cornerAId) a = o;
+    }
+    if (a == null) {
+      cancelBaseline();
+      return;
+    }
+    final r = _baseline.refine(a, p.posAr);
+    if (!r.ok) {
+      _session.toast(
+        r.rejected == BaselineRejection.tooShort ? 'ar.baseline.too_short' : 'ar.baseline.not_along',
+        args: [r.lengthM.toStringAsFixed(1)],
+        tone: ArToastTone.warning,
+      );
+      return;
+    }
+    _session.addObservation(r.corner!);
+    _set(state.copyWith(step: ArSetupStep.cornerB, baselineDone: true, clearSnapped: true, clearMatchedB: true));
+    _session.toast(
+      'ar.baseline.done',
+      args: [r.correctionDeg.abs().toStringAsFixed(1), r.lengthM.toStringAsFixed(1)],
+      tone: ArToastTone.success,
+    );
+    _startSnapPolling();
+  }
+
+  void cancelBaseline() {
+    _set(state.copyWith(step: ArSetupStep.cornerB, measuring: false));
+    _startSnapPolling();
   }
 
   /// Keep corner A only and carry on amber ("Carry on").
@@ -655,7 +924,9 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     // Contract C2: a PnP-only sighting doubles the board's sigma. The
     // manifest always carries the class sigma (`sigmaM`), so the doubling
     // has to apply on top of it, not only when the server sent none.
-    sigmaM: board.classSigmaM * (m.method == 'pnp' ? 2 : 1),
+    sigmaM: m.method == 'tag'
+        ? math.max(ArSigma.surveyed, board.classSigmaM * 0.7)
+        : board.classSigmaM * (m.method == 'pnp' ? 2 : 1),
     normalAr: m.normalAr,
     normalTile: board.normalTile,
     method: m.method,
@@ -758,7 +1029,11 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     final s = _s;
     final floor = s.floor;
     if (floor == null) return null;
+    // The live gateway keeps the full plan it fetched: with it the finder
+    // keeps suggestions clear of doors and equipment (P-008 item 5).
+    final gw = ref.read(arSessionProvider.notifier).gateway;
     final spots = const GhostSpotFinder().suggest(
+      plan: gw is LiveArGateway ? gw.cachedFloorPlan(floor.floorId) : null,
       corners: floor.corners,
       markers: [
         for (final m in floor.activeMarkers)

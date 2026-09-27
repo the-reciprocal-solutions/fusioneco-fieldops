@@ -25,6 +25,13 @@ abstract final class FeArColors {
   static const onGlass = Color(0xFFE2E8F0);
   static const onGlassMuted = Color(0xFFCBD5E1);
 
+  // ---- Sunlight mode (high contrast) -------------------------------------
+  /// `#0B0F14` at ~92 % — opaque enough that a sunlit wall can't bleed
+  /// through, yet the camera still reads as "behind" the control.
+  static const sunlightSurface = Color(0xEB0B0F14);
+  static const onSunlight = Color(0xFFFFFFFF);
+  static const sunlightOutline = Color(0xFFFFFFFF);
+
   // ---- signal colours in the scene ---------------------------------------
   /// The snap pin's halo and the detected wall faces.
   static const snap = Color(0xFF38BDF8);

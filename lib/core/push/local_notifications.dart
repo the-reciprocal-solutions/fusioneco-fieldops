@@ -32,6 +32,13 @@ class LocalNotifications {
     await _plugin.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        // iOS: permission is asked by FirebaseMessaging.requestPermission
+        // (push_service.dart), so the plugin must not ask again here.
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: false,
+          requestBadgePermission: false,
+          requestSoundPermission: false,
+        ),
       ),
       onDidReceiveNotificationResponse: onTap == null
           ? null
@@ -71,6 +78,9 @@ class LocalNotifications {
           sound: _channel.sound,
           playSound: true,
         ),
+        // Without Darwin details iOS shows nothing for a data-only push that
+        // arrives while the app is open.
+        iOS: const DarwinNotificationDetails(presentAlert: true, presentBanner: true, presentList: true, presentSound: true),
       ),
       payload: jsonEncode(data),
     );

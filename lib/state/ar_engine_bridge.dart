@@ -31,12 +31,14 @@ LayerState makeLayerState({
   required bool architecture,
   required double opacity,
   double? sectionY,
+  bool contrast = false,
 }) => LayerState(
   mep: mep,
   structure: structure,
   architecture: architecture,
   opacity: opacity,
   sectionY: sectionY,
+  contrast: contrast,
 );
 
 GridLineRef makeGridLineRef(ArGridLine g) => GridLineRef(name: g.name, p0: g.p0, p1: g.p1);

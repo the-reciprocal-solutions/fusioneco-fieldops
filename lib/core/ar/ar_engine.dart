@@ -18,7 +18,11 @@ abstract interface class ArEngine {
   /// reports `supported: false, reason: 'engine-not-installed'`.
   Future<ArCapabilities> capabilities();
 
-  Future<void> startSession();
+  /// [recordTo] / [playbackFrom] (debug builds only, `docs/ar-recording-playback.md`):
+  /// record this session to an MP4 (ARCore Recording & Playback), or run it
+  /// from one instead of the camera, so one room can be replayed at a desk.
+  /// iOS answers with `recording-unsupported` / `playback-unsupported` errors.
+  Future<void> startSession({String? recordTo, String? playbackFrom});
 
   /// Tiles by content hash and local file path (`<appSupport>/ar/tiles/<hash>.glb`).
   Future<void> loadTiles(List<TileRef> tiles);
@@ -67,6 +71,44 @@ abstract interface class ArEngine {
   /// The feature under a screen point, against resident tiles.
   Future<PickResult?> pick(double x, double y);
 
+  /// [pick] for many screen points in one call (fe_ar extension `pickMany`),
+  /// for the lasso: one result per point, in order, null where nothing is
+  /// hit. An engine without the extension answers with sequential picks.
+  Future<List<PickResult?>> pickMany(List<(double, double)> points);
+
+  /// Tile-frame points → view logical pixels through the current (eased)
+  /// model transform (fe_ar extension `projectTile`): `(x, y, onScreen)`
+  /// per point, null where it can't be placed. Drives the Flutter-drawn
+  /// floating labels. Empty answers from an engine without the extension.
+  Future<List<(double, double, bool)?>> projectTile(List<Vec3> pointsTile);
+
+  /// The measured surface point under a screen point (fe_ar extension
+  /// `depthPointAt`): ARCore Raw Depth where its confidence is high, else a
+  /// tracked plane, else smoothed depth. Feeds the wall-taps corner
+  /// (`wall_fit.dart`) and the long-baseline heading tap. Null when nothing
+  /// trustworthy is under the point, or the engine lacks the extension.
+  Future<ArDepthPoint?> depthPointAt(double x, double y);
+
+  /// Turns the torch on or off (fe_ar extension `setTorch`). True when the
+  /// engine applied it; see [ArCapabilities.torch].
+  Future<bool> setTorch(bool on);
+
+  /// Restarts the camera's autofocus sweep (fe_ar extension `refocus`;
+  /// ARCore/ARKit have no focus-at-point). True when the engine did it.
+  Future<bool> refocus();
+
+  /// Turns the engine's depth sensing on or off (fe_ar extension
+  /// `setDepth`). Depth is costly; only setup (corner snaps, wall taps)
+  /// needs it. True when applied.
+  Future<bool> setDepth(bool on);
+
+  /// Starts recording the running session to [path] (fe_ar extension; debug
+  /// builds). False when the engine couldn't.
+  Future<bool> startRecording(String path);
+
+  /// Stops a recording; the file's path, or null when none was running.
+  Future<String?> stopRecording();
+
   /// A JPEG of camera plus overlay; the file path, or null if unavailable.
   Future<String?> capture();
 
@@ -87,13 +129,15 @@ class ArCapabilities {
     this.recording = false,
     this.platform = 'unknown',
     this.reason,
+    this.torch = false,
   });
 
   const ArCapabilities.unsupported(String this.reason, {this.platform = 'unknown'})
       : supported = false,
         depth = false,
         lidar = false,
-        recording = false;
+        recording = false,
+        torch = false;
 
   /// The plugin isn't in this build or this platform has no engine.
   static const engineNotInstalled = 'engine-not-installed';
@@ -105,12 +149,17 @@ class ArCapabilities {
         recording: asBool(map['recording']) ?? false,
         platform: map['platform']?.toString() ?? 'unknown',
         reason: map['reason']?.toString(),
+        torch: asBool(map['torch']) ?? false,
       );
 
   final bool supported;
   final bool depth;
   final bool lidar;
   final bool recording;
+
+  /// The back camera has a torch the engine can switch ([ArEngine.setTorch]).
+  /// fe_ar extension key `torch`; false from an older plugin.
+  final bool torch;
 
   /// `android | ios | demo | unknown`.
   final String platform;
@@ -137,6 +186,49 @@ class ArCapabilities {
         'recording': recording,
         'platform': platform,
         'reason': reason,
+        'torch': torch,
+      };
+}
+
+/// A measured surface point ([ArEngine.depthPointAt]).
+class ArDepthPoint {
+  const ArDepthPoint({
+    required this.posAr,
+    this.normalAr,
+    this.confidence = 0,
+    this.method = 'rawDepth',
+  });
+
+  final Vec3 posAr;
+
+  /// Unit surface normal facing the camera, when the patch around the point
+  /// was flat enough to give one.
+  final Vec3? normalAr;
+
+  /// 0–1: the share of confident depth pixels around the point, times their
+  /// mean confidence (Raw Depth); 0.9 for a tracked plane.
+  final double confidence;
+
+  /// `rawDepth | plane | depth`.
+  final String method;
+
+  static ArDepthPoint? fromMap(dynamic raw) {
+    if (raw is! Map) return null;
+    final pos = Vec3.tryParse(raw['posAr']);
+    if (pos == null) return null;
+    return ArDepthPoint(
+      posAr: pos,
+      normalAr: Vec3.tryParse(raw['normalAr']),
+      confidence: asDouble(raw['confidence']) ?? 0,
+      method: raw['method']?.toString() ?? 'rawDepth',
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'posAr': posAr.toList(),
+        'normalAr': normalAr?.toList(),
+        'confidence': confidence,
+        'method': method,
       };
 }
 
@@ -158,6 +250,7 @@ class LayerState {
     this.architecture = true,
     this.opacity = 1,
     this.sectionY,
+    this.contrast = false,
   });
 
   final bool mep;
@@ -170,6 +263,9 @@ class LayerState {
   /// Tile-frame height of a horizontal section plane; null for none.
   final double? sectionY;
 
+  /// Sunlight mode (extra `contrast`): opaque MEP, white edges.
+  final bool contrast;
+
   LayerState copyWith({
     bool? mep,
     bool? structure,
@@ -177,6 +273,7 @@ class LayerState {
     double? opacity,
     double? sectionY,
     bool clearSection = false,
+    bool? contrast,
   }) =>
       LayerState(
         mep: mep ?? this.mep,
@@ -184,6 +281,7 @@ class LayerState {
         architecture: architecture ?? this.architecture,
         opacity: math.min(1.0, math.max(0.0, opacity ?? this.opacity)),
         sectionY: clearSection ? null : (sectionY ?? this.sectionY),
+        contrast: contrast ?? this.contrast,
       );
 
   Map<String, dynamic> toMap() => {
@@ -192,6 +290,7 @@ class LayerState {
         'architecture': architecture,
         'opacity': opacity,
         'sectionY': sectionY,
+        if (contrast) 'contrast': true,
       };
 
   @override
@@ -201,10 +300,11 @@ class LayerState {
       other.structure == structure &&
       other.architecture == architecture &&
       other.opacity == opacity &&
-      other.sectionY == sectionY;
+      other.sectionY == sectionY &&
+      other.contrast == contrast;
 
   @override
-  int get hashCode => Object.hash(mep, structure, architecture, opacity, sectionY);
+  int get hashCode => Object.hash(mep, structure, architecture, opacity, sectionY, contrast);
 }
 
 /// One structural grid line on the floor plane, `(x, z)` in the tile frame.
@@ -356,6 +456,8 @@ sealed class ArEvent {
         final id = raw['anchorId']?.toString();
         if (pos == null || id == null) return bad('anchorId/posAr');
         return AnchorUpdatedEvent(anchorId: id, posAr: pos);
+      case 'thermal':
+        return ThermalEvent(level: raw['level']?.toString() ?? 'none', status: asInt(raw['status']) ?? 0);
       case 'floor':
         final y = asDouble(raw['yAr']);
         if (y == null) return bad('yAr');
@@ -471,7 +573,8 @@ final class CornerSeenEvent extends ArEvent {
   /// `inside | outside | column`.
   final String kind;
 
-  /// `lidar | planes | floorTap`.
+  /// `lidar | planes | floorTap` from the engine; `depthTaps` when Dart
+  /// fitted it from wall taps (`wall_fit.dart`).
   final String method;
 
   static CornerSeenEvent? tryParse(dynamic raw) {
@@ -522,6 +625,24 @@ final class AnchorUpdatedEvent extends ArEvent {
         'anchorId': anchorId,
         'posAr': posAr.toList(),
       };
+}
+
+/// The phone's thermal status changed (fe_ar extension, Android 10+):
+/// `none | light | moderate | severe | critical | emergency | shutdown`.
+final class ThermalEvent extends ArEvent {
+  const ThermalEvent({required this.level, this.status = 0});
+
+  final String level;
+  final int status;
+
+  /// Hot enough that the OS is about to throttle: pause AR.
+  bool get isHot => status >= 3;
+
+  @override
+  String get type => 'thermal';
+
+  @override
+  Map<String, dynamic> toMap() => {'type': type, 'level': level, 'status': status};
 }
 
 /// The tracked floor (fe_ar extension): the lowest upward plane a standing

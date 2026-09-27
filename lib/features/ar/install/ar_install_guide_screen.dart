@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router.dart';
 import '../../../core/ar/marker_code.dart';
 import '../../../state/ar_catalog_controller.dart';
+import '../../../state/ar_permissions.dart';
 import '../../../state/ar_view_models.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
@@ -15,6 +16,7 @@ import '../../../widgets/common.dart';
 import '../../../widgets/fe_header.dart';
 import '../ar_ui.dart';
 import '../widgets/ar_chrome.dart';
+import '../widgets/ar_entry_widgets.dart' show ArInstallNotEnabled;
 import '../widgets/ar_mini_plan.dart';
 
 /// `/ar/install/:code` — I2 Find the spot: where the board goes, shown on
@@ -36,7 +38,9 @@ class ArInstallGuideScreen extends ConsumerWidget {
       appBar: FeHeader(title: 'ar.guide.header'.getString(context)),
       body: SafeArea(
         top: false,
-        child: floorId == null
+        child: !ref.watch(arInstallAllowedProvider)
+            ? const ArInstallNotEnabled()
+            : floorId == null
             ? _NoFloor(code: canonical)
             : ref.watch(arInstallFloorProvider(floorId)).when(
                   loading: () => const Center(child: TechSpinner()),

@@ -1,6 +1,9 @@
 #import "FeArCore.h"
 
 #include "../../src/fe_ar_core.h"
+#include "../../src/fe_tag.h"
+
+#include <math.h>
 
 @implementation FeArRayHit {
   @public
@@ -255,6 +258,156 @@ static void fe_v3(simd_float3 v, float out[3]) {
     free(gl);
     free(pp);
     return out;
+}
+
+@end
+
+// ---------------------------------------------------------------- board tags
+
+// Android MarkerDetector.kt companion constants, kept equal.
+static const int kMinTags = 2;
+static const float kMaxTagRmsPx = 1.5f;
+/** Search region: QR half-diagonals out from its centre (frame corner = 1.48). */
+static const float kRoiReach = 1.65f;
+/** Tag centre in QR half-diagonals: 71.25 / 57.5 (A4), 105 / 85 (A3). */
+static const float kTagReachA4 = 1.2391f;
+static const float kTagReachA3 = 1.2353f;
+/** How far a tag may sit from its predicted spot, in QR half-diagonals. */
+static const float kTagPositionTolerance = 0.25f;
+static const int kDecimateAbovePx = 900;
+enum { kMaxDetections = 12 };
+
+@implementation FeArTagPose {
+  @public
+    simd_float3 _centre;
+    simd_float3 _normal;
+    float _rmsPx;
+    NSInteger _tags;
+    BOOL _a3;
+}
+- (simd_float3)centre {
+    return _centre;
+}
+- (simd_float3)normal {
+    return _normal;
+}
+- (float)rmsPx {
+    return _rmsPx;
+}
+- (NSInteger)tags {
+    return _tags;
+}
+- (BOOL)a3 {
+    return _a3;
+}
+@end
+
+@implementation FeArTagDetector {
+    fe_tag_detector* _detector;
+}
+
++ (nullable FeArTagDetector*)create {
+    FeArTagDetector* d = [[FeArTagDetector alloc] init];
+    d->_detector = fe_tag_detector_create();
+    return d->_detector ? d : nil;
+}
+
+- (void)dealloc {
+    if (_detector) fe_tag_detector_free(_detector);
+}
+
+/// Intersection of the diagonals (0-2, 1-3), as MarkerDetector.diagonalCentre.
+static BOOL fe_diagonal_centre(const float* c, float out[2]) {
+    const float x1 = c[0], y1 = c[1], x2 = c[4], y2 = c[5], x3 = c[2], y3 = c[3], x4 = c[6], y4 = c[7];
+    const float den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (fabsf(den) < 1e-6f) return NO;
+    const float t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+    out[0] = x1 + t * (x2 - x1);
+    out[1] = y1 + t * (y2 - y1);
+    return YES;
+}
+
+- (nullable FeArTagPose*)boardPoseForPayload:(NSString*)payload
+                                   qrCorners:(const float*)qr
+                                        luma:(const uint8_t*)luma
+                                       width:(NSInteger)width
+                                      height:(NSInteger)height
+                                 bytesPerRow:(NSInteger)bytesPerRow
+                                          fx:(float)fx
+                                          fy:(float)fy
+                                          cx:(float)cx
+                                          cy:(float)cy {
+    char code[8];
+    const char* p = payload.UTF8String;
+    if (!_detector || !p || !luma || !fe_marker_code_from_payload(p, code) || fe_tag_group(code) < 0) return nil;
+    float q[2];
+    if (!fe_diagonal_centre(qr, q)) return nil;
+
+    // Region: the QR's corners pushed out past the frame corners.
+    float x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+    for (int i = 0; i < 4; i++) {
+        const float x = q[0] + kRoiReach * (qr[i * 2] - q[0]);
+        const float y = q[1] + kRoiReach * (qr[i * 2 + 1] - q[1]);
+        x0 = fminf(x0, x);
+        y0 = fminf(y0, y);
+        x1 = fmaxf(x1, x);
+        y1 = fmaxf(y1, y);
+    }
+    const int w = (int)width, h = (int)height;
+    const int rx = x0 > 0 ? (int)x0 : 0;
+    const int ry = y0 > 0 ? (int)y0 : 0;
+    const int rw = (x1 + 1 < w ? (int)x1 + 1 : w) - rx;
+    const int rh = (y1 + 1 < h ? (int)y1 + 1 : h) - ry;
+    if (rw < 32 || rh < 32) return nil;
+    const float decimate = (rw > rh ? rw : rh) > kDecimateAbovePx ? 2.0f : 1.0f;
+    fe_tag_detection dets[kMaxDetections];
+    const int n = fe_tag_detect(_detector, luma, w, h, (int)bytesPerRow, rx, ry, rw, rh, decimate, dets, kMaxDetections);
+    if (n <= 0) return nil;
+
+    // Keep this payload's tags that sit where one of the QR frame's corners
+    // is (either format), one per corner and format.
+    fe_tag_detection keptA4[4], keptA3[4];
+    int nA4 = 0, nA3 = 0;
+    BOOL seen[8] = {NO};
+    for (int i = 0; i < n; i++) {
+        int format = -1, corner = -1;
+        if (!fe_tag_match(code, dets[i].id, &format, &corner) || format < 0 || corner < 0) continue;
+        const int m = format * 4 + corner;
+        if (m >= 8 || seen[m]) continue;
+        seen[m] = YES;
+        const BOOL a3 = format == FE_BOARD_A3;
+        const float reach = a3 ? kTagReachA3 : kTagReachA4;
+        const float tx = dets[i].centre[0], ty = dets[i].centre[1];
+        BOOL near = NO;
+        for (int c = 0; c < 4; c++) {
+            const float vx = qr[c * 2] - q[0], vy = qr[c * 2 + 1] - q[1];
+            const float px = q[0] + reach * vx, py = q[1] + reach * vy;
+            if (hypotf(tx - px, ty - py) < kTagPositionTolerance * hypotf(vx, vy)) {
+                near = YES;
+                break;
+            }
+        }
+        if (!near) continue;
+        if (a3) {
+            if (nA3 < 4) keptA3[nA3++] = dets[i];
+        } else if (nA4 < 4) {
+            keptA4[nA4++] = dets[i];
+        }
+    }
+    const BOOL useA3 = nA3 > nA4;
+    const fe_tag_detection* kept = useA3 ? keptA3 : keptA4;
+    const int nk = useA3 ? nA3 : nA4;
+    if (nk < kMinTags) return nil;
+    fe_board_pose pose;
+    if (!fe_board_pose_from_tags(kept, nk, code, fx, fy, cx, cy, &pose)) return nil;
+    if (pose.rms_px > kMaxTagRmsPx) return nil;
+    FeArTagPose* r = [FeArTagPose new];
+    r->_centre = simd_make_float3(pose.centre[0], pose.centre[1], pose.centre[2]);
+    r->_normal = simd_make_float3(pose.normal[0], pose.normal[1], pose.normal[2]);
+    r->_rmsPx = pose.rms_px;
+    r->_tags = pose.n_tags;
+    r->_a3 = pose.format == FE_BOARD_A3;
+    return r;
 }
 
 @end

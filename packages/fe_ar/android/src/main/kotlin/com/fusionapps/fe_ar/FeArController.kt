@@ -4,8 +4,11 @@ import android.Manifest
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -14,6 +17,7 @@ import android.os.SystemClock
 import android.view.PixelCopy
 import android.view.SurfaceView
 import android.view.TextureView
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -27,6 +31,7 @@ import com.google.ar.core.Config
 import com.google.ar.core.Frame
 import com.google.ar.core.Plane
 import com.google.ar.core.RecordingConfig
+import com.google.ar.core.RecordingStatus
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
@@ -66,6 +71,7 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     private val states = FeatureStates()
     private val markers = MarkerDetector(::emit)
     private val corners = CornerDetector(::emit)
+    private val depthProbe = DepthProbe()
     private var renderer: TileRenderer? = null
     private var view: FeArPlatformView? = null
 
@@ -86,6 +92,18 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
 
     /** One recording per startSession (ARCore stops it itself on pause). */
     private var recordingStarted = false
+
+    /**
+     * Bumped when a startSession changes the playback file: the composable
+     * is keyed on it, so SceneView builds a fresh ARCore session that reads
+     * the new dataset. A stop immediately followed by a start (Dart's
+     * restart) can otherwise land in one frame, and Compose would keep the
+     * old session, still on the camera (or on the old recording).
+     */
+    val sessionGeneration = mutableIntStateOf(0)
+
+    /** The torch as Dart last asked (`setTorch`); applied in configureSession too. */
+    private var torchOn = false
 
     // ---- drawing state (replayed onto a new renderer)
     private var modelCurrent = ArMath.identity()
@@ -115,6 +133,14 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     private var everTracked = false
     private var lastPoseMs = 0L
     private var lastCamCheckMs = 0L
+
+    /**
+     * The per-2 s `camera check` log (Filament camera vs ARCore pose). It
+     * settled P-012 on 2026-09-27 (the camera follows ARCore to the
+     * millimetre), so it is off unless this flag is flipped in a debuggable
+     * build.
+     */
+    private val cameraCheckLog = CAMERA_CHECK_LOG && (appContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     /** SceneView's AR camera node for this view (FeArScene), for the camera check below. */
     var cameraNode: io.github.sceneview.ar.node.ARCameraNode? = null
@@ -255,6 +281,9 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     // ======================================================== session callbacks
 
     fun pickCameraConfig(session: Session): CameraConfig {
+        // A recording plays back with the camera config it was recorded with;
+        // choosing another one here would not match the dataset.
+        if (playbackFile != null) return session.cameraConfig
         // The QR must be decodable from ~2 m (docs/ar-markers-and-qr.md §2.2):
         // take the largest CPU image up to 1080p at 30 fps.
         // The camera image on screen is the GPU texture, not the CPU image: a
@@ -288,6 +317,11 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         val depth = wantDepth && session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
         config.depthMode = if (depth) Config.DepthMode.AUTOMATIC else Config.DepthMode.DISABLED
         corners.depthEnabled = depth
+        // AUTOMATIC also serves Raw Depth (acquireRawDepthImage16Bits), which
+        // depthPointAt prefers for its per-pixel confidence.
+        depthProbe.depthEnabled = depth
+        // Kept across SceneView's own reconfigures (sessionConfiguration runs on each).
+        config.flashMode = if (torchOn && playbackFile == null) Config.FlashMode.TORCH else Config.FlashMode.OFF
     }
 
     fun onSessionCreated(session: Session) {
@@ -364,8 +398,9 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
 
         // Debug check, every 2 s: the camera Filament renders with must sit
         // where ARCore says the phone is. If it doesn't move while the phone
-        // does, the model is drawn screen-locked (P-012).
-        if (tracking && nowMs - lastCamCheckMs >= 2000L) {
+        // does, the model is drawn screen-locked (P-012). Off by default
+        // ([cameraCheckLog]).
+        if (cameraCheckLog && tracking && nowMs - lastCamCheckMs >= 2000L) {
             lastCamCheckMs = nowMs
             val node = cameraNode
             if (node != null) {
@@ -626,7 +661,197 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
             // extras (Dart ignores unknown keys)
             "arcore" to availability.name,
             "featureMaterial" to hasAsset("fe_ar/fe_feature.filamat"),
+            "torch" to (supported && torchAvailable()),
         )
+    }
+
+    /** The back camera has a flash unit (ARCore drives it as a torch: Config.FlashMode.TORCH). */
+    private fun torchAvailable(): Boolean = try {
+        val cm = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        cm.cameraIdList.any { id ->
+            val ch = cm.getCameraCharacteristics(id)
+            ch.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK &&
+                ch.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+        }
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * Applies [torchOn] to the running session now (session.configure with
+     * the current config plus the flash mode). False when there is no
+     * session yet (configureSession applies it when one starts) or during
+     * playback (a recording has no torch).
+     */
+    /**
+     * `setDepth {on}` (extension): ARCore depth is one of the heaviest parts
+     * of a session and only corner snaps, wall taps and the print-scale check
+     * use it. Dart turns it off once the model is placed and back on for
+     * setup (device test 2026-09-27: the phone ran hot).
+     */
+    private fun setDepth(on: Boolean): Boolean {
+        if (wantDepth == on) return true
+        wantDepth = on
+        val s = latestSession ?: return true // applied by configureSession on start
+        return try {
+            val cfg = s.config
+            val depth = on && s.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+            cfg.depthMode = if (depth) Config.DepthMode.AUTOMATIC else Config.DepthMode.DISABLED
+            s.configure(cfg)
+            corners.depthEnabled = depth
+            depthProbe.depthEnabled = depth
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // ------------------------------------------------ power: refresh + thermal
+
+    private var savedModeId: Int? = null
+    private var thermalListener: Any? = null
+
+    /**
+     * The camera runs at 30 fps, but SceneView draws on every display frame:
+     * 90 Hz on a OnePlus 7 Pro, three draws per camera image. While AR runs,
+     * ask for the lowest refresh mode ≥ 30 Hz at the current resolution.
+     */
+    private fun lowerRefreshRate() {
+        val act = activity ?: return
+        try {
+            @Suppress("DEPRECATION")
+            val display = if (android.os.Build.VERSION.SDK_INT >= 30) act.display else act.windowManager.defaultDisplay
+            display ?: return
+            val cur = display.mode
+            val mode = display.supportedModes
+                .filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight && it.refreshRate >= 29f }
+                .minByOrNull { it.refreshRate } ?: return
+            val attrs = act.window.attributes
+            if (savedModeId == null) savedModeId = attrs.preferredDisplayModeId
+            attrs.preferredDisplayModeId = mode.modeId
+            act.window.attributes = attrs
+        } catch (_: Exception) {
+            // Best effort: some devices refuse; AR still runs.
+        }
+    }
+
+    private fun restoreRefreshRate() {
+        val act = activity ?: return
+        val id = savedModeId ?: return
+        try {
+            val attrs = act.window.attributes
+            attrs.preferredDisplayModeId = id
+            act.window.attributes = attrs
+        } catch (_: Exception) {
+        }
+        savedModeId = null
+    }
+
+    /** Thermal status (API 29+) as a `thermal` event, so Dart can pause AR before the OS throttles it. */
+    private fun startThermal() {
+        if (android.os.Build.VERSION.SDK_INT < 29 || thermalListener != null) return
+        val pm = appContext.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager ?: return
+        val l = android.os.PowerManager.OnThermalStatusChangedListener { status ->
+            emit(mapOf("type" to "thermal", "status" to status, "level" to thermalLevel(status)))
+        }
+        pm.addThermalStatusListener(l)
+        thermalListener = l
+    }
+
+    private fun stopThermal() {
+        if (android.os.Build.VERSION.SDK_INT < 29) return
+        val l = thermalListener as? android.os.PowerManager.OnThermalStatusChangedListener ?: return
+        (appContext.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager)?.removeThermalStatusListener(l)
+        thermalListener = null
+    }
+
+    private fun thermalLevel(status: Int): String = when (status) {
+        0 -> "none"
+        1 -> "light"
+        2 -> "moderate"
+        3 -> "severe"
+        4 -> "critical"
+        5 -> "emergency"
+        else -> "shutdown"
+    }
+
+    /**
+     * `refocus` (extension): ARCore has no focus-at-point API, only AUTO or
+     * FIXED. Switching to FIXED and back to AUTO a moment later restarts the
+     * autofocus sweep, which clears a lens that settled on the wrong
+     * distance (first device run: "too blurred, sometimes never focusing").
+     */
+    private fun refocus(): Boolean {
+        if (playbackFile != null) return false
+        val s = latestSession ?: return false
+        return try {
+            val cfg = s.config
+            cfg.focusMode = Config.FocusMode.FIXED
+            s.configure(cfg)
+            main.postDelayed({
+                try {
+                    val c = s.config
+                    c.focusMode = Config.FocusMode.AUTO
+                    s.configure(c)
+                } catch (_: Exception) {
+                    // Session gone meanwhile: the next configureSession sets AUTO.
+                }
+            }, REFOCUS_DELAY_MS)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun applyTorch(): Boolean {
+        if (playbackFile != null) return false
+        val s = latestSession ?: return false
+        return try {
+            val cfg = s.config
+            cfg.flashMode = if (torchOn) Config.FlashMode.TORCH else Config.FlashMode.OFF
+            s.configure(cfg)
+            true
+        } catch (e: Exception) {
+            emitError("torch-failed", e.message ?: e.javaClass.simpleName)
+            false
+        }
+    }
+
+    // ======================================================== recording (debug rig)
+
+    /** `startRecording {path}`: records the running session to an MP4 (ARCore Recording & Playback). */
+    private fun startRecording(path: String): Boolean {
+        File(path).parentFile?.mkdirs()
+        val s = latestSession
+        if (s == null) {
+            // No session yet: onSessionResumed starts it, as for startSession's recordTo.
+            recordTo = path
+            recordingStarted = false
+            return true
+        }
+        return try {
+            if (s.recordingStatus == RecordingStatus.OK) s.stopRecording()
+            s.startRecording(RecordingConfig(s).setMp4DatasetUri(Uri.fromFile(File(path))).setAutoStopOnPause(true))
+            recordTo = path
+            recordingStarted = true
+            true
+        } catch (e: Exception) {
+            emitError("recording-failed", e.message ?: e.javaClass.simpleName)
+            false
+        }
+    }
+
+    /** `stopRecording`: finishes the MP4; its path, or null when nothing was recording. */
+    private fun stopRecording(): String? {
+        val path = recordTo
+        recordTo = null
+        val s = latestSession
+        try {
+            if (s != null && s.recordingStatus == RecordingStatus.OK) s.stopRecording()
+        } catch (e: Exception) {
+            emitError("recording-failed", e.message ?: e.javaClass.simpleName)
+        }
+        return path
     }
 
     /**
@@ -743,6 +968,7 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
                         opacity = (Args.float(a["opacity"]) ?: 1f).coerceIn(0f, 1f),
                         sectionY = Args.float(a["sectionY"]),
                         grid = Args.bool(a["grid"]) ?: true,
+                        contrast = Args.bool(a["contrast"]) ?: false,
                     )
                     renderer?.setLayers(layers, tiles.tiles.values)
                     result.success(null)
@@ -792,6 +1018,29 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
                     val y = Args.float(a["y"])
                     result.success(if (x == null || y == null) null else pick(x, y))
                 }
+                // ---- extensions (CHANNEL.md "Extensions")
+                "pickMany" -> {
+                    val pts = (a["points"] as? List<*>).orEmpty()
+                    result.success(pts.map { p -> Args.floats(p, 2)?.let { pick(it[0], it[1]) } })
+                }
+                "depthPointAt" -> {
+                    val f = latestFrame
+                    val x = Args.float(a["x"])
+                    val y = Args.float(a["y"])
+                    result.success(if (f == null || x == null || y == null) null else depthProbe.pointAt(f, x * density, y * density))
+                }
+                "refocus" -> result.success(refocus())
+                "setDepth" -> result.success(setDepth(Args.bool(a["on"]) ?: true))
+                "setTorch" -> {
+                    torchOn = Args.bool(a["on"]) ?: false
+                    result.success(applyTorch())
+                }
+                "startRecording" -> {
+                    val path = Args.string(a["path"])
+                    if (path == null) result.error("bad-args", "path is required", null)
+                    else result.success(startRecording(path))
+                }
+                "stopRecording" -> result.success(stopRecording())
                 "capture" -> capture(result)
                 "pause" -> {
                     paused = true
@@ -835,10 +1084,15 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
 
     private fun startSession(a: Map<*, *>, result: MethodChannel.Result) {
         wantDepth = Args.bool(a["depth"]) ?: true
+        lowerRefreshRate()
+        startThermal()
         markers.progressEvents = Args.bool(a["progressEvents"]) ?: false
         recordTo = Args.string(a["recordTo"])
         recordingStarted = false
-        playbackFile = Args.string(a["playbackFrom"])?.let { File(it) }
+        val playback = Args.string(a["playbackFrom"])?.let { File(it) }
+        if (playback?.path != playbackFile?.path) sessionGeneration.intValue++
+        playbackFile = playback
+        torchOn = false
         val act = activity
         val availability = try {
             ArCoreApk.getInstance().checkAvailability(appContext)
@@ -879,6 +1133,13 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
      * too: Dart's residency starts again from nothing after a stop.
      */
     private fun stopSession() {
+        restoreRefreshRate()
+        stopThermal()
+        // Finish a debug recording before the session goes (autoStopOnPause
+        // would too, but only once SceneView pauses it).
+        if (recordTo != null && recordingStarted) stopRecording()
+        recordTo = null
+        torchOn = false
         sessionWanted.value = false
         updateRunning()
         markers.reset()
@@ -959,11 +1220,15 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     }
 
     companion object {
+        /** Flip to log `camera check` every 2 s in debuggable builds (P-012 tooling). */
+        private const val CAMERA_CHECK_LOG = false
+
         private const val NEAR_M = 0.05f
         private const val FAR_M = 100f
         private const val POSE_INTERVAL_MS = 200L // 5 Hz (§6.4)
         private const val TARGET_INTERVAL_MS = 100L // 10 Hz (§6.4)
         private const val FLOOR_INTERVAL_MS = 1000L
+        private const val REFOCUS_DELAY_MS = 150L
         /** A floor plane must be at least this big (a doormat is not the floor). */
         private const val FLOOR_MIN_AREA_M2 = 0.25f
         /** Camera height above the floor while standing: tables and beds sit higher than MIN below the phone. */

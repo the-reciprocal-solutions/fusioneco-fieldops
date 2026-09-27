@@ -8,6 +8,7 @@ import '../../../theme/fe_ar_colors.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
 import '../ar_ui.dart';
+import '../widgets/ar_sunlight.dart';
 
 /// The discipline legend and its one-tap filters (first device run, user
 /// feedback 2026-09-26: "couldn't visually identify different discipline
@@ -68,6 +69,8 @@ class ArDisciplineLegend extends ConsumerWidget {
     final coloured = ws.mode != ArMode.progress && l.colourBy == ArColourBy.discipline;
     final hiddenCount = present.where((d) => !l.shows(d)).length;
     final hint = 'ar.legend.hint'.getString(context);
+    final st = ArChromeStyle.of(context);
+    final small = st.text(Theme.of(context).textTheme.bodySmall);
 
     final chips = <Widget>[
       _GlassChip(
@@ -77,17 +80,18 @@ class ArDisciplineLegend extends ConsumerWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(ArIcons.legend, size: 15, color: FeArColors.onGlass),
+            Icon(ArIcons.legend, size: st.iconSize(15), color: st.fg),
             const SizedBox(width: 6),
             AppText.bodySmall(
               ws.legendOpen || hiddenCount == 0
                   ? 'ar.legend.title'.getString(context)
                   : arTr(context, 'ar.legend.n_hidden', [hiddenCount]),
-              color: FeArColors.onGlass,
-              weight: FontWeight.w700,
+              color: st.fg,
+              weight: st.weight(FontWeight.w700),
+              style: small,
             ),
             const SizedBox(width: 4),
-            Icon(ws.legendOpen ? ArIcons.collapse : ArIcons.expand, size: 14, color: FeArColors.onGlassMuted),
+            Icon(ws.legendOpen ? ArIcons.collapse : ArIcons.expand, size: st.iconSize(14), color: st.fgMuted),
           ],
         ),
       ),
@@ -100,9 +104,14 @@ class ArDisciplineLegend extends ConsumerWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(ArIcons.showAll, size: 15, color: FeColors.ink),
+              Icon(ArIcons.showAll, size: st.iconSize(15), color: st.activeFg),
               const SizedBox(width: 6),
-              AppText.bodySmall('ar.legend.show_all'.getString(context), color: FeColors.ink, weight: FontWeight.w700),
+              AppText.bodySmall(
+                'ar.legend.show_all'.getString(context),
+                color: st.activeFg,
+                weight: st.weight(FontWeight.w700),
+                style: small,
+              ),
             ],
           ),
         ),
@@ -165,14 +174,17 @@ class _DisciplineChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = arDisciplineLabel(context, discipline);
-    final fg = solo ? FeColors.ink : FeArColors.onGlass;
+    final st = ArChromeStyle.of(context);
+    final fg = solo ? st.activeFg : st.fg;
+    final base = Theme.of(context).textTheme.bodySmall;
     return _GlassChip(
       semantics: '$label · $count',
       hint: hint,
       toggled: shown,
       shown: shown,
       light: solo,
-      borderColour: shown && !solo ? colour.withValues(alpha: 0.75) : null,
+      // Sunlight keeps the white outline; the dot carries the colour.
+      borderColour: shown && !solo && !st.sunlight ? colour.withValues(alpha: 0.75) : null,
       onTap: onTap,
       onLongPress: onLongPress,
       child: Row(
@@ -182,15 +194,20 @@ class _DisciplineChip extends StatelessWidget {
           const SizedBox(width: 7),
           Text(
             label,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            style: (st.text(base) ?? base)?.copyWith(
               color: fg,
-              fontWeight: FontWeight.w700,
+              fontWeight: st.weight(FontWeight.w700),
               decoration: shown ? null : TextDecoration.lineThrough,
               decorationColor: fg,
             ),
           ),
           const SizedBox(width: 6),
-          AppText.caption('$count', color: solo ? FeColors.ink2 : FeArColors.onGlassMuted, weight: FontWeight.w600),
+          AppText.caption(
+            '$count',
+            color: solo ? (st.sunlight ? st.activeFg : FeColors.ink2) : st.fgMuted,
+            weight: st.weight(FontWeight.w600),
+            style: st.text(Theme.of(context).textTheme.labelSmall),
+          ),
         ],
       ),
     );
@@ -246,6 +263,7 @@ class _GlassChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final st = ArChromeStyle.of(context);
     return Semantics(
       button: true,
       toggled: toggled,
@@ -259,15 +277,19 @@ class _GlassChip extends StatelessWidget {
         child: Center(
           child: AnimatedOpacity(
             duration: const Duration(milliseconds: 180),
-            opacity: shown ? 1 : 0.55,
+            // Sunlight: a hidden chip dims less (the strike-through says
+            // "hidden"; a 55 % chip vanishes in glare).
+            opacity: shown ? 1 : (st.sunlight ? 0.75 : 0.55),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
-              height: 36,
+              height: st.sunlight ? 40 : 36,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
-                color: light ? Colors.white : FeArColors.glassStrong,
+                color: light ? st.activeBg : st.surface(strong: true),
                 borderRadius: BorderRadius.circular(99),
-                border: Border.all(color: borderColour ?? Colors.transparent, width: 1.2),
+                border: st.sunlight
+                    ? st.border()
+                    : Border.all(color: borderColour ?? Colors.transparent, width: 1.2),
               ),
               alignment: Alignment.center,
               child: child,

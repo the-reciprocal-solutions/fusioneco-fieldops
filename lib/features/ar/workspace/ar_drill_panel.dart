@@ -229,6 +229,7 @@ class ArDrillCrosshair extends ConsumerWidget {
     final c = Offset(viewSize.width / 2, viewSize.height / 2);
     const box = 64.0;
     final nearest = ws.drill?.nearest;
+    final st = ArChromeStyle.of(context);
     final pill = switch (status) {
       ArDrillStatus.caution || ArDrillStatus.danger when nearest != null => arDrillFindingText(context, nearest),
       _ => look.headline,
@@ -241,7 +242,7 @@ class ArDrillCrosshair extends ConsumerWidget {
             top: c.dy - box / 2,
             width: box,
             height: box,
-            child: CustomPaint(painter: _CrosshairPainter(look.accent)),
+            child: CustomPaint(painter: _CrosshairPainter(look.accent, sunlight: st.sunlight)),
           ),
           Positioned(
             left: 16,
@@ -251,14 +252,25 @@ class ArDrillCrosshair extends ConsumerWidget {
               child: Container(
                 constraints: const BoxConstraints(maxWidth: 320),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(color: FeArColors.glassStrong, borderRadius: BorderRadius.circular(12)),
+                decoration: BoxDecoration(
+                  color: st.surface(strong: true),
+                  borderRadius: BorderRadius.circular(12),
+                  border: st.border(),
+                ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    ArLegendDot(colour: look.accent, size: 10),
+                    ArLegendDot(colour: look.accent, size: st.sunlight ? 12 : 10),
                     const SizedBox(width: 7),
                     Flexible(
-                      child: AppText.bodySmall(pill, color: FeArColors.onGlass, weight: FontWeight.w700, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      child: AppText.bodySmall(
+                        pill,
+                        color: st.fg,
+                        weight: st.weight(FontWeight.w700),
+                        style: st.text(Theme.of(context).textTheme.bodySmall),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
@@ -272,21 +284,25 @@ class ArDrillCrosshair extends ConsumerWidget {
 }
 
 class _CrosshairPainter extends CustomPainter {
-  const _CrosshairPainter(this.colour);
+  const _CrosshairPainter(this.colour, {this.sunlight = false});
   final Color colour;
+
+  /// Sunlight: a solid black halo and a thicker stroke, so the ring still
+  /// reads against a sunlit wall.
+  final bool sunlight;
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
     final r = size.width * 0.3;
     final shadow = Paint()
-      ..color = Colors.black54
-      ..strokeWidth = 5
+      ..color = sunlight ? Colors.black : Colors.black54
+      ..strokeWidth = sunlight ? 7 : 5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
     final line = Paint()
       ..color = colour
-      ..strokeWidth = 2.5
+      ..strokeWidth = sunlight ? 3.5 : 2.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
     for (final p in [shadow, line]) {
@@ -297,9 +313,9 @@ class _CrosshairPainter extends CustomPainter {
       canvas.drawLine(c + Offset(-size.width / 2 + 2, 0), c + Offset(-r - 4, 0), p);
       canvas.drawLine(c + Offset(r + 4, 0), c + Offset(size.width / 2 - 2, 0), p);
     }
-    canvas.drawCircle(c, 2.5, Paint()..color = colour);
+    canvas.drawCircle(c, sunlight ? 3.5 : 2.5, Paint()..color = colour);
   }
 
   @override
-  bool shouldRepaint(covariant _CrosshairPainter old) => old.colour != colour;
+  bool shouldRepaint(covariant _CrosshairPainter old) => old.colour != colour || old.sunlight != sunlight;
 }

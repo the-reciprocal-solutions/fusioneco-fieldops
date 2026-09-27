@@ -10,6 +10,7 @@ import '../../../core/ar/alignment_estimator.dart';
 import '../../../core/ar/corner_matcher.dart';
 import '../../../core/ar/marker_code.dart';
 import '../../../core/ar/vec.dart';
+import '../../../core/ar/wall_fit.dart';
 import '../../../state/ar_prefs_controller.dart';
 import '../../../state/ar_session_controller.dart';
 import '../../../state/ar_setup_controller.dart';
@@ -20,7 +21,9 @@ import '../ar_ui.dart';
 import '../widgets/ar_chrome.dart';
 import '../widgets/ar_mini_plan.dart';
 import '../widgets/ar_status.dart';
+import '../widgets/ar_sunlight.dart';
 import '../widgets/ar_visuals.dart';
+import '../workspace/ar_workspace.dart' show arRefocus;
 import 'ar_method_chooser.dart';
 import 'ar_register_board_card.dart';
 
@@ -48,6 +51,31 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
   var _readyAck = false;
   var _planOpen = false;
 
+  /// The user's show/hide choice for the card during a scanning step; reset
+  /// when the step changes. Null = the default (collapsed while scanning).
+  bool? _cardOpen;
+  ArSetupStep? _cardStep;
+
+  /// Steps where the camera matters more than the card: the card shrinks to a
+  /// "Show steps" bar so the pin, the crosshair and the board are visible
+  /// (device test 2026-09-27: the card covered the scan).
+  static const _scanSteps = {
+    ArSetupStep.cornerA,
+    ArSetupStep.cornerB,
+    ArSetupStep.wallTaps,
+    ArSetupStep.baseline,
+    ArSetupStep.boardScan,
+    ArSetupStep.boardLock,
+  };
+
+  /// A result waiting for a decision (a snapped corner to use): the card
+  /// opens by itself.
+  bool _needsDecision(ArSetupState setup) => switch (setup.step) {
+    ArSetupStep.cornerA => setup.snapped != null,
+    ArSetupStep.cornerB => setup.snapped != null || setup.matchedB != null,
+    _ => false,
+  };
+
   ArSetupController get _ctrl => ref.read(arSetupProvider.notifier);
 
   @override
@@ -63,8 +91,63 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
 
     final Widget card = showReady ? _ReadyCard(onStart: () => setState(() => _readyAck = true)) : _cardFor(context, setup, s);
 
+    final tapping = setup.step == ArSetupStep.wallTaps || setup.step == ArSetupStep.baseline;
+    if (_cardStep != setup.step) {
+      _cardStep = setup.step;
+      _cardOpen = null;
+    }
+    final scanning = _scanSteps.contains(setup.step) && !showReady;
+    final collapsed = scanning && !_needsDecision(setup) && !(_cardOpen ?? false);
+    final Widget shownCard = collapsed
+        ? _CollapsedCardBar(onOpen: () => setState(() => _cardOpen = true))
+        : scanning
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: _HideCardChip(onHide: () => setState(() => _cardOpen = false)),
+                  ),
+                  const SizedBox(height: 6),
+                  card,
+                ],
+              )
+            : card;
     return Stack(
       children: [
+        // ARCore/ARKit have no focus-at-point: a double-tap anywhere on the
+        // camera restarts autofocus (steps that measure taps use single taps).
+        if (!tapping)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onDoubleTap: () => arRefocus(ref),
+            ),
+          ),
+        // Wall taps and the baseline tap measure where the finger lands. The
+        // overlay fills the AR view, so its local position is a view point.
+        if (tapping)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (d) {
+                ArHaptics.snap();
+                final p = d.localPosition;
+                if (setup.step == ArSetupStep.wallTaps) {
+                  _ctrl.addWallTap(p.dx, p.dy);
+                } else {
+                  _ctrl.addBaselineTap(p.dx, p.dy);
+                }
+              },
+            ),
+          ),
+        if (tapping && setup.measuring)
+          const Center(
+            child: IgnorePointer(
+              child: SizedBox(width: 36, height: 36, child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white)),
+            ),
+          ),
         if (setup.step == ArSetupStep.cornerA || setup.step == ArSetupStep.cornerB)
           Center(
             child: ArSnapPin(
@@ -78,7 +161,8 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
         PositionedDirectional(
           top: widget.topInset + 8,
           start: tablet ? 380 : 16,
-          end: tablet ? 100 : 16,
+          // Landscape phone: stop short of the side-docked card.
+          end: tablet ? 100 : (_landscapePhone(context) ? math.min(380, MediaQuery.sizeOf(context).width * 0.45) + 24 : 16),
           child: _TopChips(setup: setup, session: s),
         ),
         if (tablet && _stepUsesGridRail(setup.step))
@@ -90,7 +174,9 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
         else if (!tablet && _stepUsesGridRail(setup.step))
           PositionedDirectional(
             top: widget.topInset + 64,
-            end: 12,
+            // Landscape phone: the setup card docks on the trailing side.
+            start: _landscapePhone(context) ? 12 : null,
+            end: _landscapePhone(context) ? null : 12,
             child: Column(
               children: [
                 ArGlassButton(
@@ -106,14 +192,16 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
                   active: _planOpen,
                   onTap: () => setState(() => _planOpen = !_planOpen),
                 ),
+                const SizedBox(height: 8),
+                ArGlassButton(icon: ArIcons.focus, label: 'ar.tool.focus'.getString(context), onTap: () => arRefocus(ref)),
               ],
             ),
           ),
         if (!tablet && _planOpen && _stepUsesGridRail(setup.step))
           PositionedDirectional(
             top: widget.topInset + 64,
-            start: 16,
-            end: 72,
+            start: _landscapePhone(context) ? 72 : 16,
+            end: _landscapePhone(context) ? math.min(380, MediaQuery.sizeOf(context).width * 0.45) + 24 : 72,
             child: ArCard(
               padding: const EdgeInsets.all(10),
               radius: 18,
@@ -128,7 +216,20 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
             bottom: 20,
             child: Align(
               alignment: AlignmentDirectional.topStart,
-              child: SingleChildScrollView(child: _animated(card)),
+              child: SingleChildScrollView(child: _animated(shownCard)),
+            ),
+          )
+        else if (_landscapePhone(context))
+          // Landscape phone: a bottom card would cover most of a short view,
+          // pin and crosshair included. Dock it on the trailing side instead.
+          PositionedDirectional(
+            top: widget.topInset + 8,
+            end: 12 + MediaQuery.paddingOf(context).right,
+            bottom: 12 + MediaQuery.paddingOf(context).bottom,
+            width: math.min(380, MediaQuery.sizeOf(context).width * 0.45),
+            child: Align(
+              alignment: AlignmentDirectional.topEnd,
+              child: SingleChildScrollView(child: _animated(shownCard)),
             ),
           )
         else
@@ -138,13 +239,20 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
             bottom: 16 + MediaQuery.paddingOf(context).bottom,
             child: ConstrainedBox(
               constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.66),
-              child: SingleChildScrollView(child: _animated(card)),
+              child: SingleChildScrollView(child: _animated(shownCard)),
             ),
           ),
         if (setup.otherFloorCode != null)
           Positioned.fill(child: _OtherFloorPrompt(setup: setup)),
       ],
     );
+  }
+
+  /// A phone held sideways (the AR screen may rotate; the tablet layout is
+  /// chosen separately by width and height).
+  bool _landscapePhone(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    return size.width > size.height;
   }
 
   bool _stepUsesGridRail(ArSetupStep step) =>
@@ -225,6 +333,10 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
         return _NudgeCard(session: s);
       case ArSetupStep.mismatch:
         return _MismatchCard(session: s);
+      case ArSetupStep.wallTaps:
+        return _WallTapsCard(setup: setup);
+      case ArSetupStep.baseline:
+        return const _BaselineCard();
     }
   }
 }
@@ -261,8 +373,32 @@ class _TopChips extends ConsumerWidget {
         chips.add(ArGlassChip(text: arTr(context, 'ar.lock.locking_onto', [label])));
       case ArSetupStep.boardScan:
         chips.add(ArGlassChip(text: 'ar.board.point_at'.getString(context), icon: ArIcons.board));
+      case ArSetupStep.wallTaps:
+        chips.add(ArGlassChip(
+          text: arTr(context, 'ar.walls.chip', [setup.wallIndex + 1, setup.currentTaps.length]),
+          icon: ArIcons.crosshair,
+        ));
+      case ArSetupStep.baseline:
+        chips.add(ArGlassChip(text: 'ar.baseline.chip'.getString(context), icon: ArIcons.crosshair));
       default:
         break;
+    }
+    // Debug builds only (docs/ar-recording-playback.md).
+    if (session.recordingPath != null) {
+      chips.add(ArGlassChip(
+        text: 'ar.debug.recording'.getString(context),
+        icon: ArIcons.capture,
+        iconColor: FeColors.danger,
+        strong: true,
+        onTap: () => ref.read(arSessionProvider.notifier).debugStopRecording(),
+      ));
+    }
+    if (session.playbackPath != null) {
+      chips.add(ArGlassChip(
+        text: arTr(context, 'ar.debug.replaying', [session.playbackPath!.split('/').last]),
+        icon: ArIcons.resume,
+        onTap: () => ref.read(arSessionProvider.notifier).debugReplay(null),
+      ));
     }
     if (session.tracking == 'limited' || session.tracking == 'initializing') {
       chips.add(ArGlassChip(
@@ -282,10 +418,21 @@ class _TopChips extends ConsumerWidget {
   }
 
   Widget _snappedChip(BuildContext context, DetectedCorner d) => ArStatusBadge(
-    tone: ArBadgeTone.locked,
-    text: arTr(context, 'ar.corner.snapped', [_shape(context, d.kind, d.angleDeg)]),
+    // A floor tap is a rough corner: say so in amber, not a calm green.
+    tone: d.method == 'floorTap' ? ArBadgeTone.placed : ArBadgeTone.locked,
+    text: arTr(context, 'ar.corner.snapped_via', [_shape(context, d.kind, d.angleDeg), _method(context, d.method)]),
   );
 }
+
+/// How a corner was found, for the snapped chip: "walls" (tracked planes),
+/// "LiDAR", "wall taps", "floor tap".
+String _method(BuildContext context, String method) => switch (method) {
+      'lidar' => 'ar.corner.method_lidar'.getString(context),
+      'planes' || 'plane' => 'ar.corner.method_planes'.getString(context),
+      WallFitter.method => 'ar.corner.method_depthtaps'.getString(context),
+      'depth' => 'ar.corner.method_depth'.getString(context),
+      _ => 'ar.corner.method_floortap'.getString(context),
+    };
 
 /// "90° outside corner", "inside 90°", "column edge".
 String _shape(BuildContext context, String kind, double angleDeg) {
@@ -305,7 +452,11 @@ class _GridRail extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Container(
       padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(color: FeArColors.glass, borderRadius: BorderRadius.circular(18)),
+      decoration: BoxDecoration(
+        color: ArChromeStyle.of(context).surface(),
+        borderRadius: BorderRadius.circular(18),
+        border: ArChromeStyle.of(context).border(),
+      ),
       child: _RailTool(
         icon: ArIcons.grid,
         label: 'ar.tool.grid'.getString(context),
@@ -634,14 +785,22 @@ class _CornerACard extends ConsumerWidget {
           ],
           if (snapped != null) ...[
             const SizedBox(height: 10),
-            ArSuccessRow(text: arTr(context, 'ar.corner.snapped', [_shape(context, snapped.kind, snapped.angleDeg)])),
+            ArSuccessRow(
+              text: arTr(context, 'ar.corner.snapped_via', [_shape(context, snapped.kind, snapped.angleDeg), _method(context, snapped.method)]),
+            ),
             if (lidarHidden) ...[
               const SizedBox(height: 6),
               AppText.bodySmall('ar.corner.lidar_note'.getString(context), color: FeColors.ink2),
             ],
           ] else if (!session.demo) ...[
             const SizedBox(height: 10),
-            ArHintRow(text: 'ar.corner.coach'.getString(context)),
+            ArHintRow(text: 'ar.corner.coach_edge'.getString(context)),
+            const SizedBox(height: 6),
+            AppText.bodySmall('ar.corner.coach_texture'.getString(context), color: FeColors.ink2),
+          ],
+          if (!session.demo && setup.offerWallTaps) ...[
+            const SizedBox(height: 10),
+            _WallTapsOffer(onStart: ctrl.startWallTaps),
           ],
           if (session.demo && snapped == null) ...[
             const SizedBox(height: 8),
@@ -741,6 +900,10 @@ class _CornerBCard extends ConsumerWidget {
             const SizedBox(height: 8),
             ArHintRow(text: 'ar.corner.too_close'.getString(context)),
           ],
+          if (!session.demo && setup.offerWallTaps) ...[
+            const SizedBox(height: 10),
+            _WallTapsOffer(onStart: ctrl.startWallTaps),
+          ],
           if (session.demo) ...[
             const SizedBox(height: 8),
             _DemoButton(label: 'ar.demo.snap_b'.getString(context), onTap: ctrl.demoSnap),
@@ -761,6 +924,17 @@ class _CornerBCard extends ConsumerWidget {
           if (plan != null) ...[
             const SizedBox(height: 10),
             SizedBox(height: 170, child: plan),
+          ],
+          // One rough corner (floor tap / wall taps) sets a rough heading:
+          // ask for a far point before anything else.
+          if (!session.demo && setup.wantsBaseline && ambiguous.isEmpty) ...[
+            const SizedBox(height: 12),
+            ArHintRow(text: 'ar.baseline.nudge'.getString(context)),
+            const SizedBox(height: 8),
+            ArSecondaryButton(label: 'ar.baseline.start'.getString(context), icon: ArIcons.crosshair, onPressed: ctrl.startBaseline),
+          ] else if (setup.baselineDone) ...[
+            const SizedBox(height: 12),
+            ArSuccessRow(text: 'ar.baseline.done_short'.getString(context)),
           ],
           const SizedBox(height: 12),
           body,
@@ -1221,6 +1395,151 @@ class _OtherFloorPrompt extends ConsumerWidget {
   }
 }
 
+/// "Walls not detected — tap each wall 3 times near the corner."
+class _WallTapsOffer extends StatelessWidget {
+  const _WallTapsOffer({required this.onStart});
+  final VoidCallback onStart;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ArHintRow(text: 'ar.corner.coach_no_walls'.getString(context)),
+        const SizedBox(height: 8),
+        ArSecondaryButton(label: 'ar.walls.start'.getString(context), icon: ArIcons.crosshair, onPressed: onStart),
+      ],
+    );
+  }
+}
+
+/// Wall taps: 3–5 taps on each wall near the corner; Dart fits the corner.
+class _WallTapsCard extends ConsumerWidget {
+  const _WallTapsCard({required this.setup});
+  final ArSetupState setup;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ctrl = ref.read(arSetupProvider.notifier);
+    final onWallB = setup.wallIndex == 1;
+    final n = setup.currentTaps.length;
+    final enough = n >= WallFitter.minTaps;
+    return ArCard(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: AppText.titleMedium(
+                  arTr(context, 'ar.walls.title', [setup.wallIndex + 1]),
+                  weight: FontWeight.w800,
+                ),
+              ),
+              ArStepDots(count: 2, index: setup.wallIndex),
+            ],
+          ),
+          const SizedBox(height: 4),
+          AppText.bodyMedium(
+            (onWallB ? 'ar.walls.body_b' : 'ar.walls.body_a').getString(context),
+            color: FeColors.ink2,
+          ),
+          const SizedBox(height: 10),
+          _TapCount(label: arTr(context, 'ar.walls.wall_n', [1]), count: setup.tapsA.length, active: !onWallB),
+          _TapCount(label: arTr(context, 'ar.walls.wall_n', [2]), count: setup.tapsB.length, active: onWallB),
+          const SizedBox(height: 6),
+          AppText.bodySmall('ar.walls.hint'.getString(context), color: FeColors.ink2),
+          const SizedBox(height: 14),
+          ArPrimaryButton(
+            label: (onWallB ? 'ar.walls.fit' : 'ar.walls.next').getString(context),
+            icon: onWallB ? ArIcons.check : ArIcons.next,
+            busy: setup.measuring,
+            onPressed: !enough ? null : (onWallB ? ctrl.fitWallCorner : ctrl.nextWall),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ArSecondaryButton(
+                  label: 'ar.walls.undo'.getString(context),
+                  onPressed: (n == 0 && !onWallB) ? null : ctrl.undoWallTap,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: ArSecondaryButton(label: 'ar.common.back'.getString(context), onPressed: ctrl.cancelWallTaps)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TapCount extends StatelessWidget {
+  const _TapCount({required this.label, required this.count, required this.active});
+  final String label;
+  final int count;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final done = count >= WallFitter.minTaps;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: AppText.bodyMedium(label, weight: active ? FontWeight.w800 : FontWeight.w500, color: active ? FeColors.ink : FeColors.ink2),
+          ),
+          for (var i = 0; i < WallFitter.maxTaps; i++)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(start: 6),
+              child: Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: i < count ? (done ? FeColors.success : FeColors.primary) : FeColors.line,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Long baseline: tap a wall's base 2–5 m from corner 1 to fix the heading.
+class _BaselineCard extends ConsumerWidget {
+  const _BaselineCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ctrl = ref.read(arSetupProvider.notifier);
+    final measuring = ref.watch(arSetupProvider.select((s) => s.measuring));
+    return ArCard(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AppText.titleMedium('ar.baseline.title'.getString(context), weight: FontWeight.w800),
+          const SizedBox(height: 4),
+          AppText.bodyMedium('ar.baseline.body'.getString(context), color: FeColors.ink2),
+          const SizedBox(height: 8),
+          AppText.bodySmall('ar.baseline.hint'.getString(context), color: FeColors.ink2),
+          if (measuring) ...[
+            const SizedBox(height: 10),
+            const LinearProgressIndicator(minHeight: 3, color: FeColors.primary, backgroundColor: FeColors.line),
+          ],
+          const SizedBox(height: 14),
+          ArSecondaryButton(label: 'ar.common.back'.getString(context), onPressed: ctrl.cancelBaseline),
+        ],
+      ),
+    );
+  }
+}
+
 class _DemoButton extends StatelessWidget {
   const _DemoButton({required this.label, required this.onTap});
   final String label;
@@ -1238,6 +1557,74 @@ class _DemoButton extends StatelessWidget {
       ),
       icon: const Icon(ArIcons.demo, size: 16),
       label: AppText.label(label, color: FeArColors.placedFg, weight: FontWeight.w700),
+    );
+  }
+}
+
+/// The setup card while scanning: one slim bar, so the camera stays clear.
+class _CollapsedCardBar extends StatelessWidget {
+  const _CollapsedCardBar({required this.onOpen});
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Center(
+          child: ArGlassChip(text: 'ar.setup.double_tap_focus'.getString(context), icon: ArIcons.focus),
+        ),
+        const SizedBox(height: 8),
+        Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: onOpen,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.keyboard_arrow_up_rounded, color: FeColors.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: AppText.label('ar.setup.show_steps'.getString(context), color: FeColors.primary, weight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HideCardChip extends StatelessWidget {
+  const _HideCardChip({required this.onHide});
+  final VoidCallback onHide;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withValues(alpha: 0.92),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onHide,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: FeColors.ink2),
+              const SizedBox(width: 4),
+              AppText.caption('ar.setup.hide_steps'.getString(context), color: FeColors.ink2, weight: FontWeight.w700),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

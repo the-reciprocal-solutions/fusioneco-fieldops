@@ -61,6 +61,18 @@ Entries marked **Source:** were carried over on 2026-09-25 from `fusion-eco-serv
 **Where:** [sync_client.dart](lib/core/offline/sync_client.dart) `syncRequest`, [snag_repository.dart](lib/data/snag_repository.dart) `_send`, `resendStranded`
 
 
+### "Queue empty" is not "nothing unsent"; a replayed 200 can still carry refusals (2026-09-27, P-002 / P-008 (2))
+**What happened:** `logout()` kept a non-empty queue (NFR-1) but otherwise called `OfflineDb.wipe()`. A snag the server refuses (a 4xx on create) is kept on the phone as `local_only=1` so the evidence isn't lost, but it is not queued. So with an empty queue, the next sign-out (the 24h timer, any 401) deleted it and orphaned its photos. Separately, a queued AR `setProgress` replays inside a 200 whose `rejected[]` (four-eyes) nobody read, so the floor kept showing the refused "verified".
+**Fix:**
+- `sign_out_wipe.dart` is a table-by-table plan: server copies go, unsent work stays (`local_only`/`pending` rows, drafts, tag reports, conflicts). `test/sign_out_wipe_test.dart` parses `offline_db.dart` and fails on any unclassified `CREATE TABLE`, so a new table is a decision, not an accident.
+- The flush logs `rejected[]` refusals via `replay_notices.dart`. Only a list of maps counts; alignment events send a numeric `rejected`.
+- `ReplayHooks` re-reads each replayed `ArProgress` floor after the loop.
+**Watch:**
+- Log refusals only on the *replay* path. Online, the caller receives the body and shows them itself, so logging there too would double-report.
+- Hooks run after the loop and swallow errors: the write already synced, and a flush must never throw.
+- The WorkManager engine (`background_sync.dart`) builds its own `SyncClient` with no hooks. Refusals are still logged there, but the floor is re-read only on the next open.
+**State:** 14 new pure tests. Full `flutter test` on 3.47.5: 712 pass. The failures are all pre-existing: `order_detail` 10-minute hangs and `qr_payload` (P-003), and the `bim_viewer_screen` overflow (P-011). Device run owed (P-002, P-008).
+
 ## Auth, session and location gate
 
 ### Location check-in: login flag plus a 428 gate on writes only; there is no silent push (2026-09-15)

@@ -12,6 +12,8 @@ import '../network/api_exception.dart';
 import 'flush_policy.dart';
 import 'offline_db.dart';
 import 'queue_bus.dart';
+import 'replay_hooks.dart';
+import 'replay_notices.dart';
 
 /// The one line shown anywhere a write lands in the offline queue instead of
 /// the server — a note, a photo, a voice recording, a session, a close, an
@@ -97,11 +99,20 @@ class SyncClient {
   /// This client's identity for the cross-engine flush lease ([SyncLease]).
   final String _leaseOwner;
 
+  /// Follow-ups a repository asked for after its queued writes sync
+  /// (P-008 (2): AR progress re-reads the floor). See [onReplayed].
+  final _replayHooks = ReplayHooks();
+
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   Timer? _pollTimer;
   bool _flushing = false;
 
   OfflineDb get db => _db;
+
+  /// Runs [hook] with the entity id of every replayed queued write of
+  /// [entityType], once per id, after a flush. One hook per type.
+  void onReplayed(String entityType, ReplayHook hook) =>
+      _replayHooks.register(entityType, hook);
   QueueBus get bus => _bus;
 
   Future<bool> get isOffline async {
@@ -223,7 +234,14 @@ class SyncClient {
         data: body,
         mutationId: mutationId,
       );
-      await _recordCaptureConflict(response.data, label: label, url: url);
+      // Online, the caller gets the body and shows any refusals itself, so
+      // only the informational capture conflict is logged here.
+      await _recordReplayNotices(
+        response.data,
+        label: label,
+        url: url,
+        includeRefusals: false,
+      );
       return SyncedWrite(synced: true, data: response.data);
     } on HttpFailure catch (e) {
       if (!queueOnServerError || e.status < 500) rethrow;
@@ -321,6 +339,7 @@ class SyncClient {
     try {
       final pending = await _db.listMutations();
       if (pending.isEmpty) return;
+      final replayed = <ReplayedWrite>[];
 
       final stopIndex = stopAfterId == null
           ? -1
@@ -365,12 +384,17 @@ class SyncClient {
             data: body,
             mutationId: mutation.clientMutationId,
           );
-          await _recordCaptureConflict(
+          // Replayed from the queue, nobody is waiting on this body: a
+          // per-item refusal inside the 200 (P-008 (2), four-eyes) is logged
+          // here or the technician never hears of it.
+          await _recordReplayNotices(
             response.data,
             label: mutation.label,
             url: mutation.url,
+            includeRefusals: true,
           );
           await _db.deleteMutation(mutation.clientMutationId);
+          replayed.add((entityType: mutation.entityType, entityId: mutation.entityId));
           changed = true;
         } on NetworkFailure {
           break;
@@ -417,6 +441,8 @@ class SyncClient {
         _bus.notify();
         if (mutation.clientMutationId == stopAfterId) break;
       }
+      // After the loop, so a slow re-read never holds up the drain.
+      await _replayHooks.runFor(replayed);
     } finally {
       _flushing = false;
       await _db.releaseFlushLease(_leaseOwner);
@@ -459,30 +485,30 @@ class SyncClient {
     return url;
   }
 
-  /// FR-4.8 — a successful verify response can carry a `captureConflict`:
-  /// the register moved between when the technician looked at it and when
-  /// this request actually reached the server (the whole point of an
-  /// offline queue is that gap can be hours). The write already succeeded —
-  /// this is purely informational, so it lands in the same local conflict
-  /// log as a dropped mutation but flagged `dropped: false`, which the Sync
-  /// Center renders as "flagged" rather than "could not be saved".
-  Future<void> _recordCaptureConflict(
+  /// What a successful response still has to tell the technician, logged in
+  /// the local conflict log the Sync Center shows (`replay_notices.dart`):
+  /// FR-4.8 `captureConflict` (the register moved while the write was queued;
+  /// informational, `dropped: false`) and, with [includeRefusals], per-item
+  /// refusals in `rejected[]` (P-008 (2); `dropped: true`).
+  Future<void> _recordReplayNotices(
     dynamic responseData, {
     required String label,
     required String url,
+    required bool includeRefusals,
   }) async {
-    final body = responseData is Map
-        ? (responseData['data'] is Map ? responseData['data'] : responseData)
-        : null;
-    final conflict = body is Map ? body['captureConflict'] : null;
-    final message = conflict is Map ? conflict['message'] : null;
-    if (message is! String || message.isEmpty) return;
-    await _db.addConflict(
-      label: label,
-      url: url,
-      reason: message,
-      dropped: false,
-    );
+    final notices = [
+      for (final n in replayNoticesFrom(responseData))
+        if (includeRefusals || !n.dropped) n,
+    ];
+    if (notices.isEmpty) return;
+    for (final n in notices) {
+      await _db.addConflict(
+        label: label,
+        url: url,
+        reason: n.reason,
+        dropped: n.dropped,
+      );
+    }
     _bus.notify();
   }
 

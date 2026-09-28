@@ -8,6 +8,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../c2o/route_pack.dart' show RouteScope;
 import 'flush_policy.dart' show SyncLease;
+import 'sign_out_wipe.dart';
 
 /// One queued upload inside a [PendingMutation] — a photo, a voice note, a
 /// face capture. Uploaded independently on flush and its own [placeholder]
@@ -649,7 +650,8 @@ class OfflineDb
         VerificationDraftStore,
         RoutePackStore,
         SnagStore,
-        ArPackStore {
+        ArPackStore,
+        WipeExecutor {
   OfflineDb._(this._db);
 
   static const _fileName = 'fusion_eco_offline.db';
@@ -1626,6 +1628,16 @@ class OfflineDb
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// Sign-out wipe (PENDING P-002): clears server copies, keeps unsent work
+  /// — see `sign_out_wipe.dart` for the table-by-table rule.
+  Future<void> wipeForSignOut() => runSignOutWipe(this);
+
+  @override
+  Future<void> deleteRows(String table, {String? where}) =>
+      _db.delete(table, where: where);
+
+  /// Deletes EVERYTHING, unsent work included (local-only snags, drafts, the
+  /// conflict log). Not for sign-out — use [wipeForSignOut].
   Future<void> wipe() async {
     await _db.delete('pending_mutations');
     await _db.delete('cached_entities');

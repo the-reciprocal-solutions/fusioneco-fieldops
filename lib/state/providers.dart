@@ -183,13 +183,21 @@ final arEngineProvider = Provider<ArEngine>((ref) => ChannelArEngine());
 
 /// AR floor packs, board resolution and AR writes — offline-first like every
 /// other repository here (manifest/tiles/markers cached, writes queued).
-final arRepositoryProvider = Provider<ArRepository>(
-  (ref) => ArRepository(
+final arRepositoryProvider = Provider<ArRepository>((ref) {
+  final sync = ref.watch(syncClientProvider);
+  final repo = ArRepository(
     api: ref.watch(apiClientProvider),
-    sync: ref.watch(syncClientProvider),
+    sync: sync,
     store: ref.watch(arPackStoreProvider),
-  ),
-);
+  );
+  // P-008 (2): a queued progress write can replay into a 200 whose
+  // `rejected[]` (four-eyes) the phone never saw, so the floor kept showing
+  // the refused status. Re-read each replayed floor right after the flush —
+  // the queue no longer holds it, so the server's copy wins. (The refusal
+  // itself lands in the Sync Center via the flush's replay notices.)
+  sync.onReplayed(kArProgressEntity, (floorId) => repo.fetchProgress(floorId));
+  return repo;
+});
 
 /// The AR pack tables (schema v10) live in the offline DB.
 final arPackStoreProvider = Provider<ArPackStore>((ref) => ref.watch(offlineDbProvider));

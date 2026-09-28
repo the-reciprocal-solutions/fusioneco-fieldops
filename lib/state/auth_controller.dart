@@ -125,8 +125,11 @@ class AuthController extends Notifier<AuthState> {
     // disk (still encrypted at rest) so the next sign-in on this device can
     // finish draining it — wiping here would silently lose whatever a
     // technician captured underground and hadn't synced yet.
+    // P-002: an empty queue is not "nothing unsent" — a snag the server
+    // refused stays on the phone as local_only without a queued write, and
+    // so do capture drafts and the conflict log. Only server copies go.
     if (await ref.read(offlineDbProvider).countMutations() == 0) {
-      await ref.read(offlineDbProvider).wipe();
+      await ref.read(offlineDbProvider).wipeForSignOut();
     }
     state = const AuthState();
   }

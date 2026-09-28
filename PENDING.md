@@ -26,14 +26,6 @@ Next number: **P-018**
 
 ## Open
 
-### P-017 · AR Sunlight mode (high-contrast chrome + model contrast): not run on a device
-- **Status:** done 2026-09-27 (lead switched the tablet grid rail box to ArChromeStyle) · was: needs verification · **Priority:** P2 · **Area:** AR (`lib/features/ar/widgets/ar_sunlight.dart`, `ar_chrome.dart`, workspace rails/legend/labels/drill, `lib/state/ar_prefs_controller.dart`)
-- **Found:** 2026-09-27 (field request: glass chrome unreadable in sunlight)
-- **Done so far:** persisted pref `ArPrefsState.sunlight` (`ar_prefs` key `sunlight`), toggles in Menu → View, the phone's More panel and the method chooser's title row; `ArChromeStyle.of(context)` read by every camera-floating control; `ArSunlightHost` on `ArSessionScreen` and `ArMarkerScreen`. `test/ar_sunlight_test.dart` (12) + all `test/ar_*_test.dart` pass on Flutter 3.47.5; analyze clean on touched files.
-- **Left:** a bright-site device check (is 92 % enough; do outlines read); the lead's native model-colour boost reading `arPrefsProvider.select((s) => s.sunlight)`; setup-overlay side buttons get the style centrally, but its own inline glass box (`ar_setup_overlay.dart:454`) was left as glass (overlay was locked to another session).
-- **Where:** lib/features/ar/widgets/ar_sunlight.dart, lib/features/ar/workspace/ar_menu_panel.dart, lib/features/ar/setup/ar_method_chooser.dart
-- **Next step:** run the AR demo outdoors with Sunlight on; then convert the setup overlay's leftover glass box.
-
 ### P-016 · AR accuracy round (2026-09-27): built, not yet run on a device
 - **Status:** built · **Priority:** P1 · **Area:** AR (Android, iOS, server, web)
 - **Found:** 2026-09-27 (GAMMA research: LiDAR-only corner snap/drift correction; Android needs other methods)
@@ -50,14 +42,26 @@ Next number: **P-018**
 > - **Server:** P-044…P-061.
 > - **Client:** P-035…P-039.
 
-### P-015 · Board AprilTag lock (method `tag`): never run on a device; iOS and Dart halves owed
-- **Status:** needs verification · **Priority:** P2 · **Area:** AR / fe_ar markers
-- **Found:** 2026-09-27 (agent B, board fiducials; docs/ar-markers-and-qr.md §2.4)
-- **Done so far:** vendored AprilTag 3 (tag36h11, BSD-2) + `fe_tag.c` (ids, detector wrapper, planar PnP) with laptop tests on rendered boards (`src/test/fe_tag_test.c`, also under ASan/UBSan); JNI + CMake; `MarkerDetector.kt` tag path (20–30 samples, 10 mm spread, print-scale distrust); Gradle `compileDebugKotlin` + `externalNativeBuildDebug` pass; the server PDF rasterised at 300 dpi decodes with the right ids and 22.00 mm tags.
-- **Left:** (1) device run: lock on a printed A4 board, compare `method: tag` vs `plane` centres and spread, check detection range at the phone's real CPU-image size and the tag-thread cost; (2) merge `packages/fe_ar/CHANNEL.agentB.md` into CHANNEL.md; (3) `ArSigma.forMarker` + `ar_setup_controller.dart` `_markerObs` handle `tag` (diff in agent B's report); (4) iOS: a Classes shim including `../../src/fe_tag.c` + `../../src/fe_apriltag_unity.c` and the same pipeline in `FeArMarkerDetector.swift` (podspec header path already added).
-- **Why deferred:** no device install in that session; the Dart and iOS files belong to other agents.
-- **Where:** packages/fe_ar/src/fe_tag.c, packages/fe_ar/android/src/main/kotlin/com/fusionapps/fe_ar/MarkerDetector.kt, lib/core/ar/alignment_estimator.dart:33
-- **Next step:** print one A4 spare board at 100 %, lock it at 0.5, 1 and 1.5 m and read the `marker` events.
+### P-017 · AR Sunlight mode (high-contrast chrome + model contrast): not run on a device
+- **Status:** done 2026-09-27 (lead switched the tablet grid rail box to ArChromeStyle) · was: needs verification · **Priority:** P2 · **Area:** AR (`lib/features/ar/widgets/ar_sunlight.dart`, `ar_chrome.dart`, workspace rails/legend/labels/drill, `lib/state/ar_prefs_controller.dart`)
+- **Found:** 2026-09-27 (field request: glass chrome unreadable in sunlight)
+- **Done so far:** persisted pref `ArPrefsState.sunlight` (`ar_prefs` key `sunlight`), toggles in Menu → View, the phone's More panel and the method chooser's title row; `ArChromeStyle.of(context)` read by every camera-floating control; `ArSunlightHost` on `ArSessionScreen` and `ArMarkerScreen`. `test/ar_sunlight_test.dart` (12) + all `test/ar_*_test.dart` pass on Flutter 3.47.5; analyze clean on touched files.
+- **Left:** a bright-site device check (is 92 % enough; do outlines read); the lead's native model-colour boost reading `arPrefsProvider.select((s) => s.sunlight)`; setup-overlay side buttons get the style centrally, but its own inline glass box (`ar_setup_overlay.dart:454`) was left as glass (overlay was locked to another session).
+- **Where:** lib/features/ar/widgets/ar_sunlight.dart, lib/features/ar/workspace/ar_menu_panel.dart, lib/features/ar/setup/ar_method_chooser.dart
+- **Next step:** run the AR demo outdoors with Sunlight on; then convert the setup overlay's leftover glass box.
+
+### P-014 · [HIGH · Phase 0] No CI: `flutter analyze` + `flutter test` on every push
+- **Status:** not started · **Priority:** P1 · **Area:** tooling
+- **Found:** 2026-09-27 (no `.github/workflows`, `codemagic.yaml` or other CI config)
+- **Done so far:** real runs happen by hand on the slim Flutter 3.47.5 SDK in the session scratchpad (LEARNINGS → Platform, 2026-09-26).
+- **Left:**
+  - A pipeline pinned to Flutter 3.47.5: `flutter pub get --enforce-lockfile`, `flutter analyze`, `flutter test`.
+  - First fix or quarantine the three failures on HEAD and the ~10-minute hang (P-003).
+  - Leave the `packages/fe_ar` native build out of CI for now.
+  - Server CI is server P-047; client CI is client P-035.
+- **Why deferred:** the git host is not confirmed; the user pushes the workflow file.
+- **Where:** new `.github/workflows/ci.yml` (or `codemagic.yaml`)
+- **Next step:** fix P-003, then write the workflow file locally.
 
 ### P-013 · Permit to Work (PTW): never run on a device, no live API run
 - **Status:** needs verification · **Priority:** P2 · **Area:** Permit to Work (`lib/domain/permit.dart`, `lib/core/permit/permit_gas.dart`, `lib/data/permit_repository.dart`, `lib/state/permit_controller.dart`, `lib/features/permits/**`)
@@ -163,8 +167,8 @@ Next number: **P-018**
 - **Next step:** `progressEvents` (no contract change: fe_ar already emits it).
 
 
-### P-003 · Three existing tests fail on unmodified HEAD
-- **Status:** not started · **Priority:** P3 · **Area:** tests
+### P-003 · [HIGH · Phase 0, CI prerequisite] Three existing tests fail on unmodified HEAD
+- **Status:** not started · **Priority:** P1 (raised 2026-09-27: blocks CI, FieldOps P-014) · **Area:** tests
 - **Found:** 2026-09-26 (first real `flutter test` run on Flutter 3.47.5; reproduced on a `git archive HEAD` copy)
 - **Done so far:** reproduced on unmodified HEAD, so these failures come from the existing code, not from the Snag Assistant.
 - **Left:**
@@ -184,8 +188,16 @@ Next number: **P-018**
 - **Where:** [snag_walk_screen.dart](lib/features/snags/snag_walk_screen.dart), [ghost_camera_screen.dart](lib/features/snags/ghost_camera_screen.dart), [snag_repository.dart](lib/data/snag_repository.dart)
 - **Next step:** apply server P-010, then run a 20-snag walk in airplane mode, go online, and check the Sync Center drains and the hub loses its "On device" badges.
 
-### P-002 · Snag Assistant: logout wipes unsynced snags, like the queue
-- **Status:** not started · **Priority:** P1 · **Area:** Snag Assistant / offline
+### P-002 · [HIGH · Phase 0] Snag Assistant: logout wipes unsynced snags, like the queue
+- **Status:** needs verification · **Priority:** P1 · **Area:** Snag Assistant / offline
+- **2026-09-27 — fixed in code:**
+  - `logout()` now calls `OfflineDb.wipeForSignOut()` instead of `wipe()` when the queue is empty.
+  - The plan is in `lib/core/offline/sign_out_wipe.dart`. It clears server copies, but keeps `local_only=1` snags, snag surveys and AR markers, AR progress still `pending=1`, capture drafts, tag-issue reports and the conflict log.
+  - `test/sign_out_wipe_test.dart` (6 tests, written first) also fails if any `CREATE TABLE` in `offline_db.dart` is left unclassified.
+  - `flutter analyze` is clean on the touched files (Flutter 3.47.5).
+  - **Left:**
+    - A device run: raise a snag the server refuses, let the 24h session expire, sign back in, and check the snag and its photos are still there.
+    - Rows kept for a *different* user are not filtered (phones are personally issued; improvements #11 owner column).
 - **Found:** 2026-09-26 (Snag Assistant build)
 - **Done so far:** `OfflineDb.wipe()` clears `snags` and `snag_surveys` together with the queue, which is consistent with improvements.md's queue-wipe P1.
 - **Left:** fix together with that P1. A surveyor whose 24h session expires mid-walk loses every snag not yet synced (the photo files under `snag_media/own/` survive, but nothing points at them).
@@ -193,6 +205,15 @@ Next number: **P-018**
 - **Where:** [offline_db.dart](lib/core/offline/offline_db.dart) `wipe()`
 - **Next step:** when improvements.md's logout P1 is fixed, keep `local_only=1` snag rows and their surveys through a re-login by the same user.
 
+
+### P-015 · Board AprilTag lock (method `tag`): never run on a device; iOS and Dart halves owed
+- **Status:** needs verification · **Priority:** P2 · **Area:** AR / fe_ar markers
+- **Found:** 2026-09-27 (agent B, board fiducials; docs/ar-markers-and-qr.md §2.4)
+- **Done so far:** vendored AprilTag 3 (tag36h11, BSD-2) + `fe_tag.c` (ids, detector wrapper, planar PnP) with laptop tests on rendered boards (`src/test/fe_tag_test.c`, also under ASan/UBSan); JNI + CMake; `MarkerDetector.kt` tag path (20–30 samples, 10 mm spread, print-scale distrust); Gradle `compileDebugKotlin` + `externalNativeBuildDebug` pass; the server PDF rasterised at 300 dpi decodes with the right ids and 22.00 mm tags.
+- **Left:** (1) device run: lock on a printed A4 board, compare `method: tag` vs `plane` centres and spread, check detection range at the phone's real CPU-image size and the tag-thread cost; (2) merge `packages/fe_ar/CHANNEL.agentB.md` into CHANNEL.md; (3) `ArSigma.forMarker` + `ar_setup_controller.dart` `_markerObs` handle `tag` (diff in agent B's report); (4) iOS: a Classes shim including `../../src/fe_tag.c` + `../../src/fe_apriltag_unity.c` and the same pipeline in `FeArMarkerDetector.swift` (podspec header path already added).
+- **Why deferred:** no device install in that session; the Dart and iOS files belong to other agents.
+- **Where:** packages/fe_ar/src/fe_tag.c, packages/fe_ar/android/src/main/kotlin/com/fusionapps/fe_ar/MarkerDetector.kt, lib/core/ar/alignment_estimator.dart:33
+- **Next step:** print one A4 spare board at 100 %, lock it at 0.5, 1 and 1.5 m and read the `marker` events.
 
 ## Closed
 

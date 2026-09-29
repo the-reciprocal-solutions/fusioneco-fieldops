@@ -22,9 +22,51 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-018**
+Next number: **P-024**
 
 ## Open
+
+### P-023 · Permit Field Companion + Work-Front Crew Check screens (plan use cases #2/#3)
+- **Status:** not started · **Priority:** P2 · **Area:** permits / FieldOps agent surface
+- **Found:** 2026-09-29 (`../docs/fieldops-agentic-workforce-plan-2026-09.md` §2 #2–#3; `../docs/research/fieldops-agentic-2026-09/`R4-field-usecases.md FM05, C08)
+- **Done so far:** permits flows exist (`lib/data/permit_repository.dart`), server computes readiness.
+- **Left:** a co-pilot view for the permit holder (check order, 12 h clock, gas-test limits, change-of-scope stop; never signs) and a zone crew check (live permit + valid card + legal hour per person). Needs server permit read skills for agents (server P-112) and zone-to-reader mapping.
+- **Next step:** after server P-112.
+
+### P-022 · Day plan + pre-job brief (plan use case #7)
+- **Status:** not started · **Priority:** P2 · **Area:** FieldOps agent surface
+- **Found:** 2026-09-29 (`../docs/fieldops-agentic-workforce-plan-2026-09.md` §2 #7; `../docs/research/fieldops-agentic-2026-09/`R4-field-usecases.md FM01)
+- **Done so far:** dashboard/calendar are client-side views over orders (`lib/state/dashboard_controller.dart:47`); no brief.
+- **Left:** a day plan screen fed by the Day Planner agent (server P-112) and a 30-second pre-job brief (last fixes, likely cause, parts, permit/access needed).
+- **Next step:** after server P-112.
+
+### P-021 · Voice-to-record: no speech-to-text in FieldOps
+- **Status:** not started · **Priority:** P2 · **Area:** voice
+- **Found:** 2026-09-29 (`../docs/research/fieldops-agentic-2026-09/`R3-fieldops-integration-map.md point 2; `../docs/research/fieldops-agentic-2026-09/`R1-field-copilots-market.md §speech)
+- **Done so far:** voice notes are audio files only (`lib/features/field_verification/voice_note_capture.dart:18-31` documents why on-device STT was abandoned); no `speech_to_text` plugin.
+- **Left:** push-to-talk → server STT (server P-111) → read-back-and-confirm draft of the WO update.
+- **Next step:** after server P-111.
+
+### P-020 · Lone-worker check-in (ADOSH-SF CoP 30) absent
+- **Status:** not started · **Priority:** P2 · **Area:** safety
+- **Found:** 2026-09-29 (`../docs/research/fieldops-agentic-2026-09/`R4-field-usecases.md FM08; `../docs/research/fieldops-agentic-2026-09/`R2-agentic-workforce.md; `../docs/fieldops-agentic-workforce-plan-2026-09.md` decision 5)
+- **Left:** no SOS/panic/man-down or check-in schedule anywhere in `lib/` (inventory 2026-09-29). Build as a fixed-rule feature (daily work plan, named contact + backup, check-in schedule, missed check-in → call → contact → backup). Must work on locked screens; iOS must ship before go-live (decision 4).
+- **Next step:** owner decisions 4–5, then spec with server P-109.
+
+### P-019 · Proof-of-work closeout: gallery photos allowed, QR not tied to the job (plan use case #1)
+- **Status:** not started · **Priority:** P2 · **Area:** close / capture
+- **Found:** 2026-09-29 (`../docs/research/fieldops-agentic-2026-09/`R4-field-usecases.md V08/V09; `../docs/fieldops-agentic-workforce-plan-2026-09.md` §2 #1, decision 12)
+- **Left:** capture still offers the gallery (`lib/core/capture/capture_services.dart:132`, `:150`); closeout doesn't require a QR scan at the job's asset, has no photo fingerprint (reuse) check and no blind reading vs BMS. Server side: server P-115.
+- **Why deferred:** decision 12 (block gallery by default with a per-customer toggle).
+- **Next step:** owner decision 12.
+
+### P-018 · No agent surface in FieldOps (inbox, Ask card, answers, push routing)
+- **Status:** not started · **Priority:** P2 · **Area:** Flow Agents integration
+- **Found:** 2026-09-29 (`../docs/research/fieldops-agentic-2026-09/`R3-fieldops-integration-map.md points 1, 6–8; `../docs/fieldops-agentic-workforce-plan-2026-09.md` §3, §5; design board `../docs/designs/orbit-cockpit-2026-09/png/FieldQueue.png`)
+- **Done so far:** push (`lib/core/push/push_service.dart`), offline queue, capture exist; web preview of the queue at `fusion-eco-client/app/flow-agents/field`.
+- **Left:** the app never calls `/api/flow-agents/*`; agent pushes are dropped (`lib/core/utils/notification_route.dart:27` returns null for `conversation`, and there's no route for agent drafts/asks in either routing table, `push_service.dart:110`). Build: technician inbox (assigned drafts), Ask card with reading/photo/QR answers (offline-queued), routing entries. Server: P-105–P-108.
+- **Prerequisites (phase 0, findings stay in `docs/improvements.md`):** #2 replay order after 5xx, #11 queue replays under the next signed-in user, #32 silent push setup failure; P-014 CI.
+- **Next step:** phase 0 fixes, then server P-105/P-106.
 
 ### P-016 · AR accuracy round (2026-09-27): built, not yet run on a device
 - **Status:** built · **Priority:** P1 · **Area:** AR (Android, iOS, server, web)

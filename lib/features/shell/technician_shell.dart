@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
 import '../../state/auth_controller.dart';
+import '../../state/notifications_controller.dart';
 import '../../state/providers.dart';
 import '../../state/socket_controller.dart';
 import '../../theme/fe_colors.dart';
@@ -71,6 +72,13 @@ class _TechnicianShellState extends ConsumerState<TechnicianShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(ref.read(syncClientProvider).flushQueue());
+      // Backstop for anything the socket missed while backgrounded (agent
+      // replies, schedule started/done/failed): FCM draws the tray banner,
+      // but the bell and an already-open list only learn of it here.
+      ref.invalidate(unseenNotificationCountProvider);
+      if (ref.exists(notificationsControllerProvider)) {
+        unawaited(ref.read(notificationsControllerProvider.notifier).refresh());
+      }
     }
   }
 

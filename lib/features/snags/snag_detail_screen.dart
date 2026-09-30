@@ -12,6 +12,7 @@ import '../../core/capture/capture_services.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/snag/snag_rules.dart';
 import '../../data/snag_repository.dart';
+import '../../domain/conversation.dart';
 import '../../domain/snag.dart';
 import '../../state/snag_controller.dart';
 import '../../theme/fe_colors.dart';
@@ -20,6 +21,7 @@ import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../../widgets/tech_popup.dart';
 import '../../widgets/voice_note_player.dart';
+import '../conversation/conversation_preview_card.dart';
 import 'ghost_camera_screen.dart';
 import 'snag_plan_screen.dart';
 import 'widgets/snag_sheets.dart';
@@ -28,8 +30,12 @@ import 'widgets/snag_visuals.dart';
 /// UC-10 — one snag: its photos, where it is, where it is in its life, and
 /// the one or two things the viewer can do about it right now.
 class SnagDetailScreen extends ConsumerStatefulWidget {
-  const SnagDetailScreen({super.key, required this.snagId});
+  const SnagDetailScreen({super.key, required this.snagId, this.messageId});
   final String snagId;
+
+  /// A notification deep link to one message (`/snags/<id>?message=<mid>`):
+  /// the thread opens on top, scrolled to it.
+  final String? messageId;
 
   @override
   ConsumerState<SnagDetailScreen> createState() => _SnagDetailScreenState();
@@ -37,12 +43,16 @@ class SnagDetailScreen extends ConsumerStatefulWidget {
 
 class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
   var _busy = false;
-  final _comment = TextEditingController();
 
   @override
-  void dispose() {
-    _comment.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    final message = widget.messageId;
+    if (message != null && message.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.push(Routes.conversation(ConvEntity.snag.wire, widget.snagId, messageId: message));
+      });
+    }
   }
 
   Future<void> _run(Future<SnagWriteResult> Function(SnagRepository repo, SnagActor actor) op) async {
@@ -99,14 +109,6 @@ class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
     final photo = await PhotoCapture().takeJobPhoto();
     if (photo == null || !mounted) return;
     await _run((repo, a) => repo.addEvidence(s, a, photos: [photo]));
-  }
-
-  Future<void> _sendComment(Snag s) async {
-    final text = _comment.text.trim();
-    if (text.isEmpty) return;
-    _comment.clear();
-    FocusScope.of(context).unfocus();
-    await _run((repo, a) => repo.comment(s, a, text));
   }
 
   @override
@@ -270,29 +272,31 @@ class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
                         ),
                       ),
                     const SizedBox(height: 16),
+                    // The snag's comments ARE its conversation (server:
+                    // the thread is this snag's `activity` comments, see
+                    // documentation/conversations.md "Stores"), so they show
+                    // in the Conversation card and the timeline keeps the
+                    // life events only. A snag still only on this phone has
+                    // no server thread yet.
+                    if (s.localOnly)
+                      TechCard(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            const Icon(LucideIcons.messagesSquare, size: 18, color: FeColors.ink2),
+                            const SizedBox(width: 8),
+                            Expanded(child: AppText.bodySmall('conv.snag_local_only'.getString(context))),
+                          ],
+                        ),
+                      )
+                    else
+                      ConversationPreviewCard(entity: ConvEntity.snag, id: s.id),
+                    const SizedBox(height: 16),
                     AppText.titleMedium('snags.activity'.getString(context)),
                     const SizedBox(height: 8),
-                    _Timeline(activity: s.activity),
-                    const SizedBox(height: 12),
-                    if (!s.localOnly)
-                      TextField(
-                        controller: _comment,
-                        minLines: 1,
-                        maxLines: 4,
-                        decoration: InputDecoration(
-                          hintText: 'snags.comment_hint'.getString(context),
-                          filled: true,
-                          fillColor: FeColors.panel,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: FeColors.line),
-                          ),
-                          suffixIcon: IconButton(
-                            icon: const Icon(LucideIcons.send, color: FeColors.primary),
-                            onPressed: _busy ? null : () => _sendComment(s),
-                          ),
-                        ),
-                      ),
+                    _Timeline(
+                      activity: s.localOnly ? s.activity : s.activity.where((a) => a.type != 'comment').toList(),
+                    ),
                   ],
                 ),
               ),

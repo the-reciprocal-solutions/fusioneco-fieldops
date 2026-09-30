@@ -11,6 +11,7 @@ import '../features/ar/install/ar_install_list_screen.dart';
 import '../features/asset_detail/asset_detail_screen.dart';
 import '../features/c2o_search/c2o_asset_search_screen.dart';
 import '../features/calendar/calendar_screen.dart';
+import '../features/conversation/conversation_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
 import '../features/field_verification/field_verification_screen.dart';
 import '../features/floor_plan/floor_plan_screen.dart';
@@ -32,6 +33,7 @@ import '../features/profile/profile_screen.dart';
 import '../features/routes/route_detail_screen.dart';
 import '../features/routes/route_list_screen.dart';
 import '../features/scanner/scanner_screen.dart';
+import '../features/schedules/my_schedules_screen.dart';
 import '../features/shell/technician_shell.dart';
 import '../features/snags/snag_detail_screen.dart';
 import '../features/snags/snag_hub_screen.dart';
@@ -73,6 +75,27 @@ abstract final class Routes {
   static const inspections = '/inspections';
 
   static String orderDetail(String type, String id) => '/orders/$type/$id';
+
+  // Conversations + schedules (docs/conversations-and-schedules.md). The
+  // server's conversation links point at web admin pages; they are mapped
+  // onto these in `core/conversation/conversation_links.dart`.
+
+  /// A work order's thread lives in its detail screen's Comments tab.
+  static String orderConversation(String id, {String? messageId}) => Uri(
+    path: '/orders/work-order/$id',
+    queryParameters: {'tab': 'comments', 'message': ?messageId},
+  ).toString();
+
+  /// Any record's thread, full screen. [entity] is the server's key
+  /// (`snag`, `work_order`, `permit`, …).
+  static String conversation(String entity, String id, {String? messageId}) => Uri(
+    path: '/conversations/$entity/$id',
+    queryParameters: messageId == null ? null : {'message': messageId},
+  ).toString();
+
+  /// My schedules; [focus] outlines one (a schedule notification's target).
+  static String schedules({String? focus}) =>
+      Uri(path: '/schedules', queryParameters: focus == null ? null : {'focus': focus}).toString();
   static String inspectionDetail(String id) => '/inspections/$id';
   static String twin(String assetId) => '/twin/$assetId';
 
@@ -333,7 +356,30 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => OrderDetailScreen(
           orderType: state.pathParameters['type'] ?? 'work-order',
           orderId: state.pathParameters['id'] ?? '',
+          initialTab: state.uri.queryParameters['tab'],
+          messageId: state.uri.queryParameters['message'],
         ),
+      ),
+      GoRoute(
+        path: '/conversations/:entity/:id',
+        parentNavigatorKey: _rootKey,
+        builder: (context, state) => ConversationScreen(
+          entityWire: state.pathParameters['entity'] ?? '',
+          id: state.pathParameters['id'] ?? '',
+          messageId: state.uri.queryParameters['message'],
+        ),
+      ),
+      GoRoute(
+        path: '/schedules',
+        parentNavigatorKey: _rootKey,
+        builder: (context, state) => MySchedulesScreen(focusId: state.uri.queryParameters['focus']),
+      ),
+      // The server's technician schedule link `/technician/schedules/<id>`
+      // (C3 `technicianScheduleHref`) maps here through the prefix strip.
+      GoRoute(
+        path: '/schedules/:id',
+        parentNavigatorKey: _rootKey,
+        builder: (context, state) => MySchedulesScreen(focusId: state.pathParameters['id']),
       ),
       GoRoute(
         path: Routes.inspections,
@@ -478,7 +524,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/snags/:id',
         parentNavigatorKey: _rootKey,
-        builder: (context, state) => SnagDetailScreen(snagId: state.pathParameters['id'] ?? ''),
+        builder: (context, state) => SnagDetailScreen(
+          snagId: state.pathParameters['id'] ?? '',
+          messageId: state.uri.queryParameters['message'],
+        ),
       ),
       // Permit to Work — the fixed segments must stay above `/permits/:id`.
       GoRoute(

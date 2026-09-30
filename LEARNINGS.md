@@ -107,6 +107,10 @@ Entries marked **Source:** were carried over on 2026-09-25 from `fusion-eco-serv
 **What happened:** the entityType fallback branch (used only when a notification carries no `link`) checked `entityType == 'Permit'`, but `ptwService.ts` actually stamps `entityType: "PermitToWork"` on every permit notification it creates. Since technician permit notifications always carry a `/technician/permits/<id>` link too, the bug was latent — the link branch always won first — but any future link-less PTW notification (or a push payload trimmed to just `entityId`/`entityType`) would have silently gone nowhere. **Fix:** both `routeForNotification` (`core/utils/notification_route.dart`) and `_routeForPushData` (`core/push/push_service.dart`) now accept `'Permit'` **or** `'PermitToWork'`. **What to watch:** always grep the server's actual `entityType:` string literal (`grep -rn "entityType" ../fusion-eco-server/src/services/**/*.ts`) rather than assuming a route/module name matches the model name — the two are named differently for PTW (`Permit` the Dart-side entity, `PermitToWork` the server's notification stamp).
 **Where:** `lib/core/utils/notification_route.dart`, `lib/core/push/push_service.dart`, `../fusion-eco-server/src/services/ptw/ptwService.ts:382`
 
+### Conversation notifications carry web admin links, which the `/technician` rule drops (2026-09-30)
+**What happened:** the server's conversation notifications (`services/conversations/notify.ts`) stamp `entityType = conversation:<entity>:<mention|reply|message>` and a **web admin** link such as `/facility-management/snags?snag=<id>&message=<mid>`. Both routing tables return null for any non-`/technician` link, and the old `entityType == 'conversation'` rule (the AI-chat type) returns null too. So every agent reply or mention push would have opened nothing. **Fix:** `core/conversation/conversation_links.dart` `conversationRouteFor()` runs **first** in both `routeForNotification` and `_routeForPushData`. It handles `conversation:*`, `session:*` and `schedule:*`, maps web record links onto this app's thread routes, and keeps the `message=` id for the scroll-to. Because it is one shared function, these types can't drift between the two tables. **What to watch:** a new notification family whose server link is a web page needs the same treatment. Test it with a real server link string, as in `test/conversation_links_test.dart`, not a made-up `/technician` one.
+**Where:** `lib/core/conversation/conversation_links.dart`, `lib/core/utils/notification_route.dart`, `lib/core/push/push_service.dart`
+
 ---
 
 ## Maintenance orders: checklists, close, invites, AI chat
@@ -239,6 +243,12 @@ Entries marked **Source:** were carried over on 2026-09-25 from `fusion-eco-serv
 **What happened:** adding keys with `json.load` → `json.dump` removed the blank-line grouping in `en.json`/`ar.json` and produced a 72-line diff in strings nobody touched.
 **Fix:** append new keys to the file as text before the closing `}`, then re-parse only to validate.
 **What to watch:** check `git diff --stat assets/i18n/` after any scripted key addition. Only your own lines, plus one comma, should change.
+
+### `DateFormat(..., 'en')` or `'ar'` throws on device: the app never initialises intl locale data (2026-09-30)
+**What happened:** the schedule card passed `Localizations.localeOf(context).languageCode` to `DateFormat.EEEE(locale)` / `MMMEd(locale)` so that day names would follow the app language. `test/schedule_cadence_test.dart` failed with `LocaleDataException: Locale data has not been initialized`. `main()` never calls `initializeDateFormatting`, and only the default `en_US` is built in. On a phone, the whole card would have thrown.
+**Fix:** pass no locale, like every other `DateFormat` in `lib/`. `cadence_text.dart` keeps a `locale` parameter for tests only.
+**What to watch:** before localising dates, add `initializeDateFormatting()` to `main()` (and to the widget-test setup) once, for the whole app, rather than per screen.
+**Where:** `lib/core/conversation/cadence_text.dart`, `lib/features/conversation/widgets/schedule_card.dart`
 
 
 ## Platform, build and release

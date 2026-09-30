@@ -44,6 +44,12 @@ abstract final class FeColors {
   static const info = Color(0xFF3B82F6);
   static const infoSoft = Color(0xFFEFF6FF);
 
+  /// AI teammates in conversations (agent avatar ring, "AI" tag, working
+  /// card) — violet, matching the web's agent accent. Only for AI.
+  static const ai = Color(0xFF7C3AED);
+  static const aiSoft = Color(0xFFF5F3FF);
+  static const aiLine = Color(0xFFDDD6FE);
+
   // This app is light-only. If a dark variant is ever wanted again, this
   // file's git history has the exact Modern Enterprise Dark values to
   // restore instead of re-deriving them.

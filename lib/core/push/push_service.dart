@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/router.dart';
 import '../../state/providers.dart';
+import '../conversation/conversation_links.dart';
 import 'local_notifications.dart';
 
 /// Runs in a separate isolate when a data message arrives while the app is
@@ -113,6 +114,11 @@ String? _routeForPushData({
   String? entityType,
   String? title,
 }) {
+  // Same first step as `routeForNotification`: conversation / schedule
+  // pushes carry web admin links (see conversation_links.dart).
+  final conversation = conversationRouteFor(entityType: entityType, entityId: entityId, link: link);
+  if (conversation != null) return conversation;
+
   final trimmedLink = link?.trim();
   if (trimmedLink != null && trimmedLink.isNotEmpty) {
     const prefix = '/technician';

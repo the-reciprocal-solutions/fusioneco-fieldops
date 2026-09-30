@@ -1,5 +1,6 @@
 import '../../app/router.dart';
 import '../../domain/app_notification.dart';
+import '../conversation/conversation_links.dart';
 
 /// Where tapping a notification takes a technician. A port of the web's
 /// `getNotificationRoute.ts`, Technician branch only — this app has no other
@@ -8,6 +9,15 @@ import '../../domain/app_notification.dart';
 /// Returns null when there is nowhere useful to go, and the caller should leave
 /// the technician on the notifications list rather than pushing a dead route.
 String? routeForNotification(AppNotification notification) {
+  // Conversations, agent sessions and schedules first: their links are web
+  // admin pages, which the `/technician` rule below would throw away.
+  final conversation = conversationRouteFor(
+    entityType: notification.entityType,
+    entityId: notification.entityId,
+    link: notification.link,
+  );
+  if (conversation != null) return conversation;
+
   final link = notification.link?.trim();
   if (link != null && link.isNotEmpty) {
     final route = _appRouteForWebLink(link);

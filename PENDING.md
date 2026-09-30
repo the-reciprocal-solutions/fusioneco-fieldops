@@ -22,9 +22,14 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-024**
+Next number: **P-025**
 
 ## Open
+
+### P-024 · Conversations, @agent and schedules in the app: device + live server tests
+- **Status:** built, tested offline · **Priority:** P2 · **Area:** conversations / schedules
+- **Found:** 2026-09-30 (`lib/features/conversation/**`, `lib/features/schedules/my_schedules_screen.dart`, `lib/core/conversation/**`, doc `docs/conversations-and-schedules.md`; analyze clean for new code, 66 new tests pass)
+- **Left:** real-device test (keyboard, 4-tab bar on small phones, socket reconnect, offline replay after airplane mode, push tap → thread, Arabic layout); live server run as a Technician (@agent, reply, schedule card, each notification type); composer attachments; edit own message; "N agents working" indicator and list badges; live refresh of My schedules; schedule history screen; edit schedule time/also-notify; thread entry points on service requests/PM/inspections/permits/assets; email for schedules (server doesn't send); date-language setup; link the doc from CLAUDE.md.
 
 ### P-023 · Permit Field Companion + Work-Front Crew Check screens (plan use cases #2/#3)
 - **Status:** not started · **Priority:** P2 · **Area:** permits / FieldOps agent surface

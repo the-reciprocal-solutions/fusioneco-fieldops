@@ -10,6 +10,7 @@ import '../../core/utils/checklist_status.dart';
 import '../../core/utils/currency.dart';
 import '../../core/utils/dates.dart';
 import '../../core/utils/external_launch.dart';
+import '../../domain/conversation.dart';
 import '../../domain/maintenance_record.dart';
 import '../../state/auth_controller.dart';
 import '../../state/checklist_controller.dart';
@@ -19,6 +20,7 @@ import '../../widgets/common.dart';
 import '../../widgets/motion.dart';
 import '../../widgets/photo_viewer.dart';
 import '../ar/widgets/ar_entry_widgets.dart';
+import '../conversation/conversation_view.dart';
 import 'checklist_item_sheet.dart' show SignatureImageAndCaption;
 import 'checklist_tab.dart';
 import 'detail_widgets.dart';
@@ -32,10 +34,19 @@ class OrderDetailScreen extends ConsumerStatefulWidget {
     super.key,
     required this.orderType,
     required this.orderId,
+    this.initialTab,
+    this.messageId,
   });
 
   final String orderType;
   final String orderId;
+
+  /// `comments` opens the Comments tab (a conversation notification's
+  /// deep link, `Routes.orderConversation`).
+  final String? initialTab;
+
+  /// The message to scroll to in the Comments tab.
+  final String? messageId;
 
   static String headerTitleFor(OrderType type, BuildContext context) =>
       switch (type) {
@@ -82,9 +93,15 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   Widget build(BuildContext context) {
     final key = _key;
     final detail = ref.watch(orderDetailControllerProvider(key));
+    // The conversation is per work order (server entity `work_order`); the
+    // other order types' threads are not wired on this app yet.
+    final comments = key.type == OrderType.workOrder;
 
     return DefaultTabController(
-      length: 3,
+      length: comments ? 4 : 3,
+      // `?message=` alone also means the thread (a `/technician/orders/…`
+      // link from a notification may not name the tab).
+      initialIndex: comments && (widget.initialTab == 'comments' || widget.messageId != null) ? 3 : 0,
       child: Scaffold(
         backgroundColor: const Color(0xFFF8FAFC),
         appBar: AppBar(
@@ -139,6 +156,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                           ],
                         )
                       : 'order_detail.checklist'.getString(context),
+                  showComments: comments,
                 )
               : null,
         ),
@@ -157,6 +175,12 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
               _DetailsTab(detail: data, orderKey: key),
               ChecklistTab(record: data.record, orderKey: key),
               HistoryTab(orderKey: key),
+              if (comments)
+                ConversationView(
+                  entity: ConvEntity.workOrder,
+                  id: key.id,
+                  highlightMessageId: widget.messageId,
+                ),
             ],
           ),
         ),
@@ -166,9 +190,10 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 }
 
 class _DetailTabBar extends StatelessWidget implements PreferredSizeWidget {
-  const _DetailTabBar({required this.tasksLabel});
+  const _DetailTabBar({required this.tasksLabel, this.showComments = false});
 
   final String tasksLabel;
+  final bool showComments;
 
   @override
   Size get preferredSize => const Size.fromHeight(52);
@@ -185,6 +210,9 @@ class _DetailTabBar extends StatelessWidget implements PreferredSizeWidget {
       ),
       child: TabBar(
         dividerColor: Colors.transparent,
+        // Four tabs on a 320 pt phone: trim the side padding so "Comments"
+        // fits next to "Tasks (12)".
+        labelPadding: showComments ? const EdgeInsets.symmetric(horizontal: 4) : null,
         indicatorSize: TabBarIndicatorSize.tab,
         indicator: BoxDecoration(
           color: const Color(0xFF0284C7),
@@ -204,6 +232,7 @@ class _DetailTabBar extends StatelessWidget implements PreferredSizeWidget {
           Tab(text: 'order_detail.tab_details'.getString(context)),
           Tab(text: tasksLabel),
           Tab(text: 'order_detail.tab_history'.getString(context)),
+          if (showComments) Tab(text: 'conv.tab_comments'.getString(context)),
         ],
       ),
     ),

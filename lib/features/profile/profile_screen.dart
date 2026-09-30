@@ -11,6 +11,7 @@ import '../../state/auth_controller.dart';
 import '../../state/profile_controller.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
+import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/motion.dart';
 import '../../widgets/progress_ring.dart';
@@ -149,6 +150,11 @@ class ProfileScreen extends ConsumerWidget {
                 _CertificationsCard(certifications: profile.certifications),
               ],
               const SizedBox(height: 18),
+
+              // My schedules (docs/conversations-and-schedules.md) —
+              // reminders and checks asked for with "@agent remind me…".
+              const _MySchedulesLink(),
+              const SizedBox(height: 16),
 
               // Download My Work Card
               const _DownloadMyWorkCard(),
@@ -986,4 +992,35 @@ String _trimZero(num value) {
   return asDouble == asDouble.roundToDouble()
       ? asDouble.round().toString()
       : asDouble.toStringAsFixed(1);
+}
+
+class _MySchedulesLink extends StatelessWidget {
+  const _MySchedulesLink();
+
+  @override
+  Widget build(BuildContext context) => TechCard(
+    onTap: () => context.push(Routes.schedules()),
+    child: Row(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: const BoxDecoration(color: FeColors.aiSoft, shape: BoxShape.circle),
+          child: const Icon(LucideIcons.calendarClock, size: 20, color: FeColors.ai),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AppText.titleSmall('schedules.title'.getString(context)),
+              const SizedBox(height: 2),
+              AppText.bodySmall('schedules.profile_sub'.getString(context), color: FeColors.ink2),
+            ],
+          ),
+        ),
+        const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+      ],
+    ),
+  );
 }

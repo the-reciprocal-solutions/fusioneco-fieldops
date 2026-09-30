@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
+import '../../core/conversation/conversation_links.dart';
 import '../../core/utils/dates.dart';
 import '../../core/utils/notification_route.dart';
 import '../../domain/app_notification.dart';
@@ -131,8 +132,27 @@ class _NotificationTile extends StatelessWidget {
 
   /// The four types the server sends, each with its own colour and icon —
   /// matching the web so the two portals read the same way.
-  ({Color background, Color border, Color accent, IconData icon}) get _tone =>
-      switch (notification.type) {
+  ({Color background, Color border, Color accent, IconData icon}) get _tone {
+    // Conversations and schedules (docs/conversations-and-schedules.md):
+    // AI teammates in violet, people mentioning you in the brand blue.
+    final family = noticeFamily(notification.entityType, category: notification.category);
+    switch (family) {
+      case NoticeFamily.scheduleFailed:
+        return (background: FeColors.dangerSoft, border: FeColors.dangerSoft, accent: FeColors.danger, icon: LucideIcons.calendarX);
+      case NoticeFamily.scheduleDone:
+        return (background: FeColors.aiSoft, border: FeColors.aiSoft, accent: FeColors.ai, icon: LucideIcons.calendarCheck);
+      case NoticeFamily.scheduleStarted:
+        return (background: FeColors.aiSoft, border: FeColors.aiSoft, accent: FeColors.ai, icon: LucideIcons.calendarClock);
+      case NoticeFamily.agentReply:
+        return (background: FeColors.aiSoft, border: FeColors.aiSoft, accent: FeColors.ai, icon: LucideIcons.sparkles);
+      case NoticeFamily.mention:
+        return (background: FeColors.infoSoft, border: FeColors.infoSoft, accent: FeColors.primary, icon: LucideIcons.atSign);
+      case NoticeFamily.conversation:
+        return (background: FeColors.infoSoft, border: FeColors.infoSoft, accent: FeColors.primary, icon: LucideIcons.messageSquare);
+      case NoticeFamily.other:
+        break;
+    }
+    return switch (notification.type) {
         'warning' => (
           background: FeColors.warningSoft,
           border: FeColors.warningSoft,
@@ -158,6 +178,7 @@ class _NotificationTile extends StatelessWidget {
           icon: LucideIcons.info,
         ),
       };
+  }
 
   @override
   Widget build(BuildContext context) {

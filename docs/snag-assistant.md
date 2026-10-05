@@ -130,11 +130,31 @@ flowchart TB
 3. Call `syncRequest(...)` with `entityType: 'Snag'` and the snag id. Photos are `QueuedAttachment`s with a `__pending_snag_<evidenceId>__` placeholder.
 4. If the request is synced, overwrite the local row with the server's copy (server id, URLs, `number`). If it is queued, the row keeps `localOnly=1` until a later list fetch returns it.
 
+**Outbox first (2026-10-06).** Raising a snag, "+1"/extra photos and every survey write no longer try the network inline. They are written locally, then `SyncClient.queueRequest` parks them in the queue and kicks a flush in the background (a flush already running re-runs once at the end). Save returns in milliseconds; the card shows the honest state. Transitions (start/ready/verify/reject) stay online-first so a refusal such as `409 SELF_VERIFY` is seen at once; if one fails without queuing, the optimistic change is rolled back.
+
+```mermaid
+flowchart LR
+  Save[Save] --> Local[(snags row localOnly)] --> Q[(queue)]
+  Q -->|flush: upload photo, POST| S[/api/snags/]
+  S -- 2xx --> H[onReplayed → GET /api/snags/:id → server copy, SN- number]
+  S -- 5xx / upload w/o URL --> K[kept: retried forever, sendIssue = 5xx]
+  S -- 428 / 401 --> W[run stops, waits for check-in / sign-in]
+  S -- other 4xx --> C[conflict log + sendIssue dropped → Not sent + Retry]
+```
+
+**Send states** (`core/snag/snag_send_state.dart`, pure): Synced · Sending… · Waiting to send (no signal / check-in / sign-in / server not ready — each with a plain reason) · Not sent (refused, or stranded by an older build) with Retry. Card flag, detail banner and walk film-strip dot all use it. `SnagRepository.afterReplayFailed` records `{status, code, dropped}` on the snag row (`sendIssue`, local only).
+
+**Why it used to look "saved locally but never persisted"** (iPhone report 2026-10-06): (1) a queued create that synced kept `localOnly=1` until the hub happened to pull that building — no replay follow-up was registered for snags; (2) any non-5xx failure on the inline online path (upload refused, upload answered without a URL) left the snag on the phone with nothing queued; (3) a 5xx (e.g. `503 SNAG_ENGINE_NOT_ENABLED`) was dropped to the conflict log after 5 polls ≈ 100 s; (4) iOS moves the app container on every app update, so stored absolute photo paths broke (`SnagMedia.reroot` now re-roots on `snag_media/`).
+
+**Speed.** Buildings and room trees are cache-first with background revalidation. Building pulls ask `view=list` (no `activity`) and, after one full pull, `updatedSince=<last serverTime − 2 min>`; a full pull (with prune) runs at most every 6 h. Rows are written in one batch (`SnagStore.upsertSnags`). The hub list is lazy (slivers); thumbnails are memoised and decoded at display size. The detail screen opens from the local row and reads the full snag in the background.
+
+**AI assist (2026-10-06).** After the first photo the create screen asks `POST /api/snags/ai/assist` (server doc §4a) in the background: suggestions for title, trade, severity, issue type, description, likely cause, fix and who should fix it, each with Apply (and Apply all); photo tips (dark/blurry are measured on the phone, `core/snag/snag_photo_quality.dart`, so they work offline); open snags nearby that look the same; and what is still missing. Fields set from it carry an "AI suggested" badge until edited. Walk mode shows a compact strip and ✨ marks on the chips. Offline it says "AI assist needs a connection. Your snag still saves." Nothing is saved without a tap.
+
 **Merge on read.** The server's copy of a snag replaces the local copy unless that snag still has a pending mutation in the queue, in which case the local copy is ahead and wins. Snags that exist only locally are kept. A server-side rejection (a 4xx such as `409 SELF_VERIFY`) goes to the conflict log through the normal flush policy. Once that mutation is gone, the next fetch restores the server's truth.
 
 **Ids.** The client mints UUIDs for snags, evidence and surveys, so replays are idempotent: `POST /api/snags` with an existing id returns the existing row. The human reference `SN-00042` is assigned by the server. Until the server assigns it, the app shows `#` plus the first 6 characters of the id.
 
-**Server 5xx.** `syncRequest` only queues on `NetworkFailure` by default. Snag writes pass `queueOnServerError: true`, which parks a 5xx as well, so a server that is not yet enabled for snags (503) cannot lose a walk. `SnagRepository.resendStranded()` re-queues a create that ran out of retries once `GET /api/snags/engine` reports enabled.
+**Server 5xx.** Snag and survey writes are in `kKeepOnServerErrorEntityTypes` (`flush_policy.dart`): a 5xx keeps them queued indefinitely instead of dropping them after `maxMutationAttempts`, so a server that is not yet enabled for snags (503) cannot lose a walk. `SnagRepository.resendStranded()` still re-queues creates an older build gave up on, once `GET /api/snags/engine` reports enabled — but never one the server refused (4xx); those wait for Retry.
 
 **Photos offline.** Photos are stored under `snag_media/` in the app documents directory. `SnagMediaCache` downloads the photos of open and ready snags in a building for offline verification ("Download for offline" in the hub).
 

@@ -347,6 +347,27 @@ final class FeArCornerDetector {
         ]
     }
 
+    /// The LiDAR check of a snapped corner (extension `surfaceResidualMm`):
+    /// the corner line, 0.4, 0.9 and 1.4 m above the floor, against this
+    /// frame's scene depth; the median residual in mm. Its base is often
+    /// behind a bin or a pipe, the line above it rarely is. Outside corners
+    /// and columns read the nearest depth (the edge, not the wall behind it).
+    /// The event is returned unchanged without LiDAR depth.
+    static func verified(_ event: [String: Any], frame: ARFrame) -> [String: Any] {
+        guard let p = event["posAr"] as? [Double], p.count == 3 else { return event }
+        let nearest = (event["kind"] as? String ?? "inside") != "inside"
+        var rs: [Float] = []
+        for h: Float in [0.4, 0.9, 1.4] {
+            let w = SIMD3<Float>(Float(p[0]), Float(p[1]) + h, Float(p[2]))
+            if let r = FeArDepthProbe.surfaceResidual(frame: frame, world: w, nearest: nearest) { rs.append(r) }
+        }
+        guard !rs.isEmpty else { return event }
+        rs.sort()
+        var out = event
+        out["surfaceResidualMm"] = Double(rs[rs.count / 2] * 1000)
+        return out
+    }
+
     private func hint(_ code: String, _ detail: String) {
         let now = CACurrentMediaTime()
         if now - (lastHint[code] ?? 0) < 1.5 { return }

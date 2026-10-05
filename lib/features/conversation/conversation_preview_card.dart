@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
+import '../../core/conversation/agent_activity.dart';
 import '../../domain/conversation.dart';
 import '../../state/conversation_controller.dart';
 import '../../theme/fe_colors.dart';
@@ -28,7 +29,8 @@ class ConversationPreviewCard extends ConsumerWidget {
     final async = ref.watch(conversationPreviewProvider(key));
     final t = async.valueOrNull;
     final latest = t == null ? const <ConvMessage>[] : t.messages.reversed.take(2).toList().reversed.toList();
-    final live = t?.sessions.where((s) => s.isLive).toList() ?? const <ConvSession>[];
+    // Not a stuck (30+ min) session — that is a lost run, not work in progress.
+    final live = t == null ? const <ConvSession>[] : visibleLiveSessions(t.sessions, DateTime.now());
 
     Future<void> open() async {
       await context.push(Routes.conversation(entity.wire, id));

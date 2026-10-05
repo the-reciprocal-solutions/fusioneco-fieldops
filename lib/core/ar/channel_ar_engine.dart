@@ -42,7 +42,8 @@ class ArEngineException implements Exception {
 ///   `pickMany {points: [[x,y]]}` → `[pick map | null]` ·
 ///   `depthPointAt {x, y}` → `{posAr, normalAr?, confidence, method}` or
 ///   null · `setTorch {on}` → bool · `startRecording {path}` → bool ·
-///   `stopRecording` → path or null.
+///   `stopRecording` → path or null · `setScanOverlay {on, contrast}` →
+///   bool · `pulseAt {posAr, normalAr?, tone}` → bool.
 /// - Vectors are `[x, y, z]` lists, matrices 16-number **column-major**
 ///   lists, the feature state a `Uint8List` (StandardMessageCodec).
 /// - `EventChannel('fusioneco/ar/events')`: maps with `type` in
@@ -194,6 +195,29 @@ class ChannelArEngine implements ArEngine {
       return await _call<Object?>('setDepth', {'on': on}) == true;
     } on ArEngineException {
       return false;
+    }
+  }
+
+  @override
+  Future<bool> setScanOverlay(bool on, {bool contrast = false}) async {
+    try {
+      return await _call<Object?>('setScanOverlay', {'on': on, 'contrast': contrast}) == true;
+    } on ArEngineException {
+      return false; // an older plugin without the extension
+    }
+  }
+
+  @override
+  Future<bool> pulseAt(Vec3 posAr, {Vec3? normalAr, String tone = 'info'}) async {
+    try {
+      return await _call<Object?>('pulseAt', {
+            'posAr': posAr.toList(),
+            'normalAr': ?normalAr?.toList(),
+            'tone': tone,
+          }) ==
+          true;
+    } on ArEngineException {
+      return false; // Android, or an older plugin: no rings
     }
   }
 

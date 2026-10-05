@@ -448,7 +448,31 @@ class StoredSnagRow {
   final bool localOnly;
 }
 
+/// One row for [SnagStore.upsertSnags].
+class SnagRowWrite {
+  const SnagRowWrite({
+    required this.id,
+    required this.json,
+    required this.status,
+    required this.localOnly,
+    required this.updatedAt,
+    this.buildingId,
+    this.surveyId,
+  });
+  final String id;
+  final Map<String, dynamic> json;
+  final String? buildingId;
+  final String? surveyId;
+  final String status;
+  final bool localOnly;
+  final DateTime updatedAt;
+}
+
 abstract interface class SnagStore {
+  /// Many rows in one batch — a building refresh used to write its snags
+  /// one transaction each (hundreds of SQLCipher round trips per pull).
+  Future<void> upsertSnags(List<SnagRowWrite> rows);
+
   Future<void> upsertSnag({
     required String id,
     required Map<String, dynamic> json,
@@ -1211,6 +1235,24 @@ class OfflineDb
     'updated_at': updatedAt.millisecondsSinceEpoch,
     'json': jsonEncode(json),
   }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  @override
+  Future<void> upsertSnags(List<SnagRowWrite> rows) async {
+    if (rows.isEmpty) return;
+    final batch = _db.batch();
+    for (final r in rows) {
+      batch.insert('snags', {
+        'id': r.id,
+        'building_id': r.buildingId,
+        'survey_id': r.surveyId,
+        'status': r.status,
+        'local_only': r.localOnly ? 1 : 0,
+        'updated_at': r.updatedAt.millisecondsSinceEpoch,
+        'json': jsonEncode(r.json),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
 
   static StoredSnagRow _snagRow(Map<String, Object?> row) => StoredSnagRow(
     id: row['id'] as String,

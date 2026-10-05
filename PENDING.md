@@ -22,9 +22,29 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-025**
+Next number: **P-028**
 
 ## Open
+
+### P-027 · iPhone AR fixes + LiDAR room scan/surface check (2026-10-06): needs a real iPhone/iPad
+- **Status:** needs verification · **Priority:** P1 · **Area:** AR (iOS, Android)
+- **Found:** 2026-10-06 (owner: AR not working on real iPhone; asked for LiDAR mesh animations)
+- **Done so far:** thermal mapping, session-failure handling, torch, pose parity; LiDAR `surfaceResidualMm` checks for boards/corners (green/amber/blue rings); room-scan mesh (`FeArScan.swift`, `fe_scan.mat`), plane grid on non-LiDAR, model reveal (iOS). 340 AR tests pass; Swift typecheck + ObjC++ syntax check; Kotlin compiles; C core 131 + tag 91.
+- **Left:** the device list in `docs/ios-testflight.md` §9 (camera feed upright, permission prompt, mesh FPS, rings/reveal, residual sizes, 10-min thermal, iPad layout); Android pulse rings + model reveal; Android never requests camera permission in Dart (`Permission.camera`). The original iPhone symptom was never seen — get a screenshot/log from the next TestFlight build.
+- **Next step:** trigger the iOS TestFlight workflow, run the §9 list.
+
+### P-026 · Snag sync fix + AI assist (2026-10-06): no device or live-server run yet
+- **Status:** needs verification · **Priority:** P1 · **Area:** snags / offline sync
+- **Found:** 2026-10-06 (owner: snags "saved locally" never persist on iPhone, slow load; asked for AI assist)
+- **Done so far:** outbox-first snag writes, 5xx keep rule, replay follow-ups, iOS path re-root, cache-first lists + server `view=list`/`updatedSince` delta pulls, AI assist panel (`POST /api/snags/ai/assist`, self-hosted engine, 12 s deadline, on-phone dark/blur tips). analyze clean; 91 snag tests pass; server 51 vitest; one live model call returned grounded JSON. LEARNINGS 2026-10-06.
+- **Left:** iPhone + Android walk-through (docs/snag-assistant.md §9.5 + AI panel); confirm `findings:promote` is applied on dev/prod (else snags wait with "not switched on for your site"); tune brightness/sharpness thresholds on real plant-room photos; duplicate query and list delta against a real DB.
+- **Next step:** TestFlight build → raise 3 snags online, 2 in airplane mode, reconnect, check web.
+
+### P-025 · Conversation fixes (2026-10-06): technician @agent, reminders, keyboard, agent activity — not run live
+- **Status:** needs verification · **Priority:** P1 · **Area:** conversations
+- **Found:** 2026-10-06 (owner: keyboard can't close, @agent does nothing, reminders don't work)
+- **Done so far:** root cause on server (`runAsStarter.ts` role), reminder posts into thread, app activity bubble/steps, hide-keyboard; 25 new tests + 66 existing pass; server tsc 0 + 174 vitest. LEARNINGS 2026-10-06.
+- **Left:** deploy the server fix; iPhone check (keyboard on SE, socket stages live, reminder line + push); Arabic layout; widget test of the full `ConversationView`. Server pointer: `docs/kb/pending/2026-10-06-stuck-queued-agent-runs.md`.
 
 ### P-024 · Conversations, @agent and schedules in the app: device + live server tests
 - **Status:** built, tested offline · **Priority:** P2 · **Area:** conversations / schedules

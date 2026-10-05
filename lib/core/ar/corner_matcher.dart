@@ -86,6 +86,7 @@ class DetectedCorner {
     required this.angleDeg,
     required this.kind,
     this.method = 'planes',
+    this.surfaceResidualMm,
   });
 
   factory DetectedCorner.fromSeen(CornerSeenEvent e) => DetectedCorner(
@@ -95,6 +96,7 @@ class DetectedCorner {
         angleDeg: e.angleDeg,
         kind: e.kind,
         method: e.method,
+        surfaceResidualMm: e.surfaceResidualMm,
       );
 
   final Vec3 posAr;
@@ -105,6 +107,9 @@ class DetectedCorner {
 
   /// `lidar | planes | floorTap` — sets the observation's σ.
   final String method;
+
+  /// The engine's LiDAR check of the corner line (mm, iOS), or null.
+  final double? surfaceResidualMm;
 }
 
 /// A candidate within reach of a detected corner, nearest first.

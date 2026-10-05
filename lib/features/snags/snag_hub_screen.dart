@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
 import '../../core/snag/snag_rules.dart';
+import '../../core/snag/snag_send_state.dart';
 import '../../domain/snag.dart';
 import '../../state/snag_controller.dart';
 import '../../theme/fe_colors.dart';
@@ -118,6 +119,7 @@ class _SnagHubScreenState extends ConsumerState<SnagHubScreen> {
     final surveys = ref.watch(snagSurveysProvider(buildingId)).valueOrNull ?? const <SnagSurvey>[];
     final tree = buildingId == null ? null : ref.watch(snagTreeProvider(buildingId)).valueOrNull;
     final sync = ref.watch(snagSyncProvider);
+    final flushing = ref.watch(snagQueueFlushingProvider);
 
     final activeSurvey = surveys.where((s) => !s.completed && (_context == null || s.context == _context)).firstOrNull;
     final readiness = SnagReadinessCalculator.compute(
@@ -167,8 +169,15 @@ class _SnagHubScreenState extends ConsumerState<SnagHubScreen> {
             )
           : RefreshIndicator(
               onRefresh: () => ref.read(snagSyncProvider.notifier).refresh(buildingId!),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+              // Slivers (2026-10-06): the header scrolls with the list, but
+              // snag cards are built lazily as they scroll in. The old
+              // ListView(children:) built every card — photo lookup, decode
+              // and entrance animation — for the whole building up front.
+              child: CustomScrollView(
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    sliver: SliverList.list(
                 children: [
                   _BuildingBar(
                     name: building?.name ?? '—',
@@ -261,25 +270,39 @@ class _SnagHubScreenState extends ConsumerState<SnagHubScreen> {
                     onSelectionChanged: (v) => setState(() => _filter = v.first),
                   ),
                   const SizedBox(height: 12),
-                  if (listed.isEmpty)
-                    TechEmptyState(
-                      icon: LucideIcons.sparkles,
-                      iconColor: FeColors.success,
-                      title: 'snags.list_empty'.getString(context),
-                    )
-                  else
-                    for (var i = 0; i < listed.length; i++)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: StaggeredEntrance(
-                          index: i,
-                          child: SnagCard(
-                            snag: listed[i],
-                            pending: pending.contains(listed[i].id),
-                            onTap: () => context.push(Routes.snagDetail(listed[i].id)),
+                ],
+                    ),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                    sliver: listed.isEmpty
+                        ? SliverToBoxAdapter(
+                            child: TechEmptyState(
+                              icon: LucideIcons.sparkles,
+                              iconColor: FeColors.success,
+                              title: 'snags.list_empty'.getString(context),
+                            ),
+                          )
+                        : SliverList.builder(
+                            itemCount: listed.length,
+                            itemBuilder: (context, i) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: StaggeredEntrance(
+                                index: i,
+                                child: SnagCard(
+                                  snag: listed[i],
+                                  pending: pending.contains(listed[i].id),
+                                  send: snagSendStatus(
+                                    listed[i],
+                                    queued: pending.contains(listed[i].id),
+                                    flushing: flushing,
+                                  ),
+                                  onTap: () => context.push(Routes.snagDetail(listed[i].id)),
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
+                  ),
                 ],
               ),
             ),

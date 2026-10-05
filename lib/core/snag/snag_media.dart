@@ -21,17 +21,52 @@ import '../../domain/snag.dart';
 /// The queue carries its own copy of the bytes for upload (`PendingAttachment`)
 /// — deliberately separate, so clearing one can never lose the other.
 class SnagMedia {
-  SnagMedia({Dio? dio}) : _dio = dio ?? Dio();
+  /// [rootDir] is for tests; the app resolves `<documents>/snag_media`.
+  SnagMedia({Dio? dio, Directory? rootDir}) : _dio = dio ?? Dio(), _root = rootDir;
 
   final Dio _dio;
   Directory? _root;
 
+  /// Resolved files by evidence key, so a list rebuild (every snag write
+  /// bumps the tick) does not re-stat every thumbnail — and a [SnagPhoto]
+  /// can paint the file on its first frame instead of flashing blank.
+  final _resolved = <String, File>{};
+
+  static const _folder = 'snag_media';
+
+  Future<Directory> _rootDir() async {
+    return _root ??= Directory(p.join((await getApplicationDocumentsDirectory()).path, _folder));
+  }
+
   Future<Directory> _dir(String sub) async {
-    _root ??= Directory(p.join((await getApplicationDocumentsDirectory()).path, 'snag_media'));
-    final dir = Directory(p.join(_root!.path, sub));
+    final dir = Directory(p.join((await _rootDir()).path, sub));
     if (!dir.existsSync()) await dir.create(recursive: true);
     return dir;
   }
+
+  /// The same file under today's root. **iOS moves the app's container on
+  /// every app update or reinstall** (a new TestFlight build included): the
+  /// UUID in `/var/mobile/Containers/Data/Application/<UUID>/Documents` is
+  /// new, the files come along, but every absolute path stored before the
+  /// update points at a folder that no longer exists. Own captures saved
+  /// their absolute path into the snag row, so after an update the photos of
+  /// every unsent snag "disappeared" and a re-send went out without them
+  /// (2026-10-06). Re-rooting on the `snag_media/` segment finds them again.
+  /// Pure, for tests. Null when [stored] is not under a `snag_media` folder.
+  static String? reroot(String stored, String currentRoot) {
+    final normalised = stored.replaceAll(r'\', '/');
+    const marker = '/$_folder/';
+    final at = normalised.lastIndexOf(marker);
+    if (at < 0) return null;
+    final rest = normalised.substring(at + marker.length);
+    if (rest.isEmpty) return null;
+    return p.joinAll([currentRoot, ...rest.split('/')]);
+  }
+
+  /// Synchronous peek at an already-resolved file, for a first-frame paint.
+  File? peek(SnagEvidence e) => _resolved[_key(e)];
+
+  static String _key(SnagEvidence e) => '${e.id}|${e.localPath ?? ''}|${e.url ?? ''}';
 
   /// Writes an own capture and returns its absolute path.
   Future<String> saveOwn({
@@ -49,15 +84,29 @@ class SnagMedia {
   /// The best local file for [e]: the own capture if it still exists, else a
   /// downloaded copy of its URL. Null means "only the network has it".
   Future<File?> localFile(SnagEvidence e) async {
+    final key = _key(e);
+    final hit = _resolved[key];
+    if (hit != null && hit.existsSync()) return hit;
     final own = e.localPath;
     if (own != null) {
-      final f = File(own);
-      if (f.existsSync()) return f;
+      final f = await ownFile(own);
+      if (f != null) return _resolved[key] = f;
     }
     final url = e.url;
     if (url == null) return null;
     final cached = await _cacheFile(url);
-    return cached.existsSync() ? cached : null;
+    return cached.existsSync() ? _resolved[key] = cached : null;
+  }
+
+  /// An own capture by its stored path, re-rooted if the app container moved
+  /// (see [reroot]). Null when the file is gone.
+  Future<File?> ownFile(String stored) async {
+    final f = File(stored);
+    if (f.existsSync()) return f;
+    final moved = reroot(stored, (await _rootDir()).path);
+    if (moved == null) return null;
+    final g = File(moved);
+    return g.existsSync() ? g : null;
   }
 
   /// Downloads [url] into the cache unless it is already there. Writes to a

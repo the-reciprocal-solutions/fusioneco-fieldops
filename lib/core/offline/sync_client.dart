@@ -103,9 +103,17 @@ class SyncClient {
   /// (P-008 (2): AR progress re-reads the floor). See [onReplayed].
   final _replayHooks = ReplayHooks();
 
+  /// See [onReplayFailed]. One hook per entity type.
+  final _failureHooks = <String, ReplayFailureHook>{};
+
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   Timer? _pollTimer;
   bool _flushing = false;
+
+  /// Set by [queueRequest] when a flush is already running: that run read
+  /// its batch before the new write landed, so it runs once more at the end
+  /// instead of leaving the write for the next 20 s poll.
+  bool _flushAgain = false;
 
   OfflineDb get db => _db;
 
@@ -113,6 +121,14 @@ class SyncClient {
   /// [entityType], once per id, after a flush. One hook per type.
   void onReplayed(String entityType, ReplayHook hook) =>
       _replayHooks.register(entityType, hook);
+
+  /// Runs [hook] with the entity id whenever a queued write of [entityType]
+  /// fails on replay (kept for a retry, dropped, or stopping the run), so the
+  /// owning screen can say why it has not gone yet. A failing hook is
+  /// swallowed — a flush must never throw. One hook per type; registering
+  /// again replaces it.
+  void onReplayFailed(String entityType, ReplayFailureHook hook) =>
+      _failureHooks[entityType] = hook;
   QueueBus get bus => _bus;
 
   Future<bool> get isOffline async {
@@ -271,6 +287,48 @@ class SyncClient {
     }
   }
 
+  /// Outbox-first write: parks the request in the queue straight away and
+  /// starts a flush in the background, instead of holding the caller while
+  /// photos upload over a weak link (the Snag Assistant's save, 2026-10-06:
+  /// an online save used to wait on upload + POST, up to 15 s connect + 120 s
+  /// upload, and any non-5xx failure on that inline path left the record on
+  /// the phone with nothing queued). Replay is the same code path, ordering
+  /// and idempotency (`X-Client-Mutation-Id`) as any offline write. Returns
+  /// the mutation id. Purely additive: [syncRequest] is unchanged.
+  Future<String> queueRequest(
+    String method,
+    String url, {
+    dynamic data,
+    required String label,
+    List<QueuedAttachment> attachments = const [],
+    String? entityType,
+    String? entityId,
+  }) async {
+    final mutationId = _api.newMutationId();
+    await _enqueue(
+      mutationId,
+      method,
+      url,
+      data,
+      label,
+      attachments,
+      entityType,
+      entityId,
+    );
+    kickFlush();
+    return mutationId;
+  }
+
+  /// Starts a flush now, or — if one is already running — makes it run once
+  /// more when it ends, so a write queued mid-drain is not left for the poll.
+  void kickFlush() {
+    if (_flushing) {
+      _flushAgain = true;
+      return;
+    }
+    unawaited(flushQueue());
+  }
+
   Future<void> _enqueue(
     String mutationId,
     String method,
@@ -327,12 +385,23 @@ class SyncClient {
   /// call this, one just stops earlier.
   Future<void> flushQueue({String? stopAfterId}) async {
     if (_flushing) return;
-    if (await isOffline) return;
-    // FR-4.4 — the app and a background run are separate engines sharing one
-    // queue. Whoever doesn't hold the lease steps aside; the holder drains
-    // everything anyway.
-    if (!await _db.tryAcquireFlushLease(_leaseOwner)) return;
+    // Claimed before the first await (2026-10-06): two triggers landing
+    // together (poll + resume + a [kickFlush]) both used to pass the
+    // `isOffline` await with `_flushing` still false, and the lease does not
+    // separate them — same owner — so the same photos uploaded twice.
     _flushing = true;
+    try {
+      // FR-4.4 — the app and a background run are separate engines sharing
+      // one queue. Whoever doesn't hold the lease steps aside; the holder
+      // drains everything anyway.
+      if (await isOffline || !await _db.tryAcquireFlushLease(_leaseOwner)) {
+        _flushing = false;
+        return;
+      }
+    } catch (_) {
+      _flushing = false;
+      rethrow;
+    }
     var changed = false;
     var stopped = false;
 
@@ -398,22 +467,36 @@ class SyncClient {
           changed = true;
         } on NetworkFailure {
           break;
-        } on HttpFailure catch (e) {
-          // The 428 location-gate trap: `middleware/auth.ts` refuses every
-          // mutating request once the technician's last GPS fix is stale.
-          // Every mutation behind this one would fail the exact same way
-          // until a fresh fix is captured, so this stops the run — same as
-          // a NetworkFailure — rather than dropping a whole shift's queued
-          // checks as unrecoverable 4xxs. `ApiClient`'s interceptor already
-          // fired `onLocationRequired`, which `LocationCheckInGate` turns
-          // into a blocking check-in prompt; `CheckInController.checkIn()`
+        } on ApiFailure catch (e) {
+          // An HttpFailure: the 428 location-gate trap: `middleware/auth.ts`
+          // refuses every mutating request once the technician's last GPS
+          // fix is stale. Every mutation behind this one would fail the exact
+          // same way until a fresh fix is captured, so this stops the run —
+          // same as a NetworkFailure — rather than dropping a whole shift's
+          // queued checks as unrecoverable 4xxs. `ApiClient`'s interceptor
+          // already fired `onLocationRequired`, which `LocationCheckInGate`
+          // turns into a blocking check-in prompt; `CheckInController.checkIn()`
           // resumes this queue once a fix lands. A 401 (expired session)
           // stops the run for the same reason — see [classifyFlushFailure].
-          switch (classifyFlushFailure(
-            status: e.status,
+          //
+          // Any other ApiFailure is neither a network failure nor an HTTP
+          // answer: `uploadBytes` got a 2xx without a URL (UnknownFailure). This used to escape the loop
+          // and abort the whole flush on every run, so one such item stuck
+          // the entire queue behind it. Now it is a server-side failure like
+          // a 5xx: retried, then dropped (or kept, for the entity types in
+          // [kKeepOnServerErrorEntityTypes]).
+          final status = e is HttpFailure ? e.status : 0;
+          final outcome = classifyFlushFailure(
+            status: status,
             attemptsSoFar: mutation.attempts,
             maxAttempts: Env.maxMutationAttempts,
-          )) {
+            keepOnServerError: kKeepOnServerErrorEntityTypes.contains(mutation.entityType),
+          );
+          await _reportFailure(
+            mutation,
+            ReplayFailure(status: status, outcome: outcome, code: _codeOf(e)),
+          );
+          switch (outcome) {
             case FlushOutcome.stopRun:
               stopped = true;
             case FlushOutcome.drop:
@@ -452,6 +535,31 @@ class SyncClient {
       } else if (changed) {
         _bus.notify();
       }
+      if (_flushAgain && !stopped) {
+        _flushAgain = false;
+        unawaited(flushQueue());
+      }
+      _flushAgain = false;
+    }
+  }
+
+  static String? _codeOf(ApiFailure e) {
+    if (e is! HttpFailure) return null;
+    final body = e.body;
+    final code = body is Map ? body['code'] : null;
+    return code is String && code.isNotEmpty ? code : null;
+  }
+
+  Future<void> _reportFailure(PendingMutation m, ReplayFailure failure) async {
+    final type = m.entityType;
+    final id = m.entityId;
+    if (type == null || id == null) return;
+    final hook = _failureHooks[type];
+    if (hook == null) return;
+    try {
+      await hook(id, failure);
+    } catch (_) {
+      // Display-only bookkeeping; never let it break the drain.
     }
   }
 

@@ -223,6 +223,16 @@ class _MenuList extends ConsumerWidget {
           selected: s.gridVisible,
           onTap: () => ref.read(arSessionProvider.notifier).setGridVisible(!s.gridVisible),
         ),
+        // The room-scan overlay (LiDAR mesh or plane grid): automatic in
+        // setup, off once locked; a tap here overrides for the session.
+        if (s.capabilities?.scanOverlay ?? false)
+          _MenuRow(
+            icon: ArIcons.roomScan,
+            label: 'ar.menu.room_scan'.getString(context),
+            sub: (s.capabilities?.lidar ?? false) ? 'ar.menu.room_scan_depth'.getString(context) : null,
+            selected: s.scanOverlayOn,
+            onTap: () => ref.read(arSessionProvider.notifier).toggleRoomScan(),
+          ),
         _MenuRow(
           icon: ws.torch ? ArIcons.torch : ArIcons.torchOff,
           label: 'ar.menu.torch'.getString(context),

@@ -538,7 +538,7 @@ class _OutgoingLine extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               AppText.caption(
-                convTr(context, 'conv.failed', [message.failure ?? '']),
+                convTr(context, 'conv.failed', [failureText(context, message.failure)]),
                 color: FeColors.danger,
                 weight: FontWeight.w700,
               ),

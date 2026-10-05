@@ -56,7 +56,8 @@ void main() {
     ]);
     await box.send(poster, ConvEntity.workOrder, 'WO-1', 'c1');
     expect(box.messages.single.outgoing, OutgoingState.failed);
-    expect(box.messages.single.failure, 'Server busy');
+    // A 5xx's text is never shown raw (2026-10-06): an i18n key, worded on screen.
+    expect(box.messages.single.failure, 'conv.err_server');
 
     final r = await box.send(poster, ConvEntity.workOrder, 'WO-1', 'c1');
     expect(r, isNotNull);

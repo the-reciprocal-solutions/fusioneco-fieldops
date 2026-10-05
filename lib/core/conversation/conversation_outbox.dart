@@ -95,7 +95,7 @@ class ConversationOutbox {
       }
     } on ApiFailure catch (e) {
       if (_items.containsKey(clientId)) {
-        _items[clientId] = m.copyWith(outgoing: OutgoingState.failed, failure: e.message);
+        _items[clientId] = m.copyWith(outgoing: OutgoingState.failed, failure: plainPostFailure(e));
       }
       return null;
     }
@@ -127,4 +127,20 @@ class ConversationOutbox {
       if (k != null && _items[k]?.outgoing != OutgoingState.queued) _items.remove(k);
     }
   }
+}
+
+/// Why a post failed, in words a technician can act on. The server's own
+/// 4xx texts are already plain ("Keep the message under 4000 characters.");
+/// the ones that are not get an i18n key (`conv.err_*`, resolved on screen
+/// by `failureText`): the location gate's 428 says "POST your current
+/// position to /fm/technicians/me/location", and a 5xx / unknown error
+/// must never show raw technical text (owner rule: no infra or raw errors).
+String plainPostFailure(ApiFailure e) {
+  if (e is HttpFailure) {
+    if (e.status == 428) return 'conv.err_location';
+    if (e.status == 401) return 'conv.err_signed_out';
+    if (e.status >= 500) return 'conv.err_server';
+    return e.message.trim().isEmpty ? 'conv.err_server' : e.message;
+  }
+  return 'conv.err_server';
 }

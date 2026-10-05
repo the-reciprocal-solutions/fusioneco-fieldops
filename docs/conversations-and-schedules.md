@@ -108,6 +108,34 @@ The **push already exists** (FCM, data-only, `LocalNotifications` draws the bann
 - In the list, these types get their own look: agent replies and schedules in violet, mentions and messages in blue, failed schedules in red.
 - On app resume, the bell count and an already-loaded list refresh, as a backstop for anything the socket missed.
 
+## Owner round 2026-10-06: keyboard, "@agent → no movement", reminders, agent activity
+
+**Root cause of "no movement" (server).** A technician's `@agent` post was stored and a run was queued, but the worker runs every person's run *as its starter* (`runtime/runAsStarter.ts`). A technician id lives in `technicians`, not `users`, and `loadAccess` was not told the role, so the run executed as an unknown principal with **no buildings**: every `flow_agent_runs` read matched nothing, the runner logged "run not found" and returned, and the run and its session stayed `queued` forever. Admins (web) never hit it. Fixed: the starter's role is looked up (`Technician`), as `reports/scheduleRunner` already did. Scheduled Flow Agent tasks owned by a technician had the same break.
+
+**App side.**
+- **Keyboard:** tap anywhere in the thread or drag it to close the keyboard; a hide-keyboard button sits left of the box while it is focused (an iOS multi-line box has no "done" key). When the thread is short (small phone, keyboard up) the Working card shrinks to one line and the @ list is capped at 35 % of the height.
+- **After an @agent post** the thread refreshes at once and polls every 5 s for 45 s, even when no session started (a Schedule card, a clarifying question, an offline reply or a note come back as thread lines, and a phone often has no socket).
+- **Agent activity:** a thinking bubble under the thread (avatar pulse, typing dots, "Flow Agent is thinking") lists every stage the server really sent for that session, oldest first, newest live (`ConversationState.trails`, `core/conversation/agent_activity.dart`). Queued over 2 min → "Still waiting to start…". A session that ends failed/stopped/offline with no agent reply → a plain "couldn't finish" line. A new agent reply is tinted for 4 s. A session still queued after 30 min is a lost run and no longer shows as working (here and on the snag card).
+- **Failures in plain words:** 428 (location), 401 and 5xx never show the server's raw text (`plainPostFailure`).
+- Typing / leave use the record UUID (the server's room key).
+
+**Reminders (server).** A reminder made in a thread now also posts a silent Flow Agent line "Reminder: …" (with the Schedule card) in that thread when it fires, so it is visible even when the phone shows no push.
+
+```mermaid
+sequenceDiagram
+  participant T as Technician (FieldOps)
+  participant API as POST /api/conversations/.../messages
+  participant W as Flow Agents worker
+  participant R as Runner
+  T->>API: "@agent is this fixed?"
+  API-->>T: 201 {message, invoked:[session]} — app refreshes now, polls 5 s
+  API->>W: enqueue run (triggeredBy = technician id)
+  W->>W: executeAsStarter: Technician? → loadAccess(id, "Technician") (was: no buildings)
+  W->>R: executeRun — stages → typing / session.updated
+  R-->>T: thinking bubble steps (socket or 5 s poll)
+  R-->>T: reply in thread (tinted), bubble goes
+```
+
 ## What was only simulated / not verified
 
 - **No live server run.** Every shape comes from the server's `types.ts` and the spec's contract sections, and was checked only by parsing tests.

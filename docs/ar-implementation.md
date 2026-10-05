@@ -129,6 +129,28 @@ Hooks added to shared files: [router.dart](../lib/app/router.dart) (`Routes.ar*`
 
 A headless Flutter plugin. Android uses Kotlin, SceneView 4.39, ARCore and ML Kit. iOS uses Swift, ARKit, Vision and Filament through Objective-C++. A shared C99 core does GLB and meshopt decoding, picking, corner fitting and the overlay GLB. The wire contract is [CHANNEL.md](../packages/fe_ar/CHANNEL.md); building and enabling are in the [README](../packages/fe_ar/README.md). It is **not** in the app's `pubspec.yaml`.
 
+### 2.6 Room scan, pulse rings and the LiDAR surface check (2026-10-06)
+
+Setup shows the room being measured: on iPhones and iPads with LiDAR the live scene mesh, tinted by surface type and painting in as ARKit finds it; on other iPhones an animated grid on the tracked planes; on Android SceneView's plane grid. A confirmed board or corner gets a pulse ring (iOS), green when the depth sensor agrees it sits on the real surface, amber when it doesn't. When the model is first placed it builds up from the floor while fading in (iOS).
+
+```mermaid
+flowchart LR
+  S["ArSessionController<br/>_syncScanOverlay on every state change"] -->|"ScanOverlayPolicy.show<br/>setup && !locked, user choice,<br/>not demo / paused / warm"| E["setScanOverlay(on, contrast)"]
+  E --> IOS["iOS FeArScanner<br/>ARMeshAnchor (LiDAR) or ARPlaneAnchor<br/>≤5 Hz, ≤6 anchors/tick, ≤120k faces"]
+  IOS --> R["FeArRenderer + fe_scan.filamat<br/>wireframe / grid, sweep, fade"]
+  E --> AND["Android: SceneView plane grid"]
+  IOS -->|"scan event ≤1 Hz"| P["ScanProgress<br/>coverage % (floor 4 m², walls 6 m²)"]
+  AND -->|"scan event ≤1 Hz"| P
+  P --> UI["Setup chip: Room scan 64% · 3 surfaces<br/>Depth sensor active (LiDAR)"]
+  M["marker / corner<br/>surfaceResidualMm (iOS LiDAR)"] --> T["SurfaceCheck.tone<br/>≤30 mm ok · else warn · none info"]
+  T -->|"addObservation"| PU["pulseAt (iOS rings)<br/>warn → re-snap hint"]
+```
+
+- Pure rules: [scan_overlay.dart](../lib/core/ar/scan_overlay.dart) (`ScanProgress`, `ScanOverlayPolicy`, `SurfaceCheck`), tested in `test/ar_scan_overlay_test.dart`.
+- Menu → View → **Show room scan** overrides the automatic choice for the rest of the session (`toggleRoomScan`).
+- Native: `packages/fe_ar/ios/Classes/FeArScan.swift`, `FeArRenderer.mm` (scan surfaces, rings), `FeArDepthProbe.surfaceResidual`, `materials/fe_scan.mat` (iOS-only, compiled with matc 1.72.1 like the others). Wire: CHANNEL.md `setScanOverlay`, `pulseAt`, `scan`, `surfaceResidualMm`.
+- The residual never changes the fit or σ; it only colours the ring and raises a hint.
+
 ## 3. A session, end to end
 
 ```mermaid
@@ -219,7 +241,7 @@ Everything below is additive. Existing C8 call forms still compile.
 - `ArEngine.setFeatureState(rgba, width, {buildId})` and `setTarget(ids, {buildId})`. Feature ids are dense **per build**, so an unscoped texture hid or tinted the other build's elements with the same id. The session's target arrow also unioned both builds' bounds. The workspace now sends **one texture per build**, and the Layers panel's MEP SHOW switches (pipes, ducts, trays, equipment) no longer apply to architecture or structure elements. `fe_ar` already accepted `buildId` (CHANNEL.md).
 - Extra optional params: `MarkerCode.fromScan(raw, {allowBare})`, `AlignmentEstimator.fit(obs, {manual, nudgeAr})`, `CornerMatcher({floorFinishOffsetM})`. Events take named constructor parameters.
 - Route params beyond C9 are listed in §4.
-- Engine error events with coaching codes (`corner-no-surface`, `corner-no-walls`, `corner-not-found`, `corner-no-floor`, `corner-not-tracking`, `marker-unstable`) show as coaching toasts. Any other code shows as "AR hiccup (code)".
+- Engine error events with coaching codes (`corner-no-surface`, `corner-no-walls`, `corner-not-found`, `corner-no-floor`, `corner-not-tracking`, `marker-unstable`) show as coaching toasts. Session-fatal codes (`camera-denied`, `device-not-supported` → the fallback screen; `camera-unavailable`, `session-failed`, `renderer-failed` → the failed screen with Retry) end the session view; iOS reports them as events after `startSession`. Any other code shows a plain "AR had a hiccup" warning, never the code (2026-10-06).
 - The resolve badge from the server is `MODEL_OLDER_THAN_LATEST_UPLOAD`, and the scan sheet reads it. The install-request push entity is `ar_install_request`, and both routers accept it.
 - `fe_ar` extensions that Dart doesn't use yet: `projectTile`, `installArCore`, `markerProgress` events (`startSession {progressEvents: true}`), and `recordTo`/`playbackFrom`.
 

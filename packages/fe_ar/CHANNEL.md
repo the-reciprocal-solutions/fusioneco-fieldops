@@ -20,7 +20,7 @@ The wire contract between the app's `ChannelArEngine` (`lib/core/ar/channel_ar_e
 
 | Method | Arguments | Result |
 |---|---|---|
-| `capabilities` | — | `{supported: bool, depth: bool, lidar: bool, recording: bool, platform: "android"\|"ios", reason: String?}` plus extras `arcore` (Android availability name), `featureMaterial: bool`, `cameraMaterial: bool` (iOS), `torch: bool` (the back camera has a torch `setTorch` can switch; absent = false) |
+| `capabilities` | — | `{supported: bool, depth: bool, lidar: bool, recording: bool, platform: "android"\|"ios", reason: String?}` plus extras `arcore` (Android availability name), `featureMaterial: bool`, `cameraMaterial: bool` (iOS), `torch: bool` (the back camera has a torch `setTorch` can switch; absent = false), `mesh: bool` (iOS LiDAR scene mesh), `scanOverlay: bool` (`setScanOverlay` draws: iOS when `fe_scan.filamat` is bundled, Android always) |
 | `startSession` | optional `{depth: bool = true, progressEvents: bool = false, recordTo: path?, playbackFrom: path?}` | `null`. Starts tracking. Android: asks the Play Store for Google Play Services for AR when missing (then emits `error arcore-install-requested`); `recordTo`/`playbackFrom` use ARCore Recording & Playback (MP4); a `playbackFrom` that differs from the previous start rebuilds the ARCore session, and playback keeps the recording's camera config. Keys are sent only when set (debug rig: [docs/ar-recording-playback.md](../../docs/ar-recording-playback.md)). iOS: `recordTo`/`playbackFrom` emit `recording-unsupported` / `playback-unsupported` |
 | `loadTiles` | `{tiles: [{hash: String, path: String}]}` | `{loaded: [hash], failed: [{hash, reason}]}` once every tile is decoded. Tiles upload **in the order sent** (send focus tiles first). The file's SHA-256 is compared with `hash`; a mismatch loads anyway and emits `error tile-hash-mismatch` |
 | `unloadTiles` | `{hashes: [String]}` | `null` |
@@ -52,6 +52,8 @@ Additive; a Dart side that doesn't use them loses nothing.
 | `setTorch` | `{on: bool}` | `bool`: applied now. Android: `Config.FlashMode.TORCH`/`OFF` through `session.configure` (kept across SceneView reconfigures; off during playback; reset by `startSession`/`stop`). Error `torch-failed` if ARCore refuses |
 | `startRecording` | `{path: String}` | `bool`. Records the running session to an MP4 (ARCore Recording & Playback, auto-stops on pause); before a session exists it starts when one resumes. Debug rig only. iOS: `false` |
 | `stopRecording` | — | the MP4's path, or `null` when nothing was recording. `stop` also finishes a recording |
+| `setScanOverlay` | `{on: bool, contrast: bool = false}` | `bool`: the overlay can draw. The room-scan overlay for setup. **iOS:** with LiDAR (scene reconstruction), the live `ARMeshAnchor` mesh as unshared triangles tinted by face classification (wall cyan, floor green, ceiling violet, door amber, window blue, furniture pink, unclassified slate), a thin glowing wireframe that paints in as ARKit reports each surface, with a band sweeping out from the camera every ~2 s (`materials/fe_scan.mat`); without LiDAR the tracked planes as a world-space 25 cm grid. Uploads at most 5 Hz, ≤ 6 changed anchors a tick, ≤ 120k faces. Fades in 0.4 s / out 0.8 s; the scene mesh keeps running until the fade ends. `contrast` = Sunlight look. **Android:** SceneView's plane grid on the tracked planes. Off after `stop`. Also starts `scan` events |
+| `pulseAt` | `{posAr: [3], normalAr: [3]?, tone: "ok" \| "warn" \| "info"}` | `bool`. **iOS:** two expanding rings (1.2 s, 0.35 s apart) in the plane facing `normalAr` (default up), green / amber / blue; drawn over everything, then removed. **Android:** not implemented (`notImplemented`; Dart answers `false`) |
 
 ## Events
 
@@ -60,14 +62,15 @@ Maps on `fusioneco/ar/events`. Never per frame.
 | `type` | Fields | When |
 |---|---|---|
 | `tracking` | `state`: `initializing \| tracking \| limited \| paused \| stopped \| notAvailable`; `reason`: `initializing \| excessiveMotion \| insufficientFeatures \| insufficientLight \| relocalizing \| cameraUnavailable \| badState \| interrupted \|` an error code `\| null` | on change |
-| `marker` | `rawPayload: String, anchorId: String, centreAr: [3], normalAr: [3], method: tag\|lidar\|plane\|depth\|pnp, spreadMm, distanceM, viewAngleDeg, qrEdgeMm: double?` | once per accepted board (below) |
+| `marker` | `rawPayload: String, anchorId: String, centreAr: [3], normalAr: [3], method: tag\|lidar\|plane\|depth\|pnp, spreadMm, distanceM, viewAngleDeg, qrEdgeMm: double?`; extension `surfaceResidualMm: double?` (below) | once per accepted board (below) |
 | `corner` | `posAr: [3]` (on the floor), `faceAAr: [nx, nz], faceBAr: [nx, nz]` (unit, both facing the camera, ordered so `a.x*b.z - a.z*b.x >= 0`), `angleDeg` (90 for any square corner), `kind: inside\|outside\|column`, `method: lidar\|planes\|floorTap`; extras `spanA, spanB, rmsM`. (Dart also builds corners with `method: depthTaps` from `depthPointAt` wall taps, `lib/core/ar/wall_fit.dart`; never on the wire) | returned by `detectCornerAt`; reserved as an event for native-initiated snaps (auto re-snap, AR-46), not emitted yet |
 | `anchor` | `anchorId, posAr: [3]` | a marker anchor moved over 1 mm, at most 2 Hz |
-| `pose` | `arFromCamera: [16]` (camera looks down its −Z) | 5 Hz while tracking |
+| `pose` | `arFromCamera: [16]` (camera looks down its −Z; display-oriented on both: Android `displayOrientedPose`, iOS `viewMatrix(for: interfaceOrientation)⁻¹`) | 5 Hz while tracking |
 | `targetScreen` | `x, y` (logical px), `onScreen: bool` | 10 Hz while a target is set and resident. Behind the camera, `x, y` are mirrored so an edge arrow still points the way to turn |
 | `error` | `code, detail` | see codes |
 | `floor` | `yAr: double, areaM2: double` | **extension**: the largest tracked upward plane ≥ 0.25 m², 0.8–2.3 m below the camera (Dart ignores it when it disagrees by > 12 cm with the floor the observations imply). At most 1 Hz, only when it moves by 1 cm. Dart fixes the model's height from it (floor on floor); boards and corners then set only yaw and horizontal position |
-| `thermal` | `status: int, level: none\|light\|moderate\|severe\|critical\|emergency\|shutdown` | **extension**: Android PowerManager thermal status (API 29+), iOS ProcessInfo thermal state mapped onto it; Dart pauses AR at `severe`+ |
+| `thermal` | `status: int, level: none\|light\|moderate\|severe\|critical\|emergency\|shutdown` | **extension**: Android PowerManager thermal status (API 29+), iOS ProcessInfo thermal state mapped onto it (nominal → none, fair → light, serious → moderate, critical → critical: an iPhone running LiDAR reaches `serious` in normal use); Dart pauses AR at `severe`+ |
+| `scan` | `source: mesh\|planes, surfaces, walls, floors, floorM2, wallM2, ceilingM2, otherM2` | **extension**, while `setScanOverlay(on)`: what the room scan has found, at most 1 Hz and only when it changed. `walls`/`floors` count tracked planes; the areas come from the classified LiDAR mesh (`source: mesh`) or from plane extents. Dart: `lib/core/ar/scan_overlay.dart` (`ScanProgress`) |
 | `markerProgress` | `rawPayload, samples, needed: 15 (20 while locking on tags), distanceM, viewAngleDeg, gate: ok\|tooClose\|tooFar\|angle` | **extension**, only after `startSession({progressEvents: true})`: one per QR sample while a board locks, for the M3 Lock ring and its coaching chips. Dart ignores unknown types, so it's safe either way |
 
 ### How a `marker` is accepted (docs/ar-bim-overlay.md §4.2)
@@ -91,6 +94,10 @@ Every QR payload is reported raw (asset tags too); Dart decides what is a marker
 | `plane` | tracked vertical plane | ~1–2 cm | class σ |
 | `depth` | ARCore Depth point | ~1–3 cm | class σ |
 | `pnp` | QR corners only (A4 assumed) | several cm | class σ × 2 |
+
+### LiDAR surface check (`surfaceResidualMm`, iOS)
+
+On LiDAR devices the accepted board's centre, and each corner `detectCornerAt` returns, are checked against the depth sensor (`FeArDepthProbe.surfaceResidual`): the point is projected into the current frame's `smoothedSceneDepth` (else `sceneDepth`), and the median of the medium/high-confidence pixels in a 5×5 window is compared with the point's own depth along the view ray. `surfaceResidualMm` = measured − expected (+ = the real surface is behind the point). Corners are checked on the corner line 0.4, 0.9 and 1.4 m above the floor (median; outside corners and columns read the nearest pixel, the edge, not the wall behind it). Absent or `null` without LiDAR depth (Android, non-LiDAR iPhones, depth switched off). Dart: within 30 mm = `ok` (green ring), beyond = `warn` (amber ring and a "re-snap" hint), none = `info` (`SurfaceCheck`). It never changes the fit or the σ.
 
 ## Error codes
 

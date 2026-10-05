@@ -383,6 +383,19 @@ class _TopChips extends ConsumerWidget {
       default:
         break;
     }
+    // The room scan: how much of the room is measured, and the depth sensor
+    // when the device has one (never named by vendor or part).
+    if (session.scanOverlayOn && (session.capabilities?.scanOverlay ?? false)) {
+      final scan = session.scan;
+      final depth = session.capabilities?.lidar ?? false;
+      chips.add(ArGlassChip(
+        text: scan == null || scan.isEmpty
+            ? (depth ? 'ar.scan.depth_active' : 'ar.scan.scanning').getString(context)
+            : arTr(context, depth ? 'ar.scan.progress_depth' : 'ar.scan.progress', [scan.percent, scan.surfaces]),
+        icon: ArIcons.roomScan,
+        iconColor: scan != null && scan.percent >= 100 ? FeColors.success : null,
+      ));
+    }
     // Debug builds only (docs/ar-recording-playback.md).
     if (session.recordingPath != null) {
       chips.add(ArGlassChip(

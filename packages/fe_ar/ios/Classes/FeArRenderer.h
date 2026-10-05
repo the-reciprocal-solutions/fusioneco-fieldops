@@ -6,10 +6,11 @@
 // CAMetalLayer, the ARKit camera image as an external texture on a
 // full-screen triangle, ARKit's projection as a custom projection.
 //
-// It draws exactly what Android draws, from the same tiles and the same
-// compiled material (materials/fe_feature.mat): three gltfio instances per
-// tile for the solid, ghost and x-ray passes, a per-tile feature-state
-// texture, the overlay GLB, and nothing else. Main thread only.
+// It draws what Android draws, from the same tiles and the same compiled
+// material (materials/fe_feature.mat): three gltfio instances per tile for
+// the solid, ghost and x-ray passes, a per-tile feature-state texture and
+// the overlay GLB. iOS adds the room-scan overlay (LiDAR mesh or plane grid)
+// and pulse rings (materials/fe_scan.mat). Main thread only.
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -73,6 +74,34 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)setGridGlb:(nullable NSData*)glb visible:(BOOL)visible;
 - (void)setPinsGlb:(nullable NSData*)glb;
+
+// ---- room-scan overlay and pulse rings (materials/fe_scan.mat)
+
+/// fe_scan.filamat was bundled: the room-scan overlay and pulse rings draw.
+/// NO = both are silently skipped (the rest of AR is unaffected).
+@property(nonatomic, readonly) BOOL hasScanMaterial;
+
+/// Adds or replaces one scan surface (a LiDAR mesh anchor or a tracked
+/// plane), in its anchor's own frame. `vertices`: non-indexed triangles,
+/// 24 bytes a vertex: float x, y, z; uint8 r, g, b, a (linear tint); float
+/// u, v (the barycentric corner for the mesh wireframe). `grid` draws the
+/// world-space plane grid instead of the wireframe. `bornTime` is in the
+/// renderFrame `seconds` clock: the surface paints in from then.
+- (void)setScanSurface:(NSString*)key
+              vertices:(NSData*)vertices
+             transform:(simd_float4x4)transform
+              bornTime:(double)bornTime
+                  grid:(BOOL)grid NS_SWIFT_NAME(setScanSurface(_:vertices:transform:bornTime:grid:));
+/// The anchor moved (ARKit refined it) but its geometry did not.
+- (void)setScanSurfaceTransform:(NSString*)key transform:(simd_float4x4)transform NS_SWIFT_NAME(setScanSurfaceTransform(_:transform:));
+- (void)removeScanSurface:(NSString*)key NS_SWIFT_NAME(removeScanSurface(_:));
+- (void)clearScanSurfaces;
+/// Overlay opacity 0..1 (0 takes the scan layer out of the view) and the
+/// Sunlight look.
+- (void)setScanAlpha:(float)alpha contrast:(BOOL)contrast NS_SWIFT_NAME(setScanAlpha(_:contrast:));
+/// Two expanding rings at `position` (AR world) in the plane facing
+/// `normal`, colour 0xRRGGBB (sRGB). They remove themselves.
+- (void)pulseAt:(simd_float3)position normal:(simd_float3)normal rgb:(uint32_t)rgb NS_SWIFT_NAME(pulse(at:normal:rgb:));
 
 /// Reads back the next rendered frame (model, plus camera when
 /// drawsCamera). The completion runs on the main thread.

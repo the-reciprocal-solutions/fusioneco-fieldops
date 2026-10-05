@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../../core/conversation/agent_activity.dart';
 import '../../../domain/conversation.dart';
 import '../../../state/conversation_controller.dart';
 import '../../../theme/fe_colors.dart';
@@ -23,9 +24,15 @@ class WorkingCard extends StatefulWidget {
     this.typing = const {},
     this.myIds = const {},
     this.onStop,
+    this.compact = false,
   });
   final List<ConvSession> sessions;
   final Map<String, ConvTyping> typing;
+
+  /// One line per session (who, elapsed, Stop) — used while the keyboard is
+  /// up, when every point of height counts. The step-by-step view is the
+  /// thinking bubble in the thread ([AgentThinkingBubble]).
+  final bool compact;
 
   /// The viewer's ids: the requester may Stop their own session (C2 —
   /// `canStop` is always false on the socket, so it is re-derived here).
@@ -58,7 +65,7 @@ class _WorkingCardState extends State<WorkingCard> {
     if (widget.sessions.isEmpty) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      padding: const EdgeInsets.all(12),
+      padding: widget.compact ? const EdgeInsets.symmetric(horizontal: 12, vertical: 6) : const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: FeColors.aiSoft,
         borderRadius: BorderRadius.circular(16),
@@ -71,6 +78,7 @@ class _WorkingCardState extends State<WorkingCard> {
             if (i > 0) const Divider(height: 16, color: FeColors.aiLine),
             _SessionRow(
               session: widget.sessions[i],
+              compact: widget.compact,
               typing: widget.typing[widget.sessions[i].agentId],
               onStop: widget.onStop != null &&
                       (widget.sessions[i].canStop || widget.myIds.contains(widget.sessions[i].requesterId))
@@ -93,10 +101,11 @@ String elapsedText(Duration d) {
 }
 
 class _SessionRow extends StatelessWidget {
-  const _SessionRow({required this.session, this.typing, this.onStop});
+  const _SessionRow({required this.session, this.typing, this.onStop, this.compact = false});
   final ConvSession session;
   final ConvTyping? typing;
   final VoidCallback? onStop;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -113,7 +122,16 @@ class _SessionRow extends StatelessWidget {
           children: [
             _Pulse(active: working, child: ConvAvatar(name: s.agentName, isAgent: true, size: 28)),
             const SizedBox(width: 10),
-            Expanded(child: AppText.bodyMedium(title, weight: FontWeight.w800, color: FeColors.ai)),
+            Expanded(
+              child: AppText.bodyMedium(
+                title,
+                weight: FontWeight.w800,
+                color: FeColors.ai,
+                maxLines: compact ? 1 : 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (working) ...[const TypingDots(size: 5), const SizedBox(width: 8)],
             AppText.caption(elapsedText(DateTime.now().difference(s.countFrom)), color: FeColors.ai),
             if (onStop != null) ...[
               const SizedBox(width: 4),
@@ -129,9 +147,13 @@ class _SessionRow extends StatelessWidget {
             ],
           ],
         ),
-        if (s.routing != null && s.routing!.agents.isNotEmpty)
+        if (compact)
+          const SizedBox.shrink()
+        else if (s.routing != null && s.routing!.agents.isNotEmpty)
           Padding(padding: const EdgeInsets.only(top: 6), child: RoutingLine(routing: s.routing!)),
-        if (s.specialists.isNotEmpty)
+        if (compact)
+          const SizedBox.shrink()
+        else if (s.specialists.isNotEmpty)
           for (final sp in s.specialists)
             Padding(
               padding: const EdgeInsets.only(top: 4, left: 38),
@@ -268,3 +290,171 @@ class _AiWorkingChipState extends State<AiWorkingChip> {
     ),
   );
 }
+
+/// Three dots that rise and fall in turn — the "someone is typing" signal.
+/// Drawn only while the server says the run is really working (the caller
+/// decides); it never stands in for progress on its own.
+class TypingDots extends StatefulWidget {
+  const TypingDots({super.key, this.size = 6, this.color = FeColors.ai});
+  final double size;
+  final Color color;
+
+  @override
+  State<TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<TypingDots> with SingleTickerProviderStateMixin {
+  late final _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'conv.thinking'.getString(context),
+    child: AnimatedBuilder(
+      animation: _c,
+      builder: (context, _) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < 3; i++)
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: widget.size * 0.25),
+              child: Transform.translate(
+                offset: Offset(0, -widget.size * 0.6 * _bump((_c.value - i * 0.18) % 1.0)),
+                child: Container(
+                  width: widget.size,
+                  height: widget.size,
+                  decoration: BoxDecoration(
+                    color: widget.color.withValues(alpha: 0.45 + 0.55 * _bump((_c.value - i * 0.18) % 1.0)),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  /// 0 → 1 → 0 over the first 40 % of the cycle, then rest.
+  static double _bump(double t) {
+    if (t < 0 || t > 0.4) return 0;
+    final x = t / 0.4;
+    return x < 0.5 ? x * 2 : (1 - x) * 2;
+  }
+}
+
+/// The agent's turn in the thread, under the question: avatar, "Flow Agent
+/// is thinking" with typing dots, then the steps it has really taken so far
+/// (each one a stage the server sent — `ConversationState.trails`) with the
+/// newest one live. Queued for a while → says so plainly instead of a
+/// spinner that never moves.
+class AgentThinkingBubble extends StatelessWidget {
+  const AgentThinkingBubble({super.key, required this.session, this.steps = const [], this.typingStage});
+  final ConvSession session;
+
+  /// Stages seen for this session, oldest first.
+  final List<String> steps;
+
+  /// The newest agent `typing` stage, when it isn't in [steps] yet.
+  final String? typingStage;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = session;
+    final working = s.status == SessionStatus.working;
+    final all = appendStep(steps, typingStage ?? s.stage);
+    final waitingLong = isWaitingLong(s, DateTime.now());
+    final title = working
+        ? convTr(context, 'conv.thinking_title', [s.agentName])
+        : convTr(context, 'conv.queued_title', [s.agentName]);
+    return Padding(
+      padding: const EdgeInsetsDirectional.fromSTEB(8, 6, 12, 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Pulse(active: working, child: ConvAvatar(name: s.agentName, isAgent: true)),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Container(
+              key: ValueKey('agent-thinking-${s.id}'),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              decoration: BoxDecoration(
+                color: FeColors.aiSoft,
+                border: Border.all(color: FeColors.aiLine),
+                borderRadius: const BorderRadiusDirectional.only(
+                  topEnd: Radius.circular(16),
+                  bottomStart: Radius.circular(16),
+                  bottomEnd: Radius.circular(16),
+                  topStart: Radius.circular(4),
+                ).resolve(Directionality.of(context)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: AppText.caption(title, color: FeColors.ai, weight: FontWeight.w800),
+                      ),
+                      const SizedBox(width: 8),
+                      const TypingDots(size: 5),
+                    ],
+                  ),
+                  if (all.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: AppText.caption(
+                        working ? 'conv.stage_starting'.getString(context) : 'conv.stage_waiting'.getString(context),
+                        color: FeColors.ink2,
+                      ),
+                    ),
+                  for (var i = 0; i < all.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 5),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: Icon(
+                              i == all.length - 1 ? LucideIcons.loaderCircle : LucideIcons.circleCheck,
+                              size: 13,
+                              color: i == all.length - 1 ? FeColors.ai : FeColors.success,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: AppText.caption(
+                              _sentence(all[i]),
+                              color: i == all.length - 1 ? FeColors.ink : FeColors.ink2,
+                              weight: i == all.length - 1 ? FontWeight.w700 : null,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (waitingLong)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: AppText.caption('conv.waiting_long'.getString(context), color: FeColors.warning),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// "checking photos" → "Checking photos".
+  static String _sentence(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+}
+

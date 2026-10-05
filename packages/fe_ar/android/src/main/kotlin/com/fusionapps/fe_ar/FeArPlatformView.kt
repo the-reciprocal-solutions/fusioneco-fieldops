@@ -156,7 +156,9 @@ private fun FeArScene(controller: FeArController, lifecycle: Lifecycle, surfaceT
         depthMode = if (controller.wantDepth) Config.DepthMode.AUTOMATIC else Config.DepthMode.DISABLED,
         focusMode = Config.FocusMode.AUTO,
         sessionConfiguration = { session, config -> controller.configureSession(session, config) },
-        planeRenderer = false,
+        // The room-scan overlay during setup (Dart's `setScanOverlay`):
+        // SceneView's plane grid, the Android counterpart of iOS's mesh.
+        planeRenderer = controller.scanOverlay.value,
         onSessionCreated = { controller.onSessionCreated(it) },
         onSessionResumed = { controller.onSessionResumed(it) },
         onSessionPaused = { controller.onSessionPaused(it) },

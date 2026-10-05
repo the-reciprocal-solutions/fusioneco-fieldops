@@ -105,6 +105,17 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     /** The torch as Dart last asked (`setTorch`); applied in configureSession too. */
     private var torchOn = false
 
+    /**
+     * The room-scan overlay (extension `setScanOverlay`): on Android it is
+     * SceneView's own animated plane grid over the tracked planes (iOS draws
+     * the LiDAR mesh or its own grid). Read by the composable, so a change
+     * recomposes and SceneView's plane renderer follows (ARSceneView applies
+     * `planeRenderer` in a SideEffect on every recomposition).
+     */
+    val scanOverlay = mutableStateOf(false)
+    private var lastScanMs = 0L
+    private var lastScan: Map<String, Double> = emptyMap()
+
     // ---- drawing state (replayed onto a new renderer)
     private var modelCurrent = ArMath.identity()
     /** True once Dart has sent a model transform this session (TileRenderer.placed). */
@@ -426,6 +437,43 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
             lastTargetMs = nowMs
             targetScreen()?.let { emit(it) }
         }
+
+        if (scanOverlay.value && nowMs - lastScanMs >= SCAN_INTERVAL_MS) {
+            lastScanMs = nowMs
+            reportScan(session)
+        }
+    }
+
+    /**
+     * The `scan` event (extension, CHANNEL.md) from ARCore's tracked planes:
+     * how many floors and walls, and their area. iOS sends the same shape
+     * from its LiDAR mesh or planes. At most 1 Hz, only when it changed.
+     */
+    private fun reportScan(session: Session) {
+        var walls = 0
+        var floors = 0
+        var floorM2 = 0.0
+        var wallM2 = 0.0
+        var ceilingM2 = 0.0
+        for (p in session.getAllTrackables(Plane::class.java)) {
+            if (p.trackingState != TrackingState.TRACKING || p.subsumedBy != null) continue
+            val area = (p.extentX * p.extentZ).toDouble()
+            when (p.type) {
+                Plane.Type.HORIZONTAL_UPWARD_FACING -> { floors++; floorM2 += area }
+                Plane.Type.VERTICAL -> { walls++; wallM2 += area }
+                else -> ceilingM2 += area
+            }
+        }
+        val now = mapOf(
+            "walls" to walls.toDouble(), "floors" to floors.toDouble(),
+            "floorM2" to floorM2, "wallM2" to wallM2, "ceilingM2" to ceilingM2, "otherM2" to 0.0,
+        )
+        val changed = now.any { (k, v) -> kotlin.math.abs(v - (lastScan[k] ?: -1.0)) >= (if (k.endsWith("M2")) 0.1 else 0.5) }
+        if (!changed) return
+        lastScan = now
+        val event = mutableMapOf<String, Any?>("type" to "scan", "source" to "planes", "surfaces" to walls + floors)
+        for ((k, v) in now) event[k] = if (k.endsWith("M2")) Math.round(v * 100) / 100.0 else v
+        emit(event)
     }
 
     /**
@@ -662,6 +710,9 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
             "arcore" to availability.name,
             "featureMaterial" to hasAsset("fe_ar/fe_feature.filamat"),
             "torch" to (supported && torchAvailable()),
+            // the room-scan overlay (SceneView's plane grid); no LiDAR mesh here
+            "scanOverlay" to supported,
+            "mesh" to false,
         )
     }
 
@@ -1035,6 +1086,11 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
                     torchOn = Args.bool(a["on"]) ?: false
                     result.success(applyTorch())
                 }
+                "setScanOverlay" -> {
+                    scanOverlay.value = Args.bool(a["on"]) ?: false
+                    if (!scanOverlay.value) lastScan = emptyMap()
+                    result.success(true)
+                }
                 "startRecording" -> {
                     val path = Args.string(a["path"])
                     if (path == null) result.error("bad-args", "path is required", null)
@@ -1140,6 +1196,8 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         if (recordTo != null && recordingStarted) stopRecording()
         recordTo = null
         torchOn = false
+        scanOverlay.value = false
+        lastScan = emptyMap()
         sessionWanted.value = false
         updateRunning()
         markers.reset()
@@ -1228,6 +1286,7 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         private const val POSE_INTERVAL_MS = 200L // 5 Hz (§6.4)
         private const val TARGET_INTERVAL_MS = 100L // 10 Hz (§6.4)
         private const val FLOOR_INTERVAL_MS = 1000L
+        private const val SCAN_INTERVAL_MS = 1000L
         private const val REFOCUS_DELAY_MS = 150L
         /** A floor plane must be at least this big (a doormat is not the floor). */
         private const val FLOOR_MIN_AREA_M2 = 0.25f

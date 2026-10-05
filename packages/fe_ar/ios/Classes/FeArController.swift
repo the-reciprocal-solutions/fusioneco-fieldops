@@ -25,6 +25,28 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
     private lazy var markers = FeArMarkerDetector(emit: { [weak self] in self?.emit($0) })
     private lazy var corners = FeArCornerDetector(emit: { [weak self] in self?.emit($0) })
     private let depthProbe = FeArDepthProbe()
+    private lazy var scanner = FeArScanner(emit: { [weak self] in self?.emit($0) })
+
+    // room-scan overlay (extension `setScanOverlay`): Dart's wish, the Sunlight
+    // look, and the overlay's animated opacity (fades in 0.4 s, out 0.8 s)
+    private var scanWanted = false
+    private var scanContrast = false
+    private var scanAlpha: Float = 0
+    private var lastFrameTime: CFTimeInterval = 0
+    /// (depth semantics, scene mesh) of the configuration the session runs.
+    private var runningConfig: (depth: Bool, mesh: Bool)?
+    /// The scene mesh runs for corner snaps (with depth) and while the scan
+    /// overlay shows or is still fading out (turning it off mid-fade would
+    /// swap the fading mesh for the plane grid).
+    private var wantMesh: Bool { wantDepth || scanWanted || scanAlpha > 0 }
+
+    // model reveal: on the first placement the model builds up from its
+    // lowest point to its highest (a moving section plane) while it fades in
+    private var revealStart: CFTimeInterval = 0
+    private var revealBottom: Float = 0
+    private var revealTop: Float = 0
+    private var revealing = false
+    static let revealSeconds: CFTimeInterval = 1.1
 
     // drawing state
     private var modelCurrent = matrix_identity_float4x4
@@ -114,6 +136,8 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             return
         }
         renderer = r
+        scanner.rendererChanged()
+        r.setScanAlpha(scanAlpha, contrast: scanContrast)
         if !r.drawsCamera { view.container.enableCameraFallback() }
         r.setModelMatrix(modelCurrent)
         r.setPlaced(modelPlaced)
@@ -130,6 +154,7 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         if let v = platformView, ObjectIdentifier(v) != id { return }
         platformView = nil
         renderer = nil // dealloc tears Filament down
+        scanner.rendererChanged()
         matricesValid = false
     }
 
@@ -174,6 +199,11 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         c.isAutoFocusEnabled = true
         c.environmentTexturing = .none
         if let f = Self.preferredVideoFormat() { c.videoFormat = f }
+        // LiDAR's scene mesh: for corner snaps while depth is on, and for the
+        // room-scan overlay whenever that shows (it is the overlay).
+        if wantMesh, ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
+            c.sceneReconstruction = .meshWithClassification
+        }
         if wantDepth {
             // Both when the device has them: smoothed for markers and corners,
             // the per-frame map (with its own confidence) for depthPointAt's
@@ -184,13 +214,20 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
                 c.frameSemantics.insert(.sceneDepth)
             }
-            // LiDAR devices: the classified scene mesh feeds corner snapping
-            // (FeArCornerDetector.meshCorner) with walls the camera saw earlier.
-            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
-                c.sceneReconstruction = .meshWithClassification
-            }
         }
         return c
+    }
+
+    /// Re-runs the session (no reset: tracking and anchors continue) when
+    /// depth or the scene mesh should change. ARKit restarts the capture,
+    /// which turns the torch off, so it is re-applied on the next frame.
+    private func reconfigureIfNeeded() {
+        guard running else { return }
+        let want = (depth: wantDepth, mesh: wantMesh)
+        if let r = runningConfig, r.depth == want.depth, r.mesh == want.mesh { return }
+        session.run(configuration(), options: [])
+        runningConfig = want
+        torchNeedsApply = torchOn
     }
 
     /// The QR must decode from ~2 m (docs/ar-markers-and-qr.md §2.2), so take
@@ -215,6 +252,7 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         let should = sessionWanted && !paused
         if should && !running {
             session.run(configuration(), options: needsReset ? [.resetTracking, .removeExistingAnchors] : [])
+            runningConfig = (depth: wantDepth, mesh: wantMesh)
             needsReset = false
             running = true
             torchNeedsApply = torchOn
@@ -281,6 +319,13 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         if case .normal = frame.camera.trackingState { tracking = true } else { tracking = false }
 
         stepEase(now)
+        let dt = lastFrameTime > 0 ? min(max(now - lastFrameTime, 0), 0.1) : 0
+        lastFrameTime = now
+        stepScanAlpha(dt)
+        stepReveal(now)
+        // Before the render, so a surface found this frame draws this frame.
+        scanner.onFrame(frame, now: now, seconds: now - startTime, renderer: renderer,
+                        drawing: scanWanted || scanAlpha > 0, stats: scanWanted)
         if let pv = platformView {
             let container = pv.container
             let size = container.bounds.size
@@ -308,7 +353,10 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
 
         if tracking && now - lastPose >= 0.2 {
             lastPose = now
-            emit(["type": "pose", "arFromCamera": Self.list(frame.camera.transform)])
+            // Display-oriented, as Android's displayOrientedPose: +X right and
+            // +Y up on screen. camera.transform is the sensor's landscape frame.
+            let orientation = platformView?.container.interfaceOrientation ?? .portrait
+            emit(["type": "pose", "arFromCamera": Self.list(frame.camera.viewMatrix(for: orientation).inverse)])
         }
         markers.onFrame(session: session, frame: frame, tracking: tracking)
         if tracking && now - lastFloorCheck >= 1 {
@@ -420,6 +468,7 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             easeDuration = 0
             renderer?.setModelMatrix(m)
             renderer?.setPlaced(true)
+            startReveal()
             return
         }
         if easeMs <= 0 || !Self.isYawTranslation(modelCurrent) || !Self.isYawTranslation(m) {
@@ -451,6 +500,56 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             modelCurrent = Self.fromYaw(y0 + dy * s, SIMD3<Float>(a.x + (b.x - a.x) * s, a.y + (b.y - a.y) * s, a.z + (b.z - a.z) * s))
         }
         renderer?.setModelMatrix(modelCurrent)
+    }
+
+    // MARK: model reveal and scan fade
+
+    /// The first placement builds the model up from its lowest point to its
+    /// highest over ~1 s (a rising section plane, tile frame) while it fades
+    /// in. Skipped when Dart has a section of its own or no tile is loaded
+    /// yet (the model then simply appears).
+    private func startReveal() {
+        guard sectionY == nil else { return }
+        var lo = Float.greatestFiniteMagnitude, hi = -Float.greatestFiniteMagnitude
+        var a = SIMD3<Float>(repeating: 0), b = SIMD3<Float>(repeating: 0)
+        var checked = 0
+        for e in tiles.entries {
+            for l in 0..<e.cpu.localIndexCount where checked < 50_000 {
+                checked += 1
+                if e.cpu.localBounds(l, min: &a, max: &b) {
+                    lo = min(lo, a.y)
+                    hi = max(hi, b.y)
+                }
+            }
+        }
+        guard lo < hi else { return }
+        revealBottom = lo
+        revealTop = hi + 0.05
+        revealStart = CACurrentMediaTime()
+        revealing = true
+        stepReveal(revealStart)
+    }
+
+    private func stepReveal(_ now: CFTimeInterval) {
+        guard revealing else { return }
+        let t = Float(min(max((now - revealStart) / Self.revealSeconds, 0), 1))
+        if t >= 1 || sectionY != nil {
+            revealing = false
+            renderer?.setOpacity(opacity, sectionY: sectionY.map { NSNumber(value: $0) })
+            return
+        }
+        let k = t * t * (3 - 2 * t)
+        renderer?.setOpacity(opacity * (0.25 + 0.75 * k), sectionY: NSNumber(value: revealBottom + (revealTop - revealBottom) * k))
+    }
+
+    /// Eases the room-scan overlay toward Dart's wish.
+    private func stepScanAlpha(_ dt: CFTimeInterval) {
+        let target: Float = scanWanted ? 1 : 0
+        guard scanAlpha != target else { return }
+        let step = Float(dt / (scanWanted ? 0.4 : 0.8))
+        scanAlpha = scanWanted ? min(target, scanAlpha + step) : max(target, scanAlpha - step)
+        renderer?.setScanAlpha(scanAlpha, contrast: scanContrast)
+        if scanAlpha == 0 { reconfigureIfNeeded() } // faded out: the mesh can stop
     }
 
     // x' = x cos + z sin, z' = -x sin + z cos (CONTRACT C2): column 2 is (sin, 0, cos)
@@ -630,6 +729,8 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             // extras: the classified LiDAR mesh (corner snaps), a torch to switch
             "mesh": ok && mesh,
             "torch": Self.torchDevice()?.hasTorch ?? false,
+            // the room-scan overlay can draw (fe_scan.filamat bundled)
+            "scanOverlay": ok && (renderer?.hasScanMaterial ?? Self.bundledMaterial("fe_scan")),
         ]
     }
 
@@ -741,7 +842,12 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             opacity = min(max((a["opacity"] as? NSNumber)?.floatValue ?? 1, 0), 1)
             sectionY = (a["sectionY"] as? NSNumber)?.floatValue
             layerContrast = (a["contrast"] as? Bool) ?? false
-            renderer?.setOpacity(opacity, sectionY: sectionY.map { NSNumber(value: $0) })
+            // A running reveal ends on these values itself (stepReveal); a
+            // section of Dart's own ends it now.
+            if !revealing || sectionY != nil {
+                revealing = false
+                renderer?.setOpacity(opacity, sectionY: sectionY.map { NSNumber(value: $0) })
+            }
             renderer?.setContrast(layerContrast)
             renderer?.setGridGlb(gridGlb, visible: layerGrid)
             for e in tiles.entries { sync(e) }
@@ -782,8 +888,9 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
                 result(nil)
                 return
             }
-            result(corners.detect(session: session, frame: frame, point: p, viewSize: pv.container.bounds.size,
-                                  orientation: pv.container.interfaceOrientation, rayOrigin: r.0, rayDir: r.1))
+            let corner = corners.detect(session: session, frame: frame, point: p, viewSize: pv.container.bounds.size,
+                                        orientation: pv.container.interfaceOrientation, rayOrigin: r.0, rayDir: r.1)
+            result(corner.map { FeArCornerDetector.verified($0, frame: frame) })
         case "pick":
             guard let x = (a["x"] as? NSNumber)?.doubleValue, let y = (a["y"] as? NSNumber)?.doubleValue else {
                 result(nil)
@@ -852,22 +959,45 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                 guard let self = self, self.running else { return }
                 self.session.run(self.configuration(), options: [])
+                self.torchNeedsApply = self.torchOn
             }
+            torchNeedsApply = torchOn
             result(true)
         case "setDepth":
             // Depth and the scene mesh are the costly parts; Dart turns them
             // off once the model is placed and back on for setup.
-            let on = (a["on"] as? Bool) ?? true
-            if on != wantDepth {
-                wantDepth = on
-                if running { session.run(configuration(), options: []) }
-            }
+            wantDepth = (a["on"] as? Bool) ?? true
+            reconfigureIfNeeded()
             result(true)
         case "setTorch":
             // Remembered while paused (re-applied on the next run's first
             // frame); the answer says whether it is applied now.
             torchOn = (a["on"] as? Bool) ?? false
             result(applyTorch())
+        case "setScanOverlay":
+            // The room-scan overlay: LiDAR mesh, else the plane grid. It fades
+            // in or out natively; the scene mesh runs while it shows.
+            scanWanted = (a["on"] as? Bool) ?? false
+            scanContrast = (a["contrast"] as? Bool) ?? scanContrast
+            renderer?.setScanAlpha(scanAlpha, contrast: scanContrast)
+            reconfigureIfNeeded()
+            result(renderer?.hasScanMaterial ?? Self.bundledMaterial("fe_scan"))
+        case "pulseAt":
+            // Two expanding rings where a board or corner was confirmed;
+            // `tone` from Dart's depth-check verdict.
+            guard let p = Self.vec3(a["posAr"]), let r = renderer, r.hasScanMaterial else {
+                result(false)
+                return
+            }
+            let n = Self.vec3(a["normalAr"]) ?? SIMD3<Float>(0, 1, 0)
+            let rgb: UInt32
+            switch a["tone"] as? String {
+            case "ok": rgb = 0x22C55E
+            case "warn": rgb = 0xF59E0B
+            default: rgb = 0x38BDF8
+            }
+            r.pulse(at: p, normal: n, rgb: rgb)
+            result(true)
         case "startRecording":
             // ARKit sessions can't be recorded in-app (Reality Composer does it)
             result(false)
@@ -895,6 +1025,12 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         renderer?.setPlaced(false)
         lastFloorY = nil
         floorAnchorId = nil
+        scanWanted = false
+        scanAlpha = 0
+        renderer?.setScanAlpha(0, contrast: scanContrast)
+        scanner.reset(renderer: renderer)
+        revealing = false
+        runningConfig = nil
         torchOn = false
         torchNeedsApply = false
         layerMep = true
@@ -960,7 +1096,12 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         switch ProcessInfo.processInfo.thermalState {
         case .nominal: (status, level) = (0, "none")
         case .fair: (status, level) = (1, "light")
-        case .serious: (status, level) = (3, "severe")
+        // .serious is where iOS starts trimming performance, which an iPhone
+        // running LiDAR, the scene mesh and 60 Hz rendering reaches within
+        // minutes of normal use: Android's "moderate" (Dart warns), not
+        // "severe" (Dart pauses AR). .critical is the device asking apps to
+        // cut work now: pause.
+        case .serious: (status, level) = (2, "moderate")
         case .critical: (status, level) = (4, "critical")
         @unknown default: (status, level) = (0, "none")
         }

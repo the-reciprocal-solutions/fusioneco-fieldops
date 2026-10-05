@@ -258,6 +258,40 @@ class SnagActivity {
   };
 }
 
+/// Why this device's last attempt to send a snag write did not go through
+/// (2026-10-06). Local only — never sent, cleared as soon as the server's
+/// copy is saved. The screens turn it into plain words
+/// (`core/snag/snag_send_state.dart`); the raw server message is never shown.
+class SnagSendIssue {
+  const SnagSendIssue({required this.status, required this.at, this.code, this.dropped = false});
+
+  /// HTTP status of the failed replay; 0 = no HTTP answer.
+  final int status;
+  final String? code;
+
+  /// true = the queue gave up on it (a 4xx): nothing will retry until the
+  /// technician taps Retry. false = still queued and retrying on its own.
+  final bool dropped;
+  final DateTime at;
+
+  static SnagSendIssue? fromJson(dynamic v) {
+    if (v is! Map) return null;
+    return SnagSendIssue(
+      status: asInt(v['status']) ?? 0,
+      code: firstNonEmpty([v['code']]),
+      dropped: asBool(v['dropped']) ?? false,
+      at: asDate(v['at']) ?? DateTime.now(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'status': status,
+    'code': ?code,
+    'dropped': dropped,
+    'at': at.toUtc().toIso8601String(),
+  };
+}
+
 class Snag {
   const Snag({
     required this.id,
@@ -299,6 +333,7 @@ class Snag {
     this.verifiedAt,
     this.closedAt,
     this.localOnly = false,
+    this.sendIssue,
   });
 
   final String id;
@@ -343,6 +378,10 @@ class Snag {
   /// True until the server has confirmed this snag exists (a fetch returned
   /// it, or the create answered 2xx). Never sent to the server.
   final bool localOnly;
+
+  /// Set when the last send of a write for this snag failed; see
+  /// [SnagSendIssue]. Never sent to the server.
+  final SnagSendIssue? sendIssue;
 
   /// "SN-00042" once the server has numbered it; until then the first six
   /// characters of the client id, so two unsynced snags never read the same.
@@ -410,6 +449,7 @@ class Snag {
       createdAt: asDate(json['clientCreatedAt']) ?? asDate(json['createdAt']) ?? now,
       updatedAt: asDate(json['updatedAt']) ?? now,
       localOnly: asBool(json['localOnly']) ?? false,
+      sendIssue: SnagSendIssue.fromJson(json['sendIssue']),
     );
   }
 
@@ -455,6 +495,7 @@ class Snag {
     'createdAt': createdAt.toUtc().toIso8601String(),
     'updatedAt': updatedAt.toUtc().toIso8601String(),
     'localOnly': localOnly,
+    'sendIssue': ?sendIssue?.toJson(),
   };
 
   Snag copyWith({
@@ -476,6 +517,8 @@ class Snag {
     DateTime? updatedAt,
     SnagPin? pin,
     bool? localOnly,
+    SnagSendIssue? sendIssue,
+    bool clearSendIssue = false,
     bool clearReady = false,
     bool clearVerified = false,
   }) => Snag(
@@ -518,6 +561,7 @@ class Snag {
     createdAt: createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
     localOnly: localOnly ?? this.localOnly,
+    sendIssue: clearSendIssue ? null : (sendIssue ?? this.sendIssue),
   );
 }
 

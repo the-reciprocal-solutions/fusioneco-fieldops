@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
 import '../../core/snag/snag_rules.dart';
+import '../../core/snag/snag_send_state.dart';
 import '../../domain/snag.dart';
 import '../../state/snag_controller.dart';
 import '../../theme/fe_colors.dart';
@@ -44,6 +45,8 @@ class SnagSurveyScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final pending = ref.watch(pendingSnagIdsProvider).valueOrNull ?? const <String>{};
+    final flushing = ref.watch(snagQueueFlushingProvider);
     final survey = ref.watch(snagSurveyProvider(surveyId)).valueOrNull;
     if (survey == null) {
       return Scaffold(
@@ -214,7 +217,12 @@ class SnagSurveyScreen extends ConsumerWidget {
             for (final s in SnagQueues.sortForList(snags))
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
-                child: SnagCard(snag: s, onTap: () => context.push(Routes.snagDetail(s.id))),
+                child: SnagCard(
+                  snag: s,
+                  pending: pending.contains(s.id),
+                  send: snagSendStatus(s, queued: pending.contains(s.id), flushing: flushing),
+                  onTap: () => context.push(Routes.snagDetail(s.id)),
+                ),
               ),
         ],
       ),

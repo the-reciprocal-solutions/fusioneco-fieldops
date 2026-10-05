@@ -50,6 +50,9 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
   String? _highlight;
   bool _didInitialScroll = false;
   int _lastCount = 0;
+  int _lastLive = 0;
+  String? _seenReplyId;
+  Timer? _highlightOff;
   final _acceptedFollowUps = <String>{};
 
   @override
@@ -62,6 +65,7 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _highlightOff?.cancel();
     _scroll.dispose();
     super.dispose();
   }
@@ -96,8 +100,13 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
       });
       return;
     }
-    if (count > _lastCount) {
-      final follow = _nearBottom || s.messages.last.mine;
+    // An agent starting work adds a thinking bubble at the bottom: bring it
+    // into view the same way a new message is.
+    final live = s.liveSessions.length;
+    final liveGrew = live > _lastLive;
+    _lastLive = live;
+    if (count > _lastCount || liveGrew) {
+      final follow = _nearBottom || (count > 0 && s.messages.last.mine) || liveGrew;
       _lastCount = count;
       if (follow) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -196,8 +205,25 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
     }
   }
 
+  /// Tints a newly arrived agent reply for a few seconds so the answer is
+  /// easy to find after the thinking bubble goes away.
+  void _flashReply(String id) {
+    if (id == _seenReplyId) return;
+    _seenReplyId = id;
+    setState(() => _highlight = id);
+    _highlightOff?.cancel();
+    _highlightOff = Timer(const Duration(seconds: 4), () {
+      if (mounted && _highlight == id) setState(() => _highlight = null);
+    });
+  }
+
+  void _hideKeyboard() => FocusManager.instance.primaryFocus?.unfocus();
+
   @override
   Widget build(BuildContext context) {
+    ref.listen(conversationControllerProvider(_key).select((s) => s.lastAgentReplyId), (_, id) {
+      if (id != null) _flashReply(id);
+    });
     final s = ref.watch(conversationControllerProvider(_key));
     final controller = ref.read(conversationControllerProvider(_key).notifier);
     final me = ref.watch(convMeProvider);
@@ -225,6 +251,31 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
     final live = s.liveSessions;
     final peopleTyping = s.typing.values.where((t) => !t.isAgent).map((t) => t.name).toList();
 
+    // The thread's real height, after the keyboard took its share (the host
+    // Scaffold resizes its body). Small → the Working card shrinks to one
+    // line and the @ list gets a lower cap, so nothing overflows on an
+    // iPhone SE with the keyboard up.
+    return LayoutBuilder(
+      builder: (context, box) {
+        final tight = box.maxHeight < 460;
+        final pickerMax = (box.maxHeight * 0.35).clamp(120.0, 240.0);
+        return _body(context, s, thread, items, live, peopleTyping, me, controller, tight: tight, pickerMax: pickerMax);
+      },
+    );
+  }
+
+  Widget _body(
+    BuildContext context,
+    ConversationState s,
+    ConversationThread thread,
+    List<ThreadItem> items,
+    List<ConvSession> live,
+    List<String> peopleTyping,
+    ({ConvAuthor author, Set<String> ids})? me,
+    ConversationController controller, {
+    required bool tight,
+    required double pickerMax,
+  }) {
     return Column(
       children: [
         if (s.fromCache)
@@ -241,10 +292,16 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
             ),
           ),
         Expanded(
-          child: RefreshIndicator(
+          // Tap anywhere in the thread (not on a button) or drag it → the
+          // keyboard goes away. Translucent, so taps still reach the messages.
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _hideKeyboard,
+            child: RefreshIndicator(
             onRefresh: controller.refresh,
             child: SingleChildScrollView(
               controller: _scroll,
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(4, 8, 4, 12),
               child: Column(
@@ -269,6 +326,13 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
                       ),
                     ),
                   for (final item in items) _row(item, thread),
+                  // The agent's turn: thinking dots + the steps it really took.
+                  for (final session in live)
+                    AgentThinkingBubble(
+                      session: session,
+                      steps: s.trails[session.id] ?? const [],
+                      typingStage: s.typing[session.agentId]?.stage,
+                    ),
                   if (peopleTyping.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(52, 4, 8, 0),
@@ -285,7 +349,12 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
                         children: [
                           const Icon(LucideIcons.info, size: 13, color: FeColors.ink2),
                           const SizedBox(width: 6),
-                          Expanded(child: AppText.caption(n.text, color: FeColors.ink2)),
+                          Expanded(
+                            child: AppText.caption(
+                              n.code == kAgentEndedNoteCode ? convTr(context, 'conv.agent_ended', [n.text]) : n.text,
+                              color: n.code == kAgentEndedNoteCode ? FeColors.warning : FeColors.ink2,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -293,10 +362,13 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
               ),
             ),
           ),
+          ),
         ),
-        if (live.isNotEmpty) WorkingCard(sessions: live, typing: s.typing, myIds: me?.ids ?? const {}, onStop: _stop),
+        if (live.isNotEmpty)
+          WorkingCard(sessions: live, typing: s.typing, myIds: me?.ids ?? const {}, onStop: _stop, compact: tight),
         ConversationComposer(
           key: _composer,
+          pickerMaxHeight: pickerMax,
           canMentionAgents: thread.canMentionAgents,
           replyingTo: _replyTo,
           onCancelReply: () => setState(() => _replyTo = null),

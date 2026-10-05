@@ -111,6 +111,12 @@ Entries marked **Source:** were carried over on 2026-09-25 from `fusion-eco-serv
 **What happened:** the server's conversation notifications (`services/conversations/notify.ts`) stamp `entityType = conversation:<entity>:<mention|reply|message>` and a **web admin** link such as `/facility-management/snags?snag=<id>&message=<mid>`. Both routing tables return null for any non-`/technician` link, and the old `entityType == 'conversation'` rule (the AI-chat type) returns null too. So every agent reply or mention push would have opened nothing. **Fix:** `core/conversation/conversation_links.dart` `conversationRouteFor()` runs **first** in both `routeForNotification` and `_routeForPushData`. It handles `conversation:*`, `session:*` and `schedule:*`, maps web record links onto this app's thread routes, and keeps the `message=` id for the scroll-to. Because it is one shared function, these types can't drift between the two tables. **What to watch:** a new notification family whose server link is a web page needs the same treatment. Test it with a real server link string, as in `test/conversation_links_test.dart`, not a made-up `/technician` one.
 **Where:** `lib/core/conversation/conversation_links.dart`, `lib/core/utils/notification_route.dart`, `lib/core/push/push_service.dart`
 
+### A technician's @agent stayed "queued" forever: the server ran it with no role (2026-10-06)
+**What happened:** @agent from the app created a run, but the server worker ran it as the starter without `role: "Technician"`, so access loaded as "no buildings" and the runner found no run. The app also waited up to 30 s for a socket/poll, showed a pulsing Working card for 24 h, keyed typing on the reference instead of the UUID, and showed raw server text. Reminders fired only as a push. The thread had no way to hide the keyboard.
+**Fix:** server `runAsStarter.ts` passes the technician role; a thread reminder also posts a "Reminder: …" line. App: immediate refresh + 5 s poll for 45 s after an @agent post, real stage list in `AgentThinkingBubble` (`core/conversation/agent_activity.dart`), queued > 30 min = lost, tap/drag/button to hide the keyboard, `plainPostFailure` for errors.
+**What to watch:** check the web works for an Admin AND the app for a Technician — different access paths.
+**Where:** `lib/state/conversation_controller.dart`, `lib/features/conversation/**`, server `src/services/flowAgents/runtime/runAsStarter.ts`
+
 ---
 
 ## Maintenance orders: checklists, close, invites, AI chat
@@ -451,6 +457,12 @@ Full plan: [docs/ar-bim-overlay.md](docs/ar-bim-overlay.md). These are the findi
 **What to watch:** Swift can be type-checked with `swiftc -typecheck -import-objc-header` and small ARKit/Flutter/UIKit stubs; it found a real `simd_float4x4 * simd_float4x4 * SIMD4` grouping bug. Compile `.m` files with `clang -fobjc-arc` separately: swiftc-driven harnesses build them without ARC and they crash.
 **Where:** [packages/fe_ar/README.md](packages/fe_ar/README.md), [CHANNEL.md](packages/fe_ar/CHANNEL.md)
 
+### iOS: `.serious` thermal is normal under LiDAR load; session failures arrive as events (2026-10-06)
+**What happened:** the owner reported AR "not working" on a real iPhone. Review of the iOS path found: `.serious` thermal was sent as status 3 ("severe") and Dart pauses AR at ≥ 3, so a Pro iPhone running LiDAR + mesh + 60 Hz paused itself within minutes; a refused camera / failed session arrived as an event after `startSession` and Dart showed "AR hiccup (camera-denied)" over a dead view; the torch went off when depth was turned off after placement; camera pose was in sensor frame, not display frame.
+**Fix:** serious = 2 (warn), critical = 4 (pause); fatal event codes open the fallback (with Open Settings) or failed screen; torch re-applied after camera restarts; display-oriented pose.
+**What to watch:** never map iOS thermal states 1:1 onto Android's. matc 1.72.1 (`filament-v1.72.1-mac.tgz`) reproduces the shipped .filamat byte for byte; new materials go through `tool/compile_materials.sh` (Metal + OpenGL + Vulkan). Swift can be type-checked here with `swiftc -typecheck` against the Mac Catalyst SDK even without Xcode.
+**Where:** `packages/fe_ar/ios/Classes/FeArController.swift`, `lib/state/ar_session_controller.dart`, `lib/core/ar/ar_engine.dart`
+
 ## Snag Assistant
 
 Design: [docs/snag-assistant.md](docs/snag-assistant.md). Server: `../fusion-eco-server/documentation/snag-assistant.md`.
@@ -470,6 +482,12 @@ Design: [docs/snag-assistant.md](docs/snag-assistant.md). Server: `../fusion-eco
 ### GAMMA's alignment UI: what to copy and what to fix (2026-09-26)
 **What happened:** screenshots from GAMMA's alignment video showed four details worth taking. (1) A method chooser, where Corner is "Recommended". (2) Structural gridlines drawn on the slab while aligning. (3) QR sheets with **four checkerboard corner targets**, which give far more precise corners than a QR code's own. (4) An "Unregistered QR code" prompt that appears when an unknown sheet is scanned. It also showed two things to fix: a flat 13-item menu, and a jargon prompt ("Do you want to edit QR codes?"). **Adopted:** a context-recommended chooser with "remember per floor"; `IfcGrid` gridlines as a guide and a snap target; corner targets on our boards; a grouped menu with a separate Layers panel; and plain-language, single-decision prompts. **What to watch:** keep one set of widgets with two layouts (iPad rails with labels, phone tabs plus a bottom sheet) rather than two apps.
 **Where:** [docs/ar-setup-and-gamma-parity.md §2.9](docs/ar-setup-and-gamma-parity.md)
+
+### "Saved on this phone" forever: no replay follow-up, inline uploads stranding, iOS container moves (2026-10-06)
+**What happened:** on an iPhone, snags showed "On device" and never became synced. Causes: no `onReplayed('Snag')` hook, so a replayed create kept `localOnly=1`; the online-first save uploaded photos before the POST and threw on any 4xx or URL-less upload without queueing; the flush policy dropped 5xx writes (incl. `503 SNAG_ENGINE_NOT_ENABLED`) after ~100 s; an `UnknownFailure` escaped the flush loop and jammed the queue; and absolute photo paths broke on every app update because iOS changes the container UUID (every TestFlight build).
+**Fix:** snag writes are outbox-first (`SyncClient.queueRequest` + `kickFlush`); `kKeepOnServerErrorEntityTypes` keeps Snag/SnagSurvey on 5xx; `afterReplay`/`afterReplayFailed` hooks confirm or flag each snag; `SnagMedia.reroot`/`ownFile` re-find files after a container move; honest per-snag state in `core/snag/snag_send_state.dart`.
+**What to watch:** any local-first entity needs a replay follow-up. Never store absolute file paths on iOS — store relative or re-root. Never make a save wait on an upload.
+**Where:** `lib/core/offline/sync_client.dart`, `flush_policy.dart`, `lib/core/snag/snag_media.dart`, `lib/data/snag_repository.dart`, `test/snag_outbox_test.dart`
 
 ## Model viewer (2D / 3D)
 

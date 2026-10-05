@@ -779,6 +779,26 @@ class FakeArEngine implements ArEngine {
     return true;
   }
 
+  /// The room-scan overlay as last asked ([setScanOverlay]).
+  bool scanOverlay = false;
+
+  /// Every [pulseAt], in order: (position, tone).
+  final List<(Vec3, String)> pulses = [];
+
+  @override
+  Future<bool> setScanOverlay(bool on, {bool contrast = false}) async {
+    commands.add('setScanOverlay');
+    scanOverlay = on;
+    return _capabilities.scanOverlay;
+  }
+
+  @override
+  Future<bool> pulseAt(Vec3 posAr, {Vec3? normalAr, String tone = 'info'}) async {
+    commands.add('pulseAt');
+    pulses.add((posAr, tone));
+    return _capabilities.scanOverlay;
+  }
+
   @override
   Future<bool> setTorch(bool on) async {
     commands.add('setTorch');

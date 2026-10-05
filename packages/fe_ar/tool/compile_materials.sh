@@ -30,8 +30,9 @@ for src in "$here"/materials/*.mat; do
   name="$(basename "$src" .mat)"
   out="$(mktemp -t "$name").filamat"
   "$matc" --api all --platform mobile -o "$out" "$src"
-  # fe_camera_feed is iOS-only; SceneView draws the ARCore camera on Android.
-  if [[ "$name" != "fe_camera_feed" ]]; then
+  # fe_camera_feed and fe_scan are iOS-only: SceneView draws the ARCore
+  # camera and its own plane grid (the room-scan overlay) on Android.
+  if [[ "$name" != "fe_camera_feed" && "$name" != "fe_scan" ]]; then
     cp "$out" "$android_out/$name.filamat"
   fi
   cp "$out" "$ios_out/$name.filamat"

@@ -14,10 +14,12 @@ import 'package:vibration/vibration.dart';
 
 import '../../app/router.dart';
 import '../../core/capture/capture_services.dart';
-import '../../core/network/api_exception.dart';
+import '../../core/snag/snag_photo_quality.dart';
 import '../../core/snag/snag_rules.dart';
+import '../../core/snag/snag_send_state.dart';
 import '../../data/snag_repository.dart';
 import '../../domain/snag.dart';
+import '../../domain/snag_ai.dart';
 import '../../state/snag_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
@@ -67,6 +69,13 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
   VoiceRecording? _voice;
   SnagSuggestion? _suggestion;
   var _assisting = false;
+
+  // AI assist after the snap (2026-10-06): starts by itself on each shot,
+  // marks its picks with ✨ on the chips (one tap accepts each), never
+  // blocks Save & next. [_aiRun] drops an answer for a photo already saved.
+  SnagAiResult? _ai;
+  var _aiRunning = false;
+  var _aiRun = 0;
   var _saving = false;
 
   final _voiceCapture = VoiceCapture();
@@ -248,6 +257,7 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
         _shooting = false;
         if (_recentTrades.isNotEmpty) _trade = _recentTrades.first;
       });
+      unawaited(_runAi());
     } catch (_) {
       if (mounted) setState(() => _shooting = false);
     }
@@ -259,6 +269,9 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
     _description = null;
     _voice = null;
     _suggestion = null;
+    _ai = null;
+    _aiRunning = false;
+    _aiRun++;
     _issueType = 'defect';
   }
 
@@ -293,6 +306,57 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
     } on CaptureFailure catch (e) {
       if (mounted) showTechPopup(context, message: e.message, isError: true);
     }
+  }
+
+  Future<void> _runAi() async {
+    final photo = _photo;
+    if (photo == null) return;
+    final run = ++_aiRun;
+    setState(() => _aiRunning = true);
+    SnagPhotoPrep? prep;
+    try {
+      prep = await compute(prepareSnagPhotoForAi, photo.bytes);
+    } catch (_) {
+      prep = null;
+    }
+    if (!mounted || run != _aiRun) return;
+    final result = prep == null
+        ? const SnagAiResult.unavailable()
+        : await ref.read(snagRepositoryProvider).aiAssist(
+            aiJpeg: prep.jpeg,
+            deviceTips: prep.deviceTips,
+            brightness: prep.brightness,
+            sharpness: prep.sharpness,
+            context: _survey?.context ?? SnagContext.operations,
+            buildingId: _survey?.buildingId,
+            floorId: _floor?.id,
+            spaceId: _space?.id,
+            locationLabel: _locationLabel,
+            currentTitle: _title.text.trim().isEmpty ? null : _title.text.trim(),
+          );
+    if (!mounted || run != _aiRun) return;
+    setState(() {
+      _aiRunning = false;
+      _ai = result;
+    });
+  }
+
+  /// "Apply all" on the walk's AI strip; each chip can also be tapped alone.
+  void _applyAllAi() {
+    final r = _ai;
+    if (r == null) return;
+    setState(() {
+      if (r.trade != null) _trade = r.trade!;
+      if (r.priority != null) _priority = r.priority!;
+      if (r.issueType != null) _issueType = r.issueType!;
+      if (r.title != null && _title.text.trim().isEmpty) _title.text = r.title!;
+      final parts = [
+        ?r.description,
+        if (r.likelyCause != null) '${'snags.ai.cause_prefix'.getString(context)}: ${r.likelyCause}',
+        if (r.recommendedFix != null) '${'snags.ai.fix_prefix'.getString(context)}: ${r.recommendedFix}',
+      ];
+      if (parts.isNotEmpty && _description == null) _description = parts.join('\n');
+    });
   }
 
   /// UC-11 — a proposal, never a write. Anything missing from the answer
@@ -366,11 +430,13 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
         if (!mounted) return;
         message = snagTr(context, 'snags.added_to', [r.snag.displayRef]);
       } else {
+        // Local save + queue only (outbox first): back to the camera at
+        // once. The film strip shows each snag's send state.
         final r = await repo.raise(draft, actor);
         if (!mounted) return;
         message = r.synced
             ? snagTr(context, 'snags.saved_ref', [r.snag.displayRef])
-            : 'snags.saved_on_device'.getString(context);
+            : 'snags.saved_sending'.getString(context);
       }
       _recentTrades
         ..remove(_trade)
@@ -383,10 +449,14 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
       });
       unawaited(Vibration.vibrate(duration: 40));
       showTechPopup(context, message: message);
-    } on ApiFailure catch (e) {
+    } catch (_) {
+      // Anything at all (the photo could not be written, the local database
+      // refused): say so plainly and give the Save button back. This used to
+      // catch ApiFailure only, so any other error left Save spinning for the
+      // rest of the walk.
       if (!mounted) return;
       setState(() => _saving = false);
-      showTechPopup(context, message: e.message, isError: true);
+      showTechPopup(context, message: 'snags.save_failed'.getString(context), isError: true);
     }
   }
 
@@ -548,6 +618,8 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
 
   Widget _bottomBar(List<Snag> room) {
     final count = room.length;
+    final pending = ref.watch(pendingSnagIdsProvider).valueOrNull ?? const <String>{};
+    final flushing = ref.watch(snagQueueFlushingProvider);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -561,15 +633,32 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
               separatorBuilder: (_, _) => const SizedBox(width: 8),
               itemBuilder: (context, i) {
                 final s = room[i];
+                // Each thumbnail carries its own send state, so a walk that
+                // never waits on the network still shows what has gone.
+                final send = snagSendStatus(s, queued: pending.contains(s.id), flushing: flushing).state;
                 return GestureDetector(
                   onTap: () => context.push(Routes.snagDetail(s.id)),
-                  child: Container(
-                    width: 64,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: SnagVisuals.priorityColor(s.priority), width: 2),
-                    ),
-                    child: SnagPhoto(evidence: s.coverPhoto, radius: 10, dark: true),
+                  child: Stack(
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: SnagVisuals.priorityColor(s.priority), width: 2),
+                        ),
+                        child: SnagPhoto(evidence: s.coverPhoto, radius: 10, dark: true),
+                      ),
+                      Positioned(
+                        right: 3,
+                        bottom: 3,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                          child: Icon(SnagVisuals.sendIcon(send), size: 12, color: SnagVisuals.sendColor(send)),
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -673,6 +762,8 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
               const SizedBox(height: 8),
               SizedBox(height: 28, child: VoiceWaveform(amplitudeStream: _amplitude!, color: FeColors.danger)),
             ],
+            const SizedBox(height: 10),
+            _WalkAiStrip(running: _aiRunning, result: _ai, onApplyAll: _applyAllAi, onRetry: _runAi),
             if (s?.transcript != null) ...[
               const SizedBox(height: 8),
               Text('“${s!.transcript}”', style: const TextStyle(color: Colors.white70, fontStyle: FontStyle.italic)),
@@ -681,7 +772,7 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
             TradeChipRail(
               value: _trade,
               dark: true,
-              suggested: s?.trade,
+              suggested: _ai?.trade ?? s?.trade,
               ordered: [..._recentTrades, ...kSnagTrades.where((t) => !_recentTrades.contains(t))],
               onChanged: (t) => setState(() => _trade = t),
             ),
@@ -689,7 +780,7 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
             SeveritySelector(
               value: _priority,
               dark: true,
-              suggested: s?.priority,
+              suggested: _ai?.priority ?? s?.priority,
               onChanged: (p) => setState(() => _priority = p),
             ),
             const SizedBox(height: 10),
@@ -883,6 +974,103 @@ class _ToolButton extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+
+/// The walk's compact, dark AI strip: thinking dots while it works, then a
+/// one-line proposal with Apply all, photo tips and a "maybe already raised"
+/// hint. Never blocks Save & next.
+class _WalkAiStrip extends StatelessWidget {
+  const _WalkAiStrip({required this.running, required this.result, required this.onApplyAll, required this.onRetry});
+  final bool running;
+  final SnagAiResult? result;
+  final VoidCallback onApplyAll;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final r = result;
+    if (!running && r == null) return const SizedBox.shrink();
+    final summary = r == null || r.status != SnagAiStatus.ok
+        ? null
+        : [
+            if (r.trade != null) SnagVisuals.tradeLabel(context, r.trade!),
+            if (r.priority != null) SnagVisuals.priorityLabel(context, r.priority!),
+            ?r.title,
+          ].join(' · ');
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(colors: [FeColors.ai.withValues(alpha: 0.35), FeColors.ai.withValues(alpha: 0.12)]),
+        border: Border.all(color: FeColors.ai.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(LucideIcons.sparkles, size: 15, color: Colors.white),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  running
+                      ? 'snags.ai.step_photo'.getString(context)
+                      : r!.status == SnagAiStatus.offline
+                      ? 'snags.ai.offline'.getString(context)
+                      : r.status == SnagAiStatus.unavailable
+                      ? 'snags.ai.unavailable'.getString(context)
+                      : (summary == null || summary.isEmpty ? 'snags.ai.nothing'.getString(context) : summary),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (running)
+                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              else if (r!.status == SnagAiStatus.ok && r.hasSuggestions)
+                TextButton(
+                  onPressed: onApplyAll,
+                  style: TextButton.styleFrom(foregroundColor: Colors.white, visualDensity: VisualDensity.compact),
+                  child: Text('snags.ai.apply_all'.getString(context)),
+                )
+              else
+                TextButton(
+                  onPressed: onRetry,
+                  style: TextButton.styleFrom(foregroundColor: Colors.white70, visualDensity: VisualDensity.compact),
+                  child: Text('snags.ai.retry'.getString(context)),
+                ),
+            ],
+          ),
+          if (!running && r != null)
+            for (final t in r.captureTips)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Row(
+                  children: [
+                    const Icon(LucideIcons.lightbulb, size: 12, color: FeColors.warningSoft),
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        'snags.ai.tip.$t'.getString(context),
+                        style: const TextStyle(color: Colors.white70, fontSize: 11.5),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          if (!running && r != null && r.duplicates.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                snagTr(context, 'snags.ai.dupe_hint', [r.duplicates.first.displayRef]),
+                style: const TextStyle(color: Colors.white70, fontSize: 11.5),
+              ),
+            ),
+        ],
       ),
     );
   }

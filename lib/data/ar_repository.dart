@@ -877,10 +877,10 @@ class ArRepository {
         keepPending: pending.contains(floorId),
       );
       await _store.setArPref(_progressTotalKey(floorId), '${server.summary.total}');
-      return _localProgress(floorId, fromCache: false, total: server.summary.total);
+      return await _localProgress(floorId, fromCache: false, total: server.summary.total);
     } on NetworkFailure {
       final total = int.tryParse(await _store.getArPref(_progressTotalKey(floorId)) ?? '');
-      return _localProgress(floorId, fromCache: true, total: total);
+      return await _localProgress(floorId, fromCache: true, total: total);
     } on HttpFailure catch (e) {
       throw ArApiError.fromBody(e.status, e.body, fallbackMessage: e.message);
     }

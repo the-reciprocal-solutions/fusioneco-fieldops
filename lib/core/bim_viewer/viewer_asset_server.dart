@@ -94,35 +94,35 @@ class ViewerAssetServer {
     try {
       final segs = req.uri.pathSegments;
       if (req.method != 'GET' || segs.length < 3 || segs.first != _token) {
-        return _notFound(res);
+        return await _notFound(res);
       }
       if (segs[1] == 'app') {
         final path = segs.sublist(2).join('/');
-        if (!appFiles.contains(path)) return _notFound(res);
+        if (!appFiles.contains(path)) return await _notFound(res);
         final bytes = _assetCache[path] ?? await _loadAsset(path);
-        if (bytes == null) return _notFound(res);
+        if (bytes == null) return await _notFound(res);
         _assetCache[path] = bytes;
         res.headers
           ..contentType = _typeOf(path)
           ..set(HttpHeaders.cacheControlHeader, 'no-store');
         res.contentLength = bytes.length;
         res.add(bytes);
-        return res.close();
+        return await res.close();
       }
       if (segs[1] == 'tiles' && segs.length == 3) {
         final m = _hashFile.firstMatch(segs[2]);
         final file = m == null ? null : _tiles[m.group(1)!];
-        if (file == null) return _notFound(res);
+        if (file == null) return await _notFound(res);
         final f = File(file);
-        if (!await f.exists()) return _notFound(res);
+        if (!await f.exists()) return await _notFound(res);
         res.headers
           ..contentType = ContentType('model', 'gltf-binary')
           ..set(HttpHeaders.cacheControlHeader, 'no-store');
         res.contentLength = await f.length();
         await res.addStream(f.openRead());
-        return res.close();
+        return await res.close();
       }
-      return _notFound(res);
+      return await _notFound(res);
     } catch (_) {
       try {
         res.statusCode = HttpStatus.internalServerError;

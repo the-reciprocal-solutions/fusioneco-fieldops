@@ -5,6 +5,7 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 **The 2026-09-25 audit findings stay in [docs/improvements.md](docs/improvements.md)** with their own `#` numbers. Don't copy them here; mark them done there when fixed. This file holds everything else: session leftovers, deferred work, things not verified.
 
 - **Add** an item before ending any turn that leaves work owed. Take the number from "Next number" below and bump it. Never reuse a number.
+- **Number clash after a pull:** the committed number wins. Move your uncommitted item to "Next number", note the old number in its Found line, and rename its references after grepping both sides (LEARNINGS → Platform, 2026-10-06).
 - **Close** an item by moving it to Closed as one line: date, how it was resolved, and its LEARNINGS entry.
 - **Status:** `not started` · `partial` · `blocked` · `needs verification` (built, but `flutter analyze`/`flutter test` on Flutter ≥ 3.44 or a device run not done)
 - **Priority:** P1 loses field work or shows the technician something false · P2 real feature gap · P3 cleanup
@@ -22,9 +23,24 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-028**
+Next number: **P-029**
 
 ## Open
+
+### P-028 · iOS: first TestFlight build (`com.fusionapps.fieldops`, team `82QNNH4KJZ`), never run on a device
+- **Status:** partial · **Priority:** P2 · **Area:** iOS build and release (`ios/`, `packages/fe_ar/ios`, `lib/core/push`)
+- **Found:** 2026-10-05 (first Xcode build on the `a2251` Mac: 100 fe_ar link errors). Written locally as P-025; renumbered 2026-10-06 on pulling `ddd2a80`, which had already committed P-025…P-027.
+- **Done so far:** iOS now mirrors Android: icon (same artwork), name, usage strings, cleartext, navy splash with the mascot, the ting sound, foreground push banners and taps (notification-center delegate), and APNs-safe token fetch. fe_ar is a static framework, which fixes the Filament link errors. Bundle id and team agree in all three Runner configurations; the Appfile default and ios-testflight.md follow. See docs/build-release-and-platform.md §6 and LEARNINGS (AR, Push, Platform; 2026-10-05).
+- **Left:**
+  - `ios/Runner/GoogleService-Info.plist` from a Firebase **iOS** app registered as `com.fusionapps.fieldops` (project `fusion-eco-technician`). Until then builds only warn and the app runs with **no push**: don't hand such a build to testers as final. Also upload the APNs `.p8` key under Cloud Messaging.
+  - App Store Connect app record for `com.fusionapps.fieldops`, then archive (`flutter build ipa` with both hosts, or Xcode → Product → Archive) and upload. Record the build in VERSIONING.md.
+  - Device run: launch, splash, login, foreground push banner with the ting, background push, tap routing, camera / OCR / QR, the SQLCipher DB opening (ios-testflight.md §9 item 2), AR on an ARKit device.
+  - Server (repo not on the `a2251` Mac): the APNs alert copy should carry `aps.sound = "notification_ting.wav"` so background pushes ting too.
+  - Background sync on iOS (BGTaskScheduler); until then the queue drains only while the app is open.
+  - Duplicate GoogleDataTransport classes at launch (CocoaPods via ML Kit plus SwiftPM via Firebase; ios-testflight.md §9 item 1). Move all plugins to one dependency manager, then re-check OCR and push.
+- **Why deferred:** needs the user's Firebase and App Store Connect access, and a device.
+- **Where:** docs/ios-testflight.md, `ios/Runner/*`, `packages/fe_ar/ios/fe_ar.podspec`, `lib/core/push/push_service.dart`
+- **Next step:** drop the real plist into `ios/Runner/`, then archive.
 
 ### P-027 · iPhone AR fixes + LiDAR room scan/surface check (2026-10-06): needs a real iPhone/iPad
 - **Status:** needs verification · **Priority:** P1 · **Area:** AR (iOS, Android)
@@ -120,7 +136,7 @@ Next number: **P-028**
 ### P-014 · [HIGH · Phase 0] No CI: `flutter analyze` + `flutter test` on every push
 - **Status:** not started · **Priority:** P1 · **Area:** tooling
 - **Found:** 2026-09-27 (no `.github/workflows`, `codemagic.yaml` or other CI config)
-- **Done so far:** real runs happen by hand on the slim Flutter 3.47.5 SDK in the session scratchpad (LEARNINGS → Platform, 2026-09-26).
+- **Done so far:** real runs happen by hand on the slim Flutter 3.47.5 SDK in the session scratchpad (LEARNINGS → Platform, 2026-09-26), or, since 2026-10-05, on the `a2251` Mac's own Flutter 3.47.6.
 - **Left:**
   - A pipeline pinned to Flutter 3.47.5: `flutter pub get --enforce-lockfile`, `flutter analyze`, `flutter test`.
   - First fix or quarantine the three failures on HEAD and the ~10-minute hang (P-003).
@@ -167,7 +183,7 @@ Next number: **P-028**
 - **Left:** `flutter pub get --enforce-lockfile`, `flutter analyze`, `flutter test test/ar_*_test.dart` on ≥ 3.44 (the `ChannelArEngine` group has never run); v9 → v10 migration on a device with a populated DB; Demo mode walked at runtime on a phone (360 px) and a tablet (≥ 900 px), in EN and AR (RTL rails); `LiveArGateway` → `ArRepository` against a server (ETag/304, tile bytes, auth on the raw Dio client, queued replays).
 - **Why deferred:** no Flutter ≥ 3.44, device or emulator on this Mac this session; downloads were not allowed.
 - **Where:** [docs/ar-implementation.md](docs/ar-implementation.md)
-- **Next step:** bootstrap the slim 3.47.5 SDK (LEARNINGS → Platform) and run the three commands; fix what flutter_lints 6 reports.
+- **Next step:** run the three commands on Flutter ≥ 3.44 (the `a2251` Mac's PATH SDK is 3.47.6 since 2026-10-05; elsewhere bootstrap the slim SDK, LEARNINGS → Platform); fix what flutter_lints 6 reports.
 
 ### P-005 · `packages/fe_ar` native plugin: slice 0 (build it on devices)
 - **Status:** in progress · **Priority:** P2 · **Area:** AR native (`packages/fe_ar`)

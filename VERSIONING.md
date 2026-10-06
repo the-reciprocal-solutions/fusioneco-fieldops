@@ -16,3 +16,6 @@ Track last-shipped BUILD number here so it survives even if Play Console access 
 |---|---|---|---|---|
 | 1 | 1.0.0 | com.thefusionapps.fusioneco.technician | 2026-09-15 | first upload attempt, rejected — pkg name wrong per TL |
 | 2 | 1.0.1 | com.fusionapps.fieldops | 2026-09-18 | pkg renamed to com.fusionapps.fieldops per TL request |
+| 3 | 1.0.1 | com.fusionapps.fieldops | 2026-09-19 | pubspec bump `b858428`; added to this table late (2026-10-06), upload date not recorded |
+| 4 | 1.1.0 | com.fusionapps.fieldops | 2026-10-06 | bumped for the next release (MINOR: new features since 1.0.1, incl. iPhone AR/LiDAR fixes `ddd2a80`); raised to 5 the same day, no upload recorded. Never reuse 4 |
+| 5 | 1.1.0 | com.fusionapps.fieldops | 2026-10-06 | version code raised on request; **not uploaded yet**, set the date on upload |

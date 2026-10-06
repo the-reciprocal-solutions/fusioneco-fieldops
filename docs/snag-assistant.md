@@ -292,7 +292,7 @@ For the snag from steps a–i you should see `status = verified`, `reopenedCount
 
 ### 9.4 App: automated checks
 
-This needs Flutter ≥ 3.44. On this Mac, bootstrap it first: LEARNINGS → Platform, 2026-09-26.
+This needs Flutter ≥ 3.44. Check `flutter --version`: the `a2251` Mac has 3.47.6 since 2026-10-05. On a machine below 3.44, bootstrap it first: LEARNINGS → Platform, 2026-09-26.
 
 ```bash
 flutter pub get --enforce-lockfile

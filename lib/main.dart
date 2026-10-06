@@ -25,8 +25,18 @@ Future<void> main() async {
   // the first frame, so the app never flashes English before switching.
   await FlutterLocalization.instance.ensureInitialized();
 
-  await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  // Push is optional at startup. An iOS build made before
+  // ios/Runner/GoogleService-Info.plist exists has no default Firebase app, so
+  // initializeApp() throws here. firebase_core skips FirebaseApp.configure()
+  // natively when the plist is missing, so there's no native crash. The rest
+  // of the app must still run; PushService.init checks Firebase.apps and
+  // stays off. Android always has google-services.json.
+  try {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  } catch (e) {
+    debugPrint('Firebase unavailable, push is off: $e');
+  }
 
   final secureStore = SecureStore();
   final sessionStore = await SessionStore.open();

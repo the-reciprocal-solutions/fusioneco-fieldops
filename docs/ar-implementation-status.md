@@ -149,7 +149,7 @@ Reported by the per-repo verify passes (not re-run here): server `tsc` clean on 
    curl "$API/api/bim/ar/buildings/<id>/floors" -H "Authorization: Bearer $TOKEN"           # model shows ready
    ```
    Then plan boards in Marker Studio, print one A4 at 100 %, and check the 100 mm line and the 115 mm QR with a ruler.
-5. **Install Flutter ≥ 3.44 and run the real checks** in this repo:
+5. **Install Flutter ≥ 3.44 and run the real checks** in this repo (the `a2251` Mac has 3.47.6 since 2026-10-05; the checks are still owed):
    ```bash
    flutter pub get --enforce-lockfile
    flutter analyze

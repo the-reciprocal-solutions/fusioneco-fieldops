@@ -85,7 +85,7 @@ flowchart LR
 | 38 | **Unused dependencies:** `permission_handler`, `cupertino_icons`, and plain `sqflite` next to `sqflite_sqlcipher` (check for SQLCipher linking conflicts before the iOS work). | Remove them after one analyze run confirms. | S |
 | 39 | **Poppins is fetched at runtime** by `google_fonts` in an offline-first app, so the first launch offline shows a fallback font and widget tests may try the network. | Bundle the font files and set `GoogleFonts.config.allowRuntimeFetching = false`. | S |
 | 40 | **The server's 3D stand-in fields are ignored:** `twinGlobalId` and `isPresentation` are never read, so the twin view can't say "this is a stand-in component". | Read them in `asset_detail.dart` and label the 3D button accordingly (the web copy says "use it to find the area, not to confirm the item"). | S |
-| 41 | **The toolchain on the Mac is broken.** The `flutter` alias targets a missing path, the newest installed SDK is 3.19.3, and the project needs 3.44 or later. | Install Flutter 3.44+ (e.g. through `fvm`, pinned in `.fvmrc`) and fix `~/.zshrc:6,131-132`. | S |
+| 41 | **The toolchain on the Mac is broken.** The `flutter` alias targets a missing path, the newest installed SDK is 3.19.3, and the project needs 3.44 or later. **Partly addressed (2026-10-05):** the `a2251` Mac's PATH SDK is now 3.47.6 and `pub get --enforce-lockfile` passes (LEARNINGS → Platform). The Mac described here was not rechecked, and there is no repo pin (`.fvmrc`) yet. | Install Flutter 3.44+ (e.g. through `fvm`, pinned in `.fvmrc`) and fix `~/.zshrc:6,131-132`. | S |
 
 ## Cross-repo notes
 

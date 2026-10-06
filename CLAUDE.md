@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 It is the mobile port of the web technician portal (`../fusion-eco-client/app/technician/*`) and calls the same API (`../fusion-eco-server`, Express on `:5002`). Comments that say "mirrors the web…" mean behaviour is deliberately kept in step with that portal.
 
-Branches: `main` (active), `origin/dev`. Only Android ships. iOS is scaffolded but can't launch yet.
+Branches: `main` (active), `origin/dev`. Only Android ships. iOS (bundle `com.fusionapps.fieldops`, same as Android) builds on the `a2251` Mac since 2026-10-05 and reaches the login screen in the simulator. It has no Firebase plist yet (push off) and has never run on a device or TestFlight (PENDING P-028).
 
 ## Rules (always apply)
 
@@ -22,7 +22,7 @@ Branches: `main` (active), `origin/dev`. Only Android ships. iOS is scaffolded b
 - **DOCUMENTATION**: on any significant or major-flow change, update or create the matching MD under [docs/](docs/), with a mermaid diagram. When you fix something listed in [docs/improvements.md](docs/improvements.md), mark it done there.
 - **No git branch creation, no git push**, ever, including in auto/autonomous mode. Commit only when asked; commits stay local.
 - **Subagents**: Sonnet for mechanical work (surveys, search, routine edits); Opus for reasoning and planning. Don't dispatch on your own judgment: use them when the user asks, or ask first and say why.
-- **Verification honesty**: `flutter analyze` / `flutter test` results are only real if they ran on Flutter ≥ 3.44. As of 2026-09-25 the Mac's installed toolchain can't; a slim 3.47.5 SDK can be bootstrapped into the session scratchpad instead (recipe: LEARNINGS → Platform, 2026-09-26). Say which you used, or say it didn't run, rather than claiming green.
+- **Verification honesty**: `flutter analyze` / `flutter test` results are only real if they ran on Flutter ≥ 3.44. Check `flutter --version` first. Since 2026-10-05 the `a2251` Mac's PATH SDK (`~/Desktop/kongu/flutter`) is 3.47.6, so runs there count. On a machine still below 3.44, bootstrap the slim 3.47.5 SDK into the session scratchpad (recipe: LEARNINGS → Platform, 2026-09-26). Say which you used, or say it didn't run, rather than claiming green.
 - **Touching the server?** `../fusion-eco-server/CLAUDE.md` rules apply there: shared Postgres (no destructive DB ops without confirmation), always free port 5002, and prompt-sync for LLM prompts. A contract change needs both sides updated in the same task.
 
 ## Commands

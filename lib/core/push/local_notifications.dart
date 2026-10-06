@@ -8,6 +8,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 /// on the server) so nothing appears — and no sound plays — unless this draws
 /// it itself. One channel, one custom sound: a short synthesized "ting"
 /// (`android/app/src/main/res/raw/notification_ting.wav`), not the OS default.
+/// iOS plays a byte-identical copy bundled as an app resource
+/// (`ios/Runner/notification_ting.wav`), so replace both files together.
 class LocalNotifications {
   LocalNotifications._();
 
@@ -79,8 +81,9 @@ class LocalNotifications {
           playSound: true,
         ),
         // Without Darwin details iOS shows nothing for a data-only push that
-        // arrives while the app is open.
-        iOS: const DarwinNotificationDetails(presentAlert: true, presentBanner: true, presentList: true, presentSound: true),
+        // arrives while the app is open. `sound` names the bundled copy of the
+        // Android ting (see the class doc).
+        iOS: const DarwinNotificationDetails(presentAlert: true, presentBanner: true, presentList: true, presentSound: true, sound: 'notification_ting.wav'),
       ),
       payload: jsonEncode(data),
     );

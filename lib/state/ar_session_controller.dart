@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import '../core/ar/alignment_estimator.dart';
 import '../core/ar/ar_engine.dart';
 import '../core/ar/corner_matcher.dart';
+import '../core/ar/manual_place_math.dart' show ManualPlacement;
 import '../core/ar/marker_code.dart';
 import '../core/ar/reanchor_rule.dart';
 import '../core/ar/scan_overlay.dart';
@@ -162,6 +163,8 @@ class ArBadgeInfo {
     this.residualM = 0,
     this.nudgeM = 0,
     this.walkedSinceCheckM,
+    this.handPlaced = false,
+    this.scalePct,
   });
 
   final AlignmentQuality quality;
@@ -170,6 +173,14 @@ class ArBadgeInfo {
   final double residualM;
   final double nudgeM;
   final double? walkedSinceCheckM;
+
+  /// "Place by hand" (`ArManualPlaceController`): amber "Placed by hand",
+  /// never green.
+  final bool handPlaced;
+
+  /// The hand placement's size when it is not 100 % ("not true size"), else
+  /// null.
+  final int? scalePct;
 }
 
 class ArSessionState {
@@ -330,6 +341,8 @@ class ArSessionState {
     residualM: fit?.maxResidualM ?? 0,
     nudgeM: nudgeM,
     walkedSinceCheckM: observations.isEmpty ? null : math.max(0, walkedM - walkedAtCheckM),
+    handPlaced: fit?.isHandPlaced ?? false,
+    scalePct: (fit?.isTrueSize ?? true) ? null : (fit!.scale * 100).round(),
   );
 
   ArSessionState copyWith({
@@ -511,6 +524,27 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   /// Native anchor → observation id, so an anchor refinement refits.
   final _anchorToObs = <String, String>{};
+
+  // ---- "Place by hand" (ArManualPlaceController, manual_place_math.dart)
+  /// The locked hand placement. With no corner or board observations it
+  /// *is* the fit (see [_refit]); the first observation replaces it.
+  ManualPlacement? _manual;
+
+  /// The native anchor pinned under the hand placement's pivot, and where
+  /// it was: its `anchor` events move the model with the tracker's map.
+  String? _manualAnchorId;
+  Vec3? _manualAnchorAr;
+
+  /// True while the user is dragging the model by hand: the session must
+  /// not push its own (older) fit over the live preview.
+  var _manualPreview = false;
+
+  /// The preview was cancelled with nothing placed: the model is hidden by
+  /// opacity until the next real fit shows it again.
+  var _hiddenByManual = false;
+
+  /// The locked hand placement, if that is what the model sits on.
+  ManualPlacement? get manualPlacement => _manual;
   final _loadedTiles = <String>{};
   var _residencyBusy = false;
   Vec3? _residencyAtCamera;
@@ -631,6 +665,9 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     _reanchor.reset();
     _needsRecheck = false;
     _floorAr = null;
+    _clearManual();
+    _manualPreview = false;
+    _hiddenByManual = false;
     _set(ArSessionState(
       phase: ArSessionPhase.checking,
       args: args,
@@ -1008,6 +1045,16 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   /// The tracker refined a board's anchor: refit, and watch for drift.
   void _onAnchorUpdated(String anchorId, Vec3 posAr) {
+    final manual = _manual;
+    final at = _manualAnchorAr;
+    if (anchorId == _manualAnchorId && manual != null && at != null) {
+      // The tracker corrected its map (or relocalised): the hand-placed
+      // model moves with the anchor under its pivot.
+      _manual = manual.shifted(posAr - at);
+      _manualAnchorAr = posAr;
+      _refit(state.observations, reason: _RefitReason.anchor);
+      return;
+    }
     final obsId = _anchorToObs[anchorId];
     if (obsId == null) return;
     final obs = [
@@ -1027,6 +1074,9 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       o,
     ];
     if (anchorId != null) _anchorToObs[anchorId] = o.id;
+    // A measured corner or board replaces a hand placement ("Refine with a
+    // corner"): the estimator's fit is true size and measured.
+    _clearManual();
     _pulseFor(o);
     _reanchor.reset();
     _needsRecheck = false;
@@ -1046,6 +1096,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   /// Starts over: every observation and nudge dropped ("Re-align").
   void resetAlignment() {
     _anchorToObs.clear();
+    _clearManual();
     _lockedResidualM = null;
     _reanchor.reset();
     _needsRecheck = false;
@@ -1081,7 +1132,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     final floor = state.floor;
     final floorTileY = floor == null ? null : floor.floorDatumY + floor.floorFinishOffsetM;
     var fit = obs.isEmpty
-        ? AlignmentFit.none()
+        ? (_manual?.toFit() ?? AlignmentFit.none())
         : _estimator.fit(
             obs,
             nudgeAr: nudgeAr,
@@ -1125,11 +1176,118 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   Future<void> _pushTransform(AlignmentFit fit, {required bool ease}) async {
     final e = _engine;
-    if (e == null || !fit.isPlaced) return;
+    if (e == null || !fit.isPlaced || _manualPreview) return;
+    if (_hiddenByManual) {
+      // A cancelled hand placement hid the model; a real fit shows it again.
+      _hiddenByManual = false;
+      final l = _lastLayers;
+      unawaited(setLayers(
+        mep: l?.mep ?? true,
+        structure: l?.structure ?? true,
+        architecture: l?.architecture ?? true,
+        opacity: 1,
+        sectionY: l?.sectionY,
+      ));
+    }
     try {
       // Re-alignment eases in and never snaps (§4.3).
       await e.setModelTransform(fit.arFromTile, easeMs: ease ? 300 : 0);
     } catch (_) {}
+  }
+
+  // -------------------------------------------------------- place by hand
+
+  void _clearManual() {
+    _manual = null;
+    _manualAnchorId = null;
+    _manualAnchorAr = null;
+  }
+
+  /// The user started "Place by hand": from now until [endManualPreview] or
+  /// [applyManualPlacement], only [previewModelTransform] moves the model.
+  void beginManualPreview() {
+    _manualPreview = true;
+    _hiddenByManual = false;
+  }
+
+  bool get manualPreviewing => _manualPreview;
+
+  /// One live frame of the hand placement (the controller throttles these
+  /// to one in flight). Applied at once: easing would lag the finger.
+  Future<void> previewModelTransform(Mat4 arFromTile) async {
+    final e = _engine;
+    if (e == null || !_manualPreview) return;
+    try {
+      await e.setModelTransform(arFromTile, easeMs: 0);
+    } catch (_) {}
+  }
+
+  /// "Place by hand" was left without locking: the model goes back to the
+  /// session's own fit at full opacity, or hides when there is none.
+  Future<void> endManualPreview() async {
+    if (!_manualPreview) return;
+    _manualPreview = false;
+    final fit = state.fit;
+    final l = _lastLayers;
+    if (fit != null && fit.isPlaced) {
+      await _pushTransform(fit, ease: true);
+      await setLayers(
+        mep: l?.mep ?? true,
+        structure: l?.structure ?? true,
+        architecture: l?.architecture ?? true,
+        opacity: 1,
+        sectionY: l?.sectionY,
+      );
+    } else {
+      _hiddenByManual = true;
+      await setLayers(
+        mep: l?.mep ?? true,
+        structure: l?.structure ?? true,
+        architecture: l?.architecture ?? true,
+        opacity: 0,
+        sectionY: l?.sectionY,
+      );
+    }
+  }
+
+  /// "Lock placement": the hand pose becomes the session's fit
+  /// ([AlignmentQuality.manual], method `manual`, scale kept), replacing any
+  /// corner or board observations, and a native anchor is pinned under the
+  /// pivot so tracker corrections and relocalisation carry the model along
+  /// (the same mechanism committed corners use, [anchorObservation]). The
+  /// caller hands over to the workspace with [enterWorkspace].
+  Future<AlignmentFit> applyManualPlacement(ManualPlacement p) async {
+    _manualPreview = false;
+    _hiddenByManual = false;
+    _anchorToObs.clear();
+    _clearManual();
+    _manual = p;
+    _lockedResidualM = null;
+    _reanchor.reset();
+    _needsRecheck = false;
+    _set(state.copyWith(
+      observations: const [],
+      nudgeM: 0,
+      clearNudgeAxis: true,
+      clearRecheck: true,
+      walkedAtCheckM: state.walkedM,
+    ));
+    final fit = _refit(const [], reason: _RefitReason.observation);
+    final e = _engine;
+    if (e != null && !state.demo) {
+      final at = p.pose.pivotAr;
+      try {
+        final id = await e.anchorAt(at);
+        if (id != null && !_disposed && identical(_manual, p)) {
+          _manualAnchorId = id;
+          _manualAnchorAr = at;
+        }
+      } catch (_) {
+        // No anchor: the model still sits where it was put; it just won't
+        // follow map corrections (the badge stays amber either way).
+      }
+    }
+    return fit;
   }
 
   // ---------------------------------------------------------------- nudge

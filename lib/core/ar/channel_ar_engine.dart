@@ -43,7 +43,9 @@ class ArEngineException implements Exception {
 ///   `depthPointAt {x, y}` → `{posAr, normalAr?, confidence, method}` or
 ///   null · `setTorch {on}` → bool · `startRecording {path}` → bool ·
 ///   `stopRecording` → path or null · `setScanOverlay {on, contrast}` →
-///   bool · `pulseAt {posAr, normalAr?, tone}` → bool.
+///   bool · `pulseAt {posAr, normalAr?, tone}` → bool · `rayAt {points:
+///   [[x,y]]}` → `[{originAr, dirAr} | null]` · `planes` → `{floorY,
+///   planes: [{id, kind, centerAr, normalAr, segment?, widthM, heightM}]}`.
 /// - Vectors are `[x, y, z]` lists, matrices 16-number **column-major**
 ///   lists, the feature state a `Uint8List` (StandardMessageCodec).
 /// - `EventChannel('fusioneco/ar/events')`: maps with `type` in
@@ -186,6 +188,32 @@ class ChannelArEngine implements ArEngine {
       return ArDepthPoint.fromMap(await _call<Object?>('depthPointAt', {'x': x, 'y': y}));
     } on ArEngineException {
       return null; // an older plugin without the extension
+    }
+  }
+
+  /// `rayAt {points: [[x, y]]}` → `[{originAr, dirAr} | null]` (CHANNEL.md
+  /// revision 2). All nulls from an older plugin.
+  @override
+  Future<List<ArRay?>> rayAt(List<(double, double)> points) async {
+    if (points.isEmpty) return const [];
+    try {
+      final raw = await _call<Object?>('rayAt', {
+        'points': [for (final (x, y) in points) [x, y]],
+      });
+      if (raw is List && raw.length == points.length) return [for (final r in raw) ArRay.fromMap(r)];
+    } on ArEngineException {
+      // An older plugin without the extension.
+    }
+    return [for (final _ in points) null];
+  }
+
+  /// `planes` → `{floorY, planes: [...]}` (CHANNEL.md revision 2).
+  @override
+  Future<ArPlanes> planes() async {
+    try {
+      return ArPlanes.fromMap(await _call<Object?>('planes'));
+    } on ArEngineException {
+      return ArPlanes.empty; // an older plugin without the extension
     }
   }
 

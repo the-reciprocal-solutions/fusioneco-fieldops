@@ -30,7 +30,10 @@ abstract interface class ArEngine {
   Future<void> unloadTiles(List<String> hashes);
 
   /// The fitted model → AR-world transform. Native never computes it; it
-  /// only eases to it (never snaps).
+  /// only eases to it (never snaps). Since CHANNEL.md revision 2 it may carry
+  /// a scale ("Place by hand": uniform, or stretched along the model's X/Z):
+  /// such a matrix applies at once (no easing), and native picking and the
+  /// section plane account for it.
   Future<void> setModelTransform(Mat4 arFromTile, {int easeMs = 300});
 
   /// The feature-state texture (`feature_state.dart`): one RGBA texel per
@@ -88,6 +91,17 @@ abstract interface class ArEngine {
   /// (`wall_fit.dart`) and the long-baseline heading tap. Null when nothing
   /// trustworthy is under the point, or the engine lacks the extension.
   Future<ArDepthPoint?> depthPointAt(double x, double y);
+
+  /// World rays through view points in logical pixels (fe_ar extension
+  /// `rayAt`), one per point, null where the camera isn't known yet. "Place
+  /// by hand" drags the model along the floor with them. An engine without
+  /// the extension answers all nulls.
+  Future<List<ArRay?>> rayAt(List<(double, double)> points);
+
+  /// The tracked floor height and the tracked planes (fe_ar extension
+  /// `planes`): walls for "Snap to wall" and the room corners "Snap corner"
+  /// magnets to. [ArPlanes.empty] from an engine without the extension.
+  Future<ArPlanes> planes();
 
   /// Turns the torch on or off (fe_ar extension `setTorch`). True when the
   /// engine applied it; see [ArCapabilities.torch].
@@ -259,6 +273,120 @@ class ArDepthPoint {
         'confidence': confidence,
         'method': method,
       };
+}
+
+/// A world ray through a view point ([ArEngine.rayAt]): where a finger on
+/// the screen points into the room. "Place by hand" intersects it with the
+/// floor plane in Dart (`manual_place_math.dart`), so the model follows the
+/// finger without a native hit-test per frame.
+class ArRay {
+  const ArRay({required this.originAr, required this.dirAr});
+
+  /// On the near plane, AR world.
+  final Vec3 originAr;
+
+  /// Unit direction, AR world.
+  final Vec3 dirAr;
+
+  static ArRay? fromMap(dynamic raw) {
+    if (raw is! Map) return null;
+    final o = Vec3.tryParse(raw['originAr']);
+    final d = Vec3.tryParse(raw['dirAr']);
+    if (o == null || d == null || d.length < 1e-9) return null;
+    return ArRay(originAr: o, dirAr: d.normalized);
+  }
+
+  Map<String, dynamic> toMap() => {'originAr': originAr.toList(), 'dirAr': dirAr.toList()};
+}
+
+/// One tracked plane ([ArEngine.planes]): a wall the phone has measured, or
+/// the floor. "Place by hand" snaps the model's walls and corners to them.
+class ArPlane {
+  const ArPlane({
+    required this.id,
+    required this.kind,
+    required this.centerAr,
+    required this.normalAr,
+    this.segment,
+    this.widthM = 0,
+    this.heightM = 0,
+  });
+
+  final String id;
+
+  /// `wall | floor | ceiling | other`.
+  final String kind;
+  final Vec3 centerAr;
+
+  /// Unit normal; for a wall it is horizontal and faces the camera (into
+  /// the room the user stands in).
+  final Vec3 normalAr;
+
+  /// Walls: the plane's horizontal extent on the floor plane, two (x, z)
+  /// ends. Null for floors (and an old engine).
+  final (Vec2, Vec2)? segment;
+  final double widthM;
+  final double heightM;
+
+  bool get isWall => kind == 'wall';
+
+  static ArPlane? fromMap(dynamic raw) {
+    if (raw is! Map) return null;
+    final c = Vec3.tryParse(raw['centerAr']);
+    final n = Vec3.tryParse(raw['normalAr']);
+    if (c == null || n == null || n.length < 1e-6) return null;
+    (Vec2, Vec2)? seg;
+    final s = raw['segment'];
+    if (s is List && s.length >= 2) {
+      final a = Vec2.tryParse(s[0]);
+      final b = Vec2.tryParse(s[1]);
+      if (a != null && b != null) seg = (a, b);
+    }
+    return ArPlane(
+      id: raw['id']?.toString() ?? '',
+      kind: raw['kind']?.toString() ?? 'other',
+      centerAr: c,
+      normalAr: n.normalized,
+      segment: seg,
+      widthM: asDouble(raw['widthM']) ?? 0,
+      heightM: asDouble(raw['heightM']) ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'kind': kind,
+        'centerAr': centerAr.toList(),
+        'normalAr': normalAr.toList(),
+        if (segment != null) 'segment': [segment!.$1.toList(), segment!.$2.toList()],
+        'widthM': widthM,
+        'heightM': heightM,
+      };
+}
+
+/// What [ArEngine.planes] answers: the tracked floor height (the same plane
+/// the `floor` event reports) and the tracked planes.
+class ArPlanes {
+  const ArPlanes({this.floorY, this.planes = const []});
+
+  static const empty = ArPlanes();
+
+  final double? floorY;
+  final List<ArPlane> planes;
+
+  List<ArPlane> get walls => [for (final p in planes) if (p.isWall) p];
+
+  static ArPlanes fromMap(dynamic raw) {
+    if (raw is! Map) return empty;
+    final list = raw['planes'];
+    return ArPlanes(
+      floorY: asDouble(raw['floorY']),
+      planes: [
+        if (list is List)
+          for (final p in list) ?ArPlane.fromMap(p),
+      ],
+    );
+  }
 }
 
 class TileRef {

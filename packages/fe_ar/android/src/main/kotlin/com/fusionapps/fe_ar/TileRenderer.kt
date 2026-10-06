@@ -68,6 +68,8 @@ internal class TileRenderer(
     private var layers = LayerState()
     private var sectionWorldY = 0f
     private var translationY = 0f
+    /** The model's vertical scale (tile Y → world Y), 1 except "Place by hand". */
+    private var scaleY = 1f
 
     /**
      * False until Dart sends the first model transform. Before that the root is
@@ -279,8 +281,13 @@ internal class TileRenderer(
     fun setModelMatrix(m: FloatArray) {
         val tcm = engine.transformManager
         tcm.setTransform(tcm.getInstance(modelRoot), m)
-        if (kotlin.math.abs(m[13] - translationY) > 1e-4f) {
+        // Length of the Y column: 1 for a yaw-only fit, the size for a hand
+        // placement ("Place by hand"; its rotation is about Y only).
+        val sy = kotlin.math.sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6])
+        val scaleChanged = kotlin.math.abs(sy - scaleY) > 1e-5f && sy > 1e-6f
+        if (kotlin.math.abs(m[13] - translationY) > 1e-4f || scaleChanged) {
             translationY = m[13]
+            if (scaleChanged) scaleY = sy
             if (layers.sectionY != null) {
                 updateSection()
                 for (t in gpu.values) for (p in t.passes) for (mi in p.materials) mi.setParameter("sectionWorldY", sectionWorldY)
@@ -289,8 +296,9 @@ internal class TileRenderer(
     }
 
     private fun updateSection() {
-        // user-world Y = tile Y + the fit's vertical translation (yaw-only fit)
-        sectionWorldY = (layers.sectionY ?: 0f) + translationY
+        // user-world Y = tile Y × the model's vertical scale + its vertical
+        // translation (yaw-only rotation; scale 1 except "Place by hand")
+        sectionWorldY = (layers.sectionY ?: 0f) * scaleY + translationY
     }
 
     /** Drives the x-ray pulse; only the tiles holding a highlight pay for it. */

@@ -68,6 +68,25 @@ enum ArSetupStep {
   baseline,
 }
 
+/// Why "Use this corner" could not place the model from corner A — shown
+/// on the card in plain words, with the way out (first iPhone run
+/// 2026-10-06: one vague toast, repeated, and no way forward).
+enum ArCornerProblem {
+  /// The snap's shape (inside vs column/outside) differs from the corner
+  /// picked, and the model's nearest corner of the snapped shape is beyond
+  /// [CornerMatcher.autoPickRadiusM]: tap one on the plan, or check the
+  /// floor.
+  otherShapeNearby,
+
+  /// The model has no corner of the snapped shape at all: most likely not
+  /// this room — offer another floor/model and the demo room.
+  noneOfShape,
+
+  /// The fit did not take (never expected with one corner; kept so the
+  /// screen says something useful rather than advancing silently).
+  notPlaced,
+}
+
 class ArSetupState {
   const ArSetupState({
     this.step = ArSetupStep.choose,
@@ -112,6 +131,12 @@ class ArSetupState {
     this.measuring = false,
     this.cornerAMethod,
     this.baselineDone = false,
+    this.cornerProblem,
+    this.problemShape,
+    this.problemSeq = 0,
+    this.noticeKey,
+    this.noticeArgs = const [],
+    this.noticeSeq = 0,
   });
 
   final ArSetupStep step;
@@ -194,6 +219,33 @@ class ArSetupState {
   /// Corner A's heading was already set from a long baseline.
   final bool baselineDone;
 
+  /// Why the last "Use this corner" on corner A didn't place the model.
+  final ArCornerProblem? cornerProblem;
+
+  /// `inside | outside`: the shape the user snapped, for [cornerProblem]'s
+  /// wording and the plan's filter.
+  final String? problemShape;
+
+  /// Bumped when the same problem happens again: the card buzzes instead
+  /// of repeating a toast.
+  final int problemSeq;
+
+  /// A one-off note for the coach strip ("Using #1 · Bedroom 1 · NW
+  /// corner…"): setup speaks from one status area instead of stacking
+  /// toasts over the camera (owner, 2026-10-06).
+  final String? noticeKey;
+  final List<Object> noticeArgs;
+  final int noticeSeq;
+
+  /// The number a corner's pin carries on the plan (its place in [ranked]),
+  /// or null when it isn't offered. The chip and the start card say "#n"
+  /// with this; "Corner 1 of 2" is always the setup step, never a pin.
+  int? pinOf(CornerCandidate? c) {
+    if (c == null) return null;
+    final i = ranked.indexWhere((x) => x.id == c.id);
+    return i < 0 ? null : i + 1;
+  }
+
   /// The wall-taps offer: walls not tracked, or the snap fell back to a
   /// floor tap (one borrowed wall for heading).
   bool get offerWallTaps => wallsMissing || snapped?.method == 'floorTap';
@@ -255,6 +307,13 @@ class ArSetupState {
     bool? measuring,
     String? cornerAMethod,
     bool? baselineDone,
+    ArCornerProblem? cornerProblem,
+    String? problemShape,
+    bool clearProblem = false,
+    int? problemSeq,
+    String? noticeKey,
+    List<Object>? noticeArgs,
+    int? noticeSeq,
   }) => ArSetupState(
     step: step ?? this.step,
     method: method ?? this.method,
@@ -298,6 +357,12 @@ class ArSetupState {
     measuring: measuring ?? this.measuring,
     cornerAMethod: cornerAMethod ?? this.cornerAMethod,
     baselineDone: baselineDone ?? this.baselineDone,
+    cornerProblem: clearProblem ? null : (cornerProblem ?? this.cornerProblem),
+    problemShape: clearProblem ? null : (problemShape ?? this.problemShape),
+    problemSeq: problemSeq ?? this.problemSeq,
+    noticeKey: noticeKey ?? this.noticeKey,
+    noticeArgs: noticeArgs ?? this.noticeArgs,
+    noticeSeq: noticeSeq ?? this.noticeSeq,
   );
 }
 
@@ -476,16 +541,18 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
   /// Back to the chooser ("Other method").
   void otherMethod() {
     _stopSnapPolling();
-    _set(state.copyWith(step: ArSetupStep.choose, clearSnapped: true));
+    _set(state.copyWith(step: ArSetupStep.choose, clearSnapped: true, clearProblem: true));
   }
 
   // ------------------------------------------------------------ corners
 
-  void chooseCornerA(CornerCandidate c) => _set(state.copyWith(chosenA: c));
+  /// A corner tapped on the plan. Clears any "wrong shape" explanation:
+  /// the user has answered it.
+  void chooseCornerA(CornerCandidate c) => _set(state.copyWith(chosenA: c, clearProblem: true));
 
   void startCornerA() {
     if (state.chosenA == null) return;
-    _set(state.copyWith(step: ArSetupStep.cornerA, clearSnapped: true));
+    _set(state.copyWith(step: ArSetupStep.cornerA, clearSnapped: true, clearProblem: true));
     _startSnapPolling();
   }
 
@@ -520,7 +587,10 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
     switch (state.step) {
       case ArSetupStep.cornerA:
         if (keep) return;
-        _set(state.copyWith(snapped: d, snapSeq: state.snapSeq + 1));
+        // A snap of another shape means the user moved to another corner:
+        // the old explanation no longer describes where they stand.
+        final stale = state.problemShape != null && state.problemShape != CornerMatcher.shapeOf(d.kind);
+        _set(state.copyWith(snapped: d, snapSeq: state.snapSeq + 1, clearProblem: stale));
       case ArSetupStep.cornerB:
         if (keep) return;
         _matchB(d);
@@ -572,33 +642,60 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
 
   /// "Use this corner" on corner A: one corner is already a full 4-DoF
   /// placement (position and heading), so the badge goes amber.
+  ///
+  /// The snap must have the picked corner's shape (inside vs column /
+  /// outside, angle within the method's tolerance). If it doesn't, the best
+  /// corner of the snapped shape is looked for on the **whole floor**, near
+  /// where the user is (the last camera position, else the picked corner):
+  /// close by, it is used and named; far away or nowhere, the card explains
+  /// why and what to do (first iPhone run 2026-10-06: an inside-corner snap
+  /// on a model whose short list held only column corners got the vague
+  /// `corner_rejected` toast, again on every tap, and no way forward).
   void useCornerA() {
     final d = state.snapped;
     var a = state.chosenA;
-    if (d == null || a == null) return;
-    // The snap must have the chosen corner's shape (inside vs outside/column,
-    // same angle). If it doesn't, take the best-ranked corner that does and
-    // say so, rather than fitting an inside corner onto a column's edge.
-    if (!_matcher.shapeMatches(d, a)) {
-      CornerCandidate? match;
-      for (final c in state.ranked) {
-        if (_matcher.shapeMatches(d, c)) {
-          match = c;
-          break;
-        }
-      }
-      if (match == null) {
-        _session.toast('ar.toast.corner_rejected', tone: ArToastTone.warning);
+    final floor = _s.floor;
+    if (d == null || a == null || floor == null) return;
+    final fb = _matcher.fallbackFor(d, a, floor.corners, near: _s.cameraTile);
+    switch (fb.kind) {
+      case ShapeFallbackKind.matches:
+        break;
+      case ShapeFallbackKind.switched:
+        a = fb.candidate!;
+        final pick = a;
+        // From outside the room's short list: give it a pin so the plan,
+        // the chip and the toast all name it the same way.
+        final ranked = state.ranked.any((c) => c.id == pick.id) ? state.ranked : [...state.ranked, pick];
+        _set(state.copyWith(chosenA: pick, ranked: ranked, clearProblem: true));
+        _set(state.copyWith(
+          noticeKey: 'ar.toast.corner_switched',
+          noticeArgs: [state.pinOf(pick) ?? 1, pick.label],
+          noticeSeq: state.noticeSeq + 1,
+        ));
+      case ShapeFallbackKind.nearbyOtherShape:
+        // Offer the far same-shape corners on the plan too.
+        final extra = [for (final c in fb.sameShape) if (!state.ranked.any((r) => r.id == c.id)) c];
+        if (extra.isNotEmpty) _set(state.copyWith(ranked: [...state.ranked, ...extra]));
+        _explain(ArCornerProblem.otherShapeNearby, fb.snappedShape);
         return;
-      }
-      a = match;
-      _set(state.copyWith(chosenA: a));
-      _session.toast('ar.toast.corner_switched', args: [a.label]);
+      case ShapeFallbackKind.noneOfShape:
+        _explain(ArCornerProblem.noneOfShape, fb.snappedShape);
+        return;
     }
     final obsA = _matcher.firstCorner(d, a, cameraAr: _s.cameraAr);
     final fit = _session.addObservation(obsA);
+    if (fit.quality == AlignmentQuality.siteMismatch) {
+      // Only with observations kept from before (re-align from work): the
+      // new corner disagrees with them.
+      _stopSnapPolling();
+      _set(state.copyWith(step: ArSetupStep.mismatch, clearProblem: true));
+      return;
+    }
+    if (!fit.isPlaced) {
+      _explain(ArCornerProblem.notPlaced, CornerMatcher.shapeOf(d.kind));
+      return;
+    }
     unawaited(_session.anchorObservation(obsA));
-    final floor = _s.floor!;
     final suggestions = _matcher.suggestSecond(a, floor.corners);
     _set(state.copyWith(
       step: ArSetupStep.cornerB,
@@ -611,12 +708,27 @@ class ArSetupController extends AutoDisposeNotifier<ArSetupState> {
       ambiguousB: const [],
       noMatchB: false,
       tooCloseB: false,
+      clearProblem: true,
       suggestedB: suggestions.isEmpty ? null : suggestions.first,
     ));
-    if (fit.quality == AlignmentQuality.none) {
-      _session.toast('ar.toast.corner_rejected', tone: ArToastTone.warning);
-    }
     _startSnapPolling();
+  }
+
+  /// Puts [problem] on the coach strip and the card — the reason and the
+  /// next step, never a toast (the strip is setup's one status area). The
+  /// same problem again bumps [ArSetupState.problemSeq] so the card buzzes
+  /// instead of repeating itself.
+  void _explain(ArCornerProblem problem, String shape) {
+    _set(state.copyWith(cornerProblem: problem, problemShape: shape, problemSeq: state.problemSeq + 1));
+  }
+
+  /// "Try the demo room": Demo mode's sample building, from the card that
+  /// says this model may not be this room.
+  Future<void> tryDemoRoom() async {
+    _stopSnapPolling();
+    await ref.read(arPrefsProvider.notifier).setDemo(true);
+    if (_disposed) return;
+    await _session.restart();
   }
 
   /// "Use this corner" on corner B ([pick] answers the two-button question).

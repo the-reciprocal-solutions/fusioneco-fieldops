@@ -216,6 +216,9 @@ struct CaptureRequest {
     bool _sectionEnabled;
     float _sectionY;
     float _translationY;
+    // The model's vertical scale ("Place by hand" at another size): tile Y
+    // maps to world Y as y * _scaleY + _translationY. 1 for every 4-DoF fit.
+    float _scaleY;
     NSMutableArray* _captureQueue;
 
     // room scan + pulses
@@ -240,6 +243,7 @@ struct CaptureRequest {
     _sectionEnabled = false;
     _sectionY = 0;
     _translationY = 0;
+    _scaleY = 1.0f;
     _grid = nullptr;
     _pins = nullptr;
     _captureQueue = [NSMutableArray new];
@@ -553,7 +557,7 @@ struct CaptureRequest {
     mi->setParameter("highlightColor", hl);
     mi->setParameter("opacity", _opacity);
     mi->setParameter("sectionEnabled", _sectionEnabled ? 1.0f : 0.0f);
-    mi->setParameter("sectionWorldY", _sectionY + _translationY);
+    mi->setParameter("sectionWorldY", _sectionY * _scaleY + _translationY);
     mi->setParameter("pass", (float)pass);
     mi->setParameter("isLines", look.lines ? 1.0f : 0.0f);
     mi->setParameter("time", 0.0f);
@@ -645,8 +649,13 @@ struct CaptureRequest {
     auto& tcm = _engine->getTransformManager();
     tcm.setTransform(tcm.getInstance(_modelRoot), toMat4f(matrix));
     const float ty = matrix.columns[3][1];
-    if (std::fabs(ty - _translationY) > 1e-4f) {
+    // Length of the Y column: 1 for a yaw-only fit, the size for a hand
+    // placement (its rotation is about Y only, so the column is (0, s, 0)).
+    const float sy = simd_length(simd_make_float3(matrix.columns[1]));
+    const bool scaleChanged = std::fabs(sy - _scaleY) > 1e-5f && sy > 1e-6f;
+    if (std::fabs(ty - _translationY) > 1e-4f || scaleChanged) {
         _translationY = ty;
+        if (scaleChanged) _scaleY = sy;
         if (_sectionEnabled) [self pushSection];
     }
 }
@@ -691,8 +700,10 @@ struct CaptureRequest {
 }
 
 - (void)pushSection {
-    // user-world Y = tile Y + the fit's vertical translation (yaw-only fit, CONTRACT C2)
-    const float y = _sectionY + _translationY;
+    // user-world Y = tile Y × the model's vertical scale + its vertical
+    // translation (yaw-only rotation, CONTRACT C2; scale 1 except "Place by
+    // hand" at another size)
+    const float y = _sectionY * _scaleY + _translationY;
     for (auto& kv : _tiles)
         for (auto& p : kv.second.passes)
             for (MaterialInstance* mi : p.materials) mi->setParameter("sectionWorldY", y);

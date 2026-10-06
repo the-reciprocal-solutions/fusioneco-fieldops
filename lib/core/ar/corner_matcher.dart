@@ -123,6 +123,36 @@ class CornerMatch {
   final double distanceM;
 }
 
+enum ShapeFallbackKind { matches, switched, nearbyOtherShape, noneOfShape }
+
+/// [CornerMatcher.fallbackFor]'s answer.
+class ShapeFallback {
+  const ShapeFallback({
+    required this.kind,
+    required this.snappedShape,
+    this.candidate,
+    this.distanceM,
+    this.nearbyShape,
+    this.sameShape = const [],
+  });
+
+  final ShapeFallbackKind kind;
+
+  /// The corner to use ([ShapeFallbackKind.matches] / `switched`), or the
+  /// nearest same-shape one (`nearbyOtherShape`).
+  final CornerCandidate? candidate;
+  final double? distanceM;
+
+  /// `inside | outside` — what the user is standing at.
+  final String snappedShape;
+
+  /// `inside | outside` — the shape of the corner they picked.
+  final String? nearbyShape;
+
+  /// Every floor corner with the snapped shape, nearest first.
+  final List<CornerCandidate> sameShape;
+}
+
 /// Turns snapped corners into estimator observations and picks which model
 /// corner a snap is (docs/ar-setup-and-gamma-parity.md §2.4, AR-41).
 ///
@@ -139,24 +169,108 @@ class CornerMatcher {
   /// *finished* floor, so candidates are raised by this much before fitting.
   final double floorFinishOffsetM;
 
-  /// Two corners are the "same shape" within this angle.
+  /// Two corners are the "same shape" within this angle — the default, for
+  /// corners fitted from tracked planes ([angleToleranceFor] per method).
   static const angleToleranceDeg = 15.0;
+
+  /// Angle tolerance per snap method (2026-10-06, first iPhone run: an
+  /// inside corner snapped at 93° against a model at 90°).
+  ///
+  /// The tolerance only has to tell a 90° corner from a splayed one (the
+  /// extractor keeps 30–150°, and real splays are 120–135°), while inside vs
+  /// outside is decided by `kind`, not the angle. What it must absorb:
+  /// - real rooms are out of square: 1–3° is normal for plastered brick
+  ///   (the owner's bedroom read 93°);
+  /// - the depth sensor's wall fit adds about ±1–2° on painted walls;
+  /// - tracked planes alone (no depth sensor) wobble ±3–5° while they grow;
+  /// - wall taps and a floor tap borrow one wall and guess the other.
+  ///
+  /// So 10° for a depth-sensor snap (3° out of square + 2° fit, twice over),
+  /// 15° for tracked planes, 20° for the rough methods. All stay far below
+  /// the 30°+ gap to a splayed corner. The server's own "same shape" test
+  /// uses 10° on exact model geometry (cornerExtractor.ts `sameShape`).
+  static double angleToleranceFor(String method) => switch (method) {
+        'lidar' || 'depth' => 10.0,
+        'planes' || 'plane' => angleToleranceDeg,
+        _ => 20.0,
+      };
 
   /// Corners at least this far apart can turn the badge green (a 3 m pair
   /// has the 1.5 m spread the estimator needs).
   static const lockSeparationM = 3.0;
+
+  /// A shape-matching corner this close to where the user meant (the corner
+  /// they picked, or where the camera is) is taken without asking: about
+  /// one room. Farther away it is a guess, so the screen explains instead.
+  static const autoPickRadiusM = 8.0;
 
   /// The model point a snap of [c] is compared with: the corner line at the
   /// finished floor.
   Vec3 modelPoint(CornerCandidate c) =>
       Vec3(c.posTile.x, c.posTile.y + floorFinishOffsetM, c.posTile.z);
 
+  /// `inside` or `outside` — a column's edge is an outside corner.
+  static String shapeOf(String kind) => kind == 'column' ? 'outside' : (kind == 'inside' ? 'inside' : 'outside');
+
   /// Same kind (a column's edge counts as an outside corner) and angle
-  /// within [angleToleranceDeg].
+  /// within [angleToleranceFor] the snap's method.
   bool shapeMatches(DetectedCorner d, CornerCandidate c) {
-    String norm(String k) => k == 'column' ? 'outside' : k;
-    if (norm(d.kind) != norm(c.kind)) return false;
-    return (d.angleDeg - c.angleDeg).abs() <= angleToleranceDeg;
+    if (shapeOf(d.kind) != shapeOf(c.kind)) return false;
+    return (d.angleDeg - c.angleDeg).abs() <= angleToleranceFor(d.method);
+  }
+
+  /// What to do with a corner-A snap whose shape differs from the corner the
+  /// user picked ([chosen]). Searches **every** corner of the floor
+  /// ([floorCorners]), not just the room's short list, and prefers the one
+  /// nearest [near] (the last known camera position, else the picked
+  /// corner — where the user said they are), then the best ranked.
+  ///
+  /// - [ShapeFallbackKind.matches]: the snap fits [chosen]; nothing to do.
+  /// - [ShapeFallbackKind.switched]: a same-shape corner within
+  ///   [autoPickRadiusM]; use it and say which.
+  /// - [ShapeFallbackKind.nearbyOtherShape]: same-shape corners exist, but
+  ///   only far away: ask the user to tap one on the plan.
+  /// - [ShapeFallbackKind.noneOfShape]: the model has no corner of that
+  ///   shape at all — most likely the wrong floor or model for this room.
+  ShapeFallback fallbackFor(
+    DetectedCorner d,
+    CornerCandidate chosen,
+    List<CornerCandidate> floorCorners, {
+    Vec3? near,
+  }) {
+    if (shapeMatches(d, chosen)) {
+      return ShapeFallback(kind: ShapeFallbackKind.matches, candidate: chosen, snappedShape: shapeOf(d.kind));
+    }
+    final ref = (near ?? chosen.posTile).xz;
+    final same = [for (final c in floorCorners) if (shapeMatches(d, c)) c];
+    // Which shape the user sees around the corner they picked: the reason
+    // given on screen ("this model's corners near there are column corners").
+    final nearbyShape = shapeOf(chosen.kind);
+    if (same.isEmpty) {
+      return ShapeFallback(
+        kind: ShapeFallbackKind.noneOfShape,
+        snappedShape: shapeOf(d.kind),
+        nearbyShape: nearbyShape,
+      );
+    }
+    double dist(CornerCandidate c) => c.posTile.xz.distanceTo(ref);
+    same.sort((a, b) {
+      final byDist = dist(a).compareTo(dist(b));
+      // Within 0.5 m of each other the better-ranked corner wins.
+      if ((dist(a) - dist(b)).abs() > 0.5) return byDist;
+      final byRank = b.rank.compareTo(a.rank);
+      return byRank != 0 ? byRank : byDist;
+    });
+    final best = same.first;
+    final d0 = dist(best);
+    return ShapeFallback(
+      kind: d0 <= autoPickRadiusM ? ShapeFallbackKind.switched : ShapeFallbackKind.nearbyOtherShape,
+      candidate: best,
+      distanceM: d0,
+      snappedShape: shapeOf(d.kind),
+      nearbyShape: nearbyShape,
+      sameShape: same,
+    );
   }
 
   /// The first corner, chosen by the user. One corner gives position **and**

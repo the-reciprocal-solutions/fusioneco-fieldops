@@ -58,6 +58,12 @@ String arBadgeText(BuildContext context, ArBadgeInfo b, {bool compact = false}) 
     case AlignmentQuality.drifting:
       return arTr(context, 'ar.badge.drifting');
     case AlignmentQuality.manual:
+      // "Place by hand": never measured, and says so when not at true size.
+      if (b.handPlaced) {
+        final pct = b.scalePct;
+        if (pct == null) return arTr(context, compact ? 'ar.badge.hand_short' : 'ar.badge.hand');
+        return arTr(context, compact ? 'ar.badge.hand_short_scaled' : 'ar.badge.hand_scaled', ['$pct%']);
+      }
       return arTr(context, compact ? 'ar.badge.manual_short' : 'ar.badge.manual', [arCentimetres(context, b.nudgeM)]);
     case AlignmentQuality.siteMismatch:
       return arTr(context, compact ? 'ar.badge.mismatch_short' : 'ar.badge.mismatch', [arCentimetres(context, b.residualM)]);
@@ -87,7 +93,9 @@ class ArSessionBadge extends ConsumerWidget {
         text = '$text · ${arTr(context, 'ar.sync.queued_short', [queued])}';
       }
     }
-    return ArStatusBadge(tone: arBadgeTone(badge.quality), text: text, onTap: onTap, dense: compact);
+    // A hand placement is amber, like any placement nobody measured.
+    final tone = badge.handPlaced && badge.quality == AlignmentQuality.manual ? ArBadgeTone.placed : arBadgeTone(badge.quality);
+    return ArStatusBadge(tone: tone, text: text, onTap: onTap, dense: compact);
   }
 }
 

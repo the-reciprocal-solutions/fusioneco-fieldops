@@ -151,6 +151,32 @@ flowchart LR
 - Native: `packages/fe_ar/ios/Classes/FeArScan.swift`, `FeArRenderer.mm` (scan surfaces, rings), `FeArDepthProbe.surfaceResidual`, `materials/fe_scan.mat` (iOS-only, compiled with matc 1.72.1 like the others). Wire: CHANNEL.md `setScanOverlay`, `pulseAt`, `scan`, `surfaceResidualMm`.
 - The residual never changes the fit or σ; it only colours the ring and raises a hint.
 
+### 2.7 Place by hand (2026-10-06)
+
+An **additional** setup method next to boards and corners (the corner method is unchanged). Owner: "load the model and drag it to the corners and expand its size to fit the room". The model appears 1.5 m ahead of the user on the detected floor, at true size, see-through (opacity 0.55) with a Flutter-drawn outline and a centre puck; the user moves, turns and sizes it, then locks it.
+
+```mermaid
+flowchart LR
+  CH["Method chooser<br/>'Place by hand' (first when < 3 corners<br/>or 2 corner failures)"] --> MC["ArManualPlaceController<br/>(state/ar_manual_place_controller.dart)"]
+  G["Gestures on the camera<br/>drag · twist · pinch · 2-finger lift<br/>long-press fine · double-tap reset"] --> MC
+  MC -->|"pure maths"| M["manual_place_math.dart<br/>ManualGestures · ManualSnaps · UndoStack<br/>ModelFootprint · ManualPose"]
+  MC -->|"rays, planes, projections<br/>(ManualViewIo)"| E["ArEngine rayAt / planes / projectTile<br/>(Demo: PinholeCamera + director truth)"]
+  MC -->|"previewModelTransform<br/>(one in flight, ≤ 1 per frame)"| S["ArSessionController<br/>beginManualPreview"]
+  MC -->|"Lock placement"| L["applyManualPlacement<br/>fit = manual, method 'manual', scale kept<br/>anchorAt(pivot) → re-anchor on map corrections"]
+  L --> W["enterWorkspace<br/>amber 'Placed by hand' badge<br/>'Refine with a corner' banner"]
+  W -->|"Refine"| R["ArSetupController.reSnap()<br/>a measured corner replaces the hand fit"]
+```
+
+- **Gestures** (`ArManualPlaceOverlay`, one `GestureDetector`; Flutter restarts the scale gesture whenever a finger lands or lifts, so each finger count is its own start/update/end): one finger drags the model on its base plane — `rayAt` → `ManualGestures.floorHit` → delta, so it follows the finger; two fingers twist (soft snap within 4° of any quarter turn aligned to a detected wall, or to the load heading before any wall is seen) and pinch (50–200 %, **sticky at 100 %** within ±3 %); two fingers dragged straight up/down change the height (`TwoFingerClassifier` decides once per gesture); long-press toggles fine mode (×0.25); double-tap resets to the load pose. Undo/redo: 30 poses.
+- **Fit helpers:** *Wall* (`ManualSnaps.snapToWall`: the model face closest in heading/distance/overlap to a detected wall turns parallel and slides onto it), *Corner* (corner tool: drag a white handle; on release it magnets within 30 cm to a room corner — two detected walls crossing, or the engine's own `detectCornerAt` under the finger — and **pins**: later pinches, twists and stretches keep that corner fixed, so the model grows out from the room corner), *Nudge* (±1 cm relative to the view, ±1°, ±1 cm height), *Height* slider, *More* (fine mode, true size, start over, "Use last size", **Stretch to fit** off by default: per-axis 80–125 % on the model's X/Z). Readout: "Scale 112% · Rot 87° · Height +0.02 m" (Rot counts from the load heading).
+- **Truth about scale:** any size ≠ 100 % shows the amber "Not true size — measurements are approximate" badge with one-tap **True size**; true size is the default and the next visit only *offers* last time's size. The fit carries `scale/stretchX/stretchZ` (`AlignmentFit.isTrueSize`); the session badge reads "Placed by hand · 112% · not true size" (amber, never green), and the workspace's measure chip appends "approximate, model not true size".
+- **Lock:** `applyManualPlacement` replaces any observations with the hand pose as the fit (`AlignmentQuality.manual`, method `manual`), pins a native anchor under the pivot (`anchorAt`, the corner mechanism) and refits from its `anchor` events, so map corrections and relocalisation carry the model. The first corner or board observation afterwards replaces it (`_clearManual`). `AlignmentFit.arToTile` now uses the general inverse when the matrix isn't rigid (`Mat4.inverse`).
+- **Persistence:** in-session, the last pose (locked or left) is restored when the user re-enters Place by hand; across sessions only the size is saved (`ar_prefs` `manual:size:<floorId>`; a new AR session has a new world origin, so a saved position would be meaningless). "Remember my choice" stores `manual:method:<floorId>` and the floor then opens straight into it; route `/ar/session?method=manual` does the same.
+- **Native (CHANNEL.md revision 2):** `rayAt`, `planes`, scaled `setModelTransform` (applied on the next frame; the model root only), `pick` with the general inverse on Android, section plane `sectionY × s + ty` on both. Demo mode never calls them: `DemoManualIo` uses a pinhole camera inside the sample room and the room's walls through the director's hidden pose, so Snap to wall/corner find the true answer there too.
+- **Power:** projection polling 15 Hz (7.5 Hz from thermal "moderate"), planes 1 Hz (0.5 Hz hot), both stopped while paused or once locked.
+- **Tests:** `test/ar_manual_place_math_test.dart` (33), `test/ar_manual_place_controller_test.dart` (20, incl. the lock hand-off through the real session code), `test/ar_manual_place_widget_test.dart` (15: 360×780, 320×568, 915×412 × EN/AR × Sunlight, plus the chooser).
+- **Not verified:** any device. The feel of the gestures, ARKit/ARCore plane quality for Snap to wall/corner, the anchor re-anchoring, the frame-coalesced transform and the scaled section plane only show on a phone.
+
 ## 3. A session, end to end
 
 ```mermaid

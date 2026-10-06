@@ -23,9 +23,15 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-030**
+Next number: **P-031**
 
 ## Open
+
+### P-030 · AR first-placement fixes, setup coach and "Place by hand" (2026-10-06): no iPhone run yet
+- **Status:** needs verification · **Priority:** P1 · **Area:** AR setup
+- **Found:** 2026-10-06 (owner: "That corner didn't place the model" on every try; asked for full overlay instructions and a drag/rotate/pinch placement mode)
+- **Done so far:** corner shape fallback over the whole floor, per-method angle tolerance, plain mismatch card (pick another floor/model, demo room), consistent numbering, decluttered mini plan; one-status coach strip + 3-step guide + "?"; Place by hand (drag, twist, pinch 50–200 %, height, fine mode, wall/corner snap, nudge, undo, true-size badge, lock → workspace "manual", refine with a corner), CHANNEL.md rev 2 (`rayAt`, `planes`, scale in `setModelTransform`) on iOS + Android. 1085 app tests pass (1 pre-existing `qr_payload_test`); Swift typecheck, ObjC++ syntax check, Kotlin compile pass. Server 7be4cc2 puts the Demo Bedroom model on its own floor in Fusion Eco Data Center (listed first).
+- **Left:** deploy server 7be4cc2 + run Demo Data "AR demo model" on dev; on the iPhone in the bedroom: Data Center ▸ Demo Bedroom ▸ corner placement succeeds first try; Place by hand gestures/feel, wall/corner snaps on ARKit planes, re-anchor after tracking loss, scaled section plane, coach arrow + pinch plan, Sunlight; Android pulse rings/reveal still owed (P-027).
 
 ### P-029 · 2026-10-06 owner round (12 items): built and tested off-device, not run on an iPhone
 - **Status:** needs verification · **Priority:** P1 · **Area:** conversations, snags, shell/sync, session, AR, field verification, scanner, inspections

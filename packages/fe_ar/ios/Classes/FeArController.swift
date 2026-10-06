@@ -56,6 +56,9 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
     /// which read as "the overlay lands somewhere random" on the first
     /// Android device run.
     private var modelPlaced = false
+    /// An at-once transform waiting for the next frame: "Place by hand"
+    /// sends one per finger move, and only the newest per frame is drawn.
+    private var modelDirty = false
     private var easeFrom = matrix_identity_float4x4
     private var easeTo = matrix_identity_float4x4
     private var easeStart: CFTimeInterval = 0
@@ -319,6 +322,10 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         if case .normal = frame.camera.trackingState { tracking = true } else { tracking = false }
 
         stepEase(now)
+        if modelDirty {
+            modelDirty = false
+            renderer?.setModelMatrix(modelCurrent)
+        }
         let dt = lastFrameTime > 0 ? min(max(now - lastFrameTime, 0), 0.1) : 0
         lastFrameTime = now
         stepScanAlpha(dt)
@@ -420,6 +427,75 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         emit(["type": "floor", "yAr": Double(y), "areaM2": Double(Self.planeArea(floor))])
     }
 
+    // MARK: tracked planes (extension `planes`, CHANNEL.md revision 2)
+
+    static let maxPlanes = 24
+
+    /// The tracked floor height and ARKit's plane anchors, for "Place by
+    /// hand": walls for Snap to wall, wall pairs for the room corners Snap
+    /// corner magnets to. On LiDAR devices ARKit fits these planes from the
+    /// scene depth, so they are the mesh's walls without the mesh's cost.
+    /// Wall normals are levelled and turned to face the camera (into the
+    /// room); `segment` is the wall's measured horizontal extent from its
+    /// boundary polygon. Read-only: nothing here changes the session.
+    private func trackedPlanes() -> [String: Any] {
+        let floor: Any = lastFloorY.map { Double($0) as Any } ?? NSNull()
+        guard let frame = session.currentFrame else { return ["floorY": floor, "planes": [Any]()] }
+        let c = frame.camera.transform.columns.3
+        let cam = SIMD3<Float>(c.x, c.y, c.z)
+        var out: [[String: Any]] = []
+        for case let p as ARPlaneAnchor in frame.anchors {
+            if out.count >= Self.maxPlanes { break }
+            let vertical = p.alignment == .vertical
+            let area = Self.planeArea(p)
+            if area < (vertical ? 0.15 : 0.25) { continue }
+            let centre = FeArCornerDetector.centre(p)
+            var n = simd_normalize(FeArCornerDetector.normal(p))
+            var kind: String
+            var entry: [String: Any] = ["id": p.identifier.uuidString]
+            if vertical {
+                let level = SIMD3<Float>(n.x, 0, n.z)
+                if simd_length(level) < 0.5 { continue }
+                n = simd_normalize(level)
+                if simd_dot(cam - centre, n) < 0 { n = -n }
+                kind = "wall"
+                // Horizontal extent along the wall, vertical extent up it.
+                let along = SIMD3<Float>(n.z, 0, -n.x)
+                var lo = Float.greatestFiniteMagnitude, hi = -Float.greatestFiniteMagnitude
+                var bottom = Float.greatestFiniteMagnitude, top = -Float.greatestFiniteMagnitude
+                for v in p.geometry.boundaryVertices {
+                    let w4 = p.transform * SIMD4<Float>(v.x, v.y, v.z, 1)
+                    let w = SIMD3<Float>(w4.x, w4.y, w4.z)
+                    let u = simd_dot(w - centre, along)
+                    lo = min(lo, u)
+                    hi = max(hi, u)
+                    bottom = min(bottom, w.y)
+                    top = max(top, w.y)
+                }
+                if lo < hi {
+                    let a = centre + along * lo, b = centre + along * hi
+                    entry["segment"] = [[Double(a.x), Double(a.z)], [Double(b.x), Double(b.z)]]
+                    entry["widthM"] = Double(hi - lo)
+                    entry["heightM"] = Double(max(0, top - bottom))
+                }
+            } else {
+                kind = n.y > 0 ? "floor" : "ceiling"
+                if ARPlaneAnchor.isClassificationSupported {
+                    switch p.classification {
+                    case .ceiling: kind = "ceiling"
+                    case .table, .seat: kind = "other"
+                    default: break
+                    }
+                }
+            }
+            entry["kind"] = kind
+            entry["centerAr"] = [Double(centre.x), Double(centre.y), Double(centre.z)]
+            entry["normalAr"] = [Double(n.x), Double(n.y), Double(n.z)]
+            out.append(entry)
+        }
+        return ["floorY": floor, "planes": out]
+    }
+
     static func planeArea(_ p: ARPlaneAnchor) -> Float {
         if #available(iOS 16.0, *) { return p.planeExtent.width * p.planeExtent.height }
         return p.extent.x * p.extent.z
@@ -472,9 +548,11 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             return
         }
         if easeMs <= 0 || !Self.isYawTranslation(modelCurrent) || !Self.isYawTranslation(m) {
+            // At once (a scaled "Place by hand" matrix is never 4-DoF), but
+            // applied on the next frame: at most one transform per frame.
             modelCurrent = m
             easeDuration = 0
-            renderer?.setModelMatrix(m)
+            if running { modelDirty = true } else { renderer?.setModelMatrix(m) }
             return
         }
         easeFrom = modelCurrent
@@ -998,6 +1076,19 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             }
             r.pulse(at: p, normal: n, rgb: rgb)
             result(true)
+        case "rayAt":
+            // World rays through view points ("Place by hand" drags the model
+            // along the floor; Dart intersects them with the floor plane).
+            let rays: [Any] = Self.points(a["points"]).map { p in
+                guard let p = p, let r = ray(p) else { return NSNull() }
+                return [
+                    "originAr": [Double(r.0.x), Double(r.0.y), Double(r.0.z)],
+                    "dirAr": [Double(r.1.x), Double(r.1.y), Double(r.1.z)],
+                ] as [String: Any]
+            }
+            result(rays)
+        case "planes":
+            result(trackedPlanes())
         case "startRecording":
             // ARKit sessions can't be recorded in-app (Reality Composer does it)
             result(false)
@@ -1020,6 +1111,7 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
         states.clear()
         modelCurrent = matrix_identity_float4x4
         modelPlaced = false
+        modelDirty = false
         easeDuration = 0
         renderer?.setModelMatrix(modelCurrent)
         renderer?.setPlaced(false)

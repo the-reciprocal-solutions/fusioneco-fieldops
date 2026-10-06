@@ -499,6 +499,12 @@ Full plan: [docs/ar-bim-overlay.md](docs/ar-bim-overlay.md). These are the findi
 **What to watch:** never map iOS thermal states 1:1 onto Android's. matc 1.72.1 (`filament-v1.72.1-mac.tgz`) reproduces the shipped .filamat byte for byte; new materials go through `tool/compile_materials.sh` (Metal + OpenGL + Vulkan). Swift can be type-checked here with `swiftc -typecheck` against the Mac Catalyst SDK even without Xcode.
 **Where:** `packages/fe_ar/ios/Classes/FeArController.swift`, `lib/state/ar_session_controller.dart`, `lib/core/ar/ar_engine.dart`
 
+### "That corner didn't place the model" every time: the shape fallback only searched the offered short list (2026-10-06)
+**What happened:** on an iPhone in a bedroom, every snapped inside corner (93°) was rejected. The floor's model was the STTCC data centre; the offered list held only column corners, and `useCornerA` only looked for a same-shape replacement inside that list, so it toasted `corner_rejected` with no way forward. The angle (93° vs a 15° tolerance) was never the problem. The chip showed the plan pin number while the card showed the step ("Corner 2" vs "Corner 1 of 2").
+**Fix:** search every floor corner of the snapped shape (nearest first, ≤ 8 m) and name the switch; per-method tolerance (depth 10°, planes 15°, taps 20°); a plain mismatch card offering another floor/model or the demo room; one coach strip instead of stacked chips/toasts. Server seeder puts the owner's Demo Bedroom on its own Data Center floor so the model matches the room.
+**What to watch:** when AR "never works", check first that the floor's model is the room the user stands in. `flutter test test/ar_*` also loads helper files named `ar_*` (e.g. `ar_workspace_fakes.dart`) — not a real failure. Flutter's scale gesture restarts whenever a finger lands or lifts (Place by hand).
+**Where:** `lib/state/ar_setup_controller.dart`, `lib/core/ar/corner_matcher.dart`, `lib/features/ar/setup/ar_setup_coach.dart`, `lib/state/ar_manual_place_controller.dart`
+
 ## Snag Assistant
 
 Design: [docs/snag-assistant.md](docs/snag-assistant.md). Server: `../fusion-eco-server/documentation/snag-assistant.md`.

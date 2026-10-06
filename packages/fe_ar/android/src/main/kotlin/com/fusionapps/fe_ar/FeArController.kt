@@ -120,6 +120,11 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     private var modelCurrent = ArMath.identity()
     /** True once Dart has sent a model transform this session (TileRenderer.placed). */
     private var modelPlaced = false
+    /**
+     * An at-once transform waiting for the next frame: "Place by hand" sends
+     * one per finger move, and only the newest per frame reaches Filament.
+     */
+    private var modelDirty = false
     private var lastFloorMs = 0L
     private var lastFloorY: Float? = null
     private var floorPlane: Plane? = null
@@ -396,6 +401,10 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         matricesValid = true
 
         stepEase()
+        if (modelDirty) {
+            modelDirty = false
+            renderer?.setModelMatrix(modelCurrent)
+        }
         renderer?.tick((SystemClock.elapsedRealtimeNanos() - startNs) / 1e9f, tiles.tiles.values)
 
         if (tracking && nowMs - lastPoseMs >= POSE_INTERVAL_MS) {
@@ -477,6 +486,68 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     }
 
     /**
+     * The tracked floor height and ARCore's planes (extension `planes`,
+     * CHANNEL.md revision 2), for "Place by hand": walls for Snap to wall,
+     * wall pairs for the room corners Snap corner magnets to. Wall normals are
+     * levelled and turned to face the camera (into the room); `segment` is
+     * the wall's measured horizontal extent from its polygon. Read-only.
+     */
+    private fun trackedPlanes(): Map<String, Any?> {
+        val out = ArrayList<Map<String, Any?>>()
+        val session = latestSession
+        val cam = latestFrame?.camera?.pose?.translation
+        if (session != null) {
+            for (p in session.getAllTrackables(Plane::class.java)) {
+                if (out.size >= MAX_PLANES) break
+                if (p.trackingState != TrackingState.TRACKING || p.subsumedBy != null) continue
+                val vertical = p.type == Plane.Type.VERTICAL
+                if (p.extentX * p.extentZ < (if (vertical) WALL_MIN_AREA_M2 else FLOOR_MIN_AREA_M2)) continue
+                val pose = p.centerPose
+                val centre = pose.translation
+                var n = pose.getTransformedAxis(1, 1f)
+                val entry = HashMap<String, Any?>()
+                entry["id"] = "plane-${System.identityHashCode(p)}"
+                if (vertical) {
+                    val level = floatArrayOf(n[0], 0f, n[2])
+                    if (ArMath.length(level) < 0.5f) continue
+                    n = ArMath.normalize(level)
+                    if (cam != null && ArMath.dot(ArMath.sub(cam, centre), n) < 0f) n = ArMath.scale(n, -1f)
+                    entry["kind"] = "wall"
+                    // Horizontal extent along the wall, vertical extent up it.
+                    val along = floatArrayOf(n[2], 0f, -n[0])
+                    var lo = Float.MAX_VALUE
+                    var hi = -Float.MAX_VALUE
+                    var bottom = Float.MAX_VALUE
+                    var top = -Float.MAX_VALUE
+                    val poly = p.polygon
+                    poly.rewind()
+                    while (poly.remaining() >= 2) {
+                        val w = pose.transformPoint(floatArrayOf(poly.get(), 0f, poly.get()))
+                        val u = ArMath.dot(ArMath.sub(w, centre), along)
+                        lo = min(lo, u)
+                        hi = max(hi, u)
+                        bottom = min(bottom, w[1])
+                        top = max(top, w[1])
+                    }
+                    if (lo < hi) {
+                        val a0 = ArMath.add(centre, ArMath.scale(along, lo))
+                        val b0 = ArMath.add(centre, ArMath.scale(along, hi))
+                        entry["segment"] = listOf(listOf(a0[0].toDouble(), a0[2].toDouble()), listOf(b0[0].toDouble(), b0[2].toDouble()))
+                        entry["widthM"] = (hi - lo).toDouble()
+                        entry["heightM"] = max(0f, top - bottom).toDouble()
+                    }
+                } else {
+                    entry["kind"] = if (p.type == Plane.Type.HORIZONTAL_UPWARD_FACING) "floor" else "ceiling"
+                }
+                entry["centerAr"] = ArMath.toDoubleList(centre)
+                entry["normalAr"] = ArMath.toDoubleList(n)
+                out.add(entry)
+            }
+        }
+        return mapOf("floorY" to lastFloorY?.toDouble(), "planes" to out)
+    }
+
+    /**
      * The floor for the fit's height (extension event `floor`): the largest
      * tracked upward plane of at least [FLOOR_MIN_AREA_M2] that sits a
      * standing phone's height below the camera (a table or bed is too high).
@@ -534,9 +605,11 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
             return
         }
         if (easeMs <= 0 || !ArMath.isYawTranslation(modelCurrent) || !ArMath.isYawTranslation(m)) {
+            // At once (a scaled "Place by hand" matrix is never 4-DoF), applied
+            // on the next frame: at most one transform per frame.
             modelCurrent = m
             easeDurNs = 0L
-            renderer?.setModelMatrix(modelCurrent)
+            modelDirty = true
             return
         }
         easeFrom = modelCurrent.copyOf()
@@ -615,9 +688,12 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
 
     private fun pick(xLogical: Float, yLogical: Float): Map<String, Any?>? {
         val (origin, dir) = rayThrough(xLogical * density, yLogical * density) ?: return null
-        val tileFromAr = ArMath.invertRigid(modelCurrent)
+        // A hand placement at another size is not rigid: the general inverse
+        // then, and the tile-frame direction re-normalised so t stays metres.
+        val tileFromAr = if (ArMath.isYawTranslation(modelCurrent)) ArMath.invertRigid(modelCurrent)
+        else ArMath.invert(modelCurrent) ?: ArMath.invertRigid(modelCurrent)
         val o = ArMath.transformPoint(tileFromAr, origin)
-        val d = ArMath.transformDir(tileFromAr, dir)
+        val d = ArMath.normalize(ArMath.transformDir(tileFromAr, dir))
         val out = FloatArray(7)
         var bestT = FAR_M
         var best: Pair<TileEntry, Int>? = null
@@ -1120,6 +1196,17 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
                         project(ArMath.transformPoint(modelCurrent, v))?.let { (x, y, on) -> listOf(x.toDouble(), y.toDouble(), on) }
                     })
                 }
+                "rayAt" -> {
+                    // World rays through view points ("Place by hand" drags the
+                    // model along the floor; Dart meets them with the floor plane).
+                    val pts = (a["points"] as? List<*>).orEmpty()
+                    result.success(pts.map { p ->
+                        val v = Args.floats(p, 2) ?: return@map null
+                        val (o, d) = rayThrough(v[0] * density, v[1] * density) ?: return@map null
+                        mapOf("originAr" to ArMath.toDoubleList(o), "dirAr" to ArMath.toDoubleList(d))
+                    })
+                }
+                "planes" -> result.success(trackedPlanes())
                 "installArCore" -> {
                     val act = activity
                     if (act == null) result.success(false)
@@ -1205,6 +1292,7 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         states.clear()
         modelCurrent = ArMath.identity()
         modelPlaced = false
+        modelDirty = false
         renderer?.setPlaced(false, tiles.tiles.values)
         lastFloorY = null
         floorPlane = null
@@ -1295,6 +1383,9 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
         private const val FLOOR_MAX_DROP_M = 2.3f
         /** Another plane replaces the current floor only when this much bigger. */
         private const val FLOOR_SWITCH_RATIO = 1.5f
+        /** `planes` (Place by hand): at most this many, walls from this size. */
+        private const val MAX_PLANES = 24
+        private const val WALL_MIN_AREA_M2 = 0.15f
 
         /** GAMMA-style orange slab gridlines (design board TabSnap: #FB923C). */
         private const val GRID_RGB = 0xFB923C

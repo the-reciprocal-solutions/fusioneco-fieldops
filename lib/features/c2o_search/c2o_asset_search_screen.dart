@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../app/router.dart';
 import '../../core/c2o/assigned_assets.dart';
 import '../../core/c2o/c2o_asset_search.dart';
+import '../../core/network/api_exception.dart';
 import '../../core/offline/offline_db.dart';
 import '../../state/auth_controller.dart';
 import '../../state/orders_controller.dart';
@@ -77,17 +78,21 @@ class _C2oAssetSearchScreenState extends ConsumerState<C2oAssetSearchScreen> {
   }
 
   Future<void> _showDetail(CachedC2oAsset cached) async {
-    final reported = await showModalBottomSheet<bool>(
+    final outcome = await showModalBottomSheet<_TagReportOutcome>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) => _AssetDetailSheet(cached: cached),
     );
-    if (reported == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: AppText('search.tag_issue_reported'.getString(context))),
-      );
-    }
+    if (outcome == null || !mounted) return;
+    final key = switch (outcome) {
+      _TagReportOutcome.sent => 'search.tag_issue_reported',
+      _TagReportOutcome.queued => 'search.tag_issue_queued',
+      _TagReportOutcome.rejected => 'search.tag_issue_rejected',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: AppText(key.getString(context))),
+    );
   }
 
   @override
@@ -155,6 +160,20 @@ class _C2oAssetSearchScreenState extends ConsumerState<C2oAssetSearchScreen> {
   }
 }
 
+/// What happened to a submitted tag report — the toast must say which.
+/// "Reported" while offline (caught on device) reads as delivered when it
+/// is only parked in the queue.
+enum _TagReportOutcome {
+  /// The server has it.
+  sent,
+
+  /// No signal — saved and queued; replays on reconnect.
+  queued,
+
+  /// The server refused it (e.g. unknown asset). Saved on the phone only.
+  rejected,
+}
+
 /// The sheet content for one search result: identity block plus the FR-1.7
 /// tag-issue report form. Its own [ConsumerStatefulWidget] because the
 /// reason chips and note field need state that outlives individual
@@ -201,13 +220,22 @@ class _AssetDetailSheetState extends ConsumerState<_AssetDetailSheet> {
         reportedAt: DateTime.now(),
       ),
     );
-    // Best-effort — the local report above is already saved regardless, and
-    // SyncClient queues this offline like any other write if it fails here.
+    // The local report above is already saved regardless. SyncClient queues
+    // this offline like any other write (synced: false); a 4xx it does not
+    // queue, because a retry would be refused the same way.
+    _TagReportOutcome outcome;
     try {
-      await ref.read(assetTagIssueRepositoryProvider).report(cached.assetId, reason: reason, note: note);
-    } catch (_) {}
+      final write = await ref
+          .read(assetTagIssueRepositoryProvider)
+          .report(cached.assetId, reason: reason, note: note);
+      outcome = write.synced ? _TagReportOutcome.sent : _TagReportOutcome.queued;
+    } on NetworkFailure {
+      outcome = _TagReportOutcome.queued;
+    } on ApiFailure {
+      outcome = _TagReportOutcome.rejected;
+    }
 
-    if (mounted) Navigator.of(context).pop(true);
+    if (mounted) Navigator.of(context).pop(outcome);
   }
 
   @override

@@ -286,6 +286,11 @@ class _AssignedRouteCardState extends ConsumerState<_AssignedRouteCard> {
         projectId: route.projectId,
       );
       ref.read(routePacksTickProvider.notifier).state++;
+      // The card's "N of M checked" was read when the screen opened; the
+      // pack just downloaded can disagree with it (caught on device: card
+      // "0 of 0" beside a freshly downloaded 2-asset pack). We're online —
+      // re-read it.
+      ref.invalidate(assignedRoutesProvider);
       if (mounted) {
         messenger.showSnackBar(
           SnackBar(

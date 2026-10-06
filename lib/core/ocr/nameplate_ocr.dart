@@ -18,7 +18,45 @@ class NameplateFields {
   bool get isEmpty => manufacturer == null && model == null && serial == null;
 }
 
-const _serialLabels = ['S/N', 'SERIAL NO', 'SERIAL NUMBER', 'SERIAL', 'SER NO', 'SN'];
+/// One recognised line of text and where it sat on the photo. A plain
+/// struct so [linesInReadingOrder] stays testable without ML Kit.
+class OcrLine {
+  const OcrLine(this.text, {required this.left, required this.top, required this.right, required this.bottom});
+
+  final String text;
+  final double left;
+  final double top;
+  final double right;
+  final double bottom;
+
+  double get centerY => (top + bottom) / 2;
+}
+
+/// Rebuilds the plate's rows from line positions. ML Kit returns a
+/// label-left/value-right plate one column at a time ("MANUFACTURER, MODEL,
+/// SERIAL NO, VOLTAGE, CARRIER, …"), which puts each label next to the label
+/// below it instead of its own value — caught on device, where "SERIAL NO"
+/// borrowed "VOLTAGE" as the serial. Lines whose vertical centre falls inside
+/// a row's band join that row; each row then reads left to right.
+String linesInReadingOrder(List<OcrLine> lines) {
+  final sorted = [...lines]..sort((a, b) => a.centerY.compareTo(b.centerY));
+  final rows = <List<OcrLine>>[];
+
+  for (final line in sorted) {
+    final row = rows.isEmpty ? null : rows.last;
+    if (row != null && line.centerY >= row.first.top && line.centerY <= row.first.bottom) {
+      row.add(line);
+    } else {
+      rows.add([line]);
+    }
+  }
+
+  return rows
+      .map((row) => (row..sort((a, b) => a.left.compareTo(b.left))).map((l) => l.text).join(' '))
+      .join('\n');
+}
+
+const _serialLabels =['S/N', 'SERIAL NO', 'SERIAL NUMBER', 'SERIAL', 'SER NO', 'SN'];
 const _modelLabels = ['MODEL NO', 'MODEL NUMBER', 'MODEL', 'MDL', 'TYPE'];
 const _manufacturerLabels = ['MANUFACTURED BY', 'MANUFACTURER', 'MFG BY', 'MADE BY', 'MFR'];
 final _allLabels = [..._serialLabels, ..._modelLabels, ..._manufacturerLabels];

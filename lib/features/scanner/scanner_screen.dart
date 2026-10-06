@@ -366,6 +366,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 return const SizedBox.shrink();
               }
               final on = state.torchState == TorchState.on;
+              // Ink, not white — this sits in the light header like the
+              // search and route buttons beside it. White here rendered the
+              // button invisible on device (FR-3.10).
               return IconButton(
                 tooltip: on
                     ? 'scanner.torch_off'.getString(context)
@@ -373,7 +376,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 icon: Icon(
                   on ? LucideIcons.flashlight : LucideIcons.flashlightOff,
                   size: 18,
-                  color: on ? FeColors.warning : Colors.white.withValues(alpha: 0.7),
+                  color: on ? FeColors.warning : FeColors.ink,
                 ),
                 onPressed: _controller.toggleTorch,
               );

@@ -476,6 +476,8 @@
   "search.tag_issue_note": "Note (optional)",
   "search.submit_report": "Report Tag Issue",
   "search.tag_issue_reported": "Tag issue reported for this asset.",
+  "search.tag_issue_queued": "No signal — tag issue saved on this phone. It will send when you're back online.",
+  "search.tag_issue_rejected": "The server didn't accept this tag report. It's saved on this phone only.",
 
   "assetDetail.title": "Asset",
   "assetDetail.not_found": "This asset isn't available offline yet. Scan it or find it in search first.",

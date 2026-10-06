@@ -12,7 +12,18 @@ class NameplateReader {
   Future<NameplateFields> read(String imagePath) async {
     final input = InputImage.fromFilePath(imagePath);
     final recognized = await _recognizer.processImage(input);
-    return extractNameplateFields(recognized.text);
+    final lines = [
+      for (final block in recognized.blocks)
+        for (final line in block.lines)
+          OcrLine(
+            line.text,
+            left: line.boundingBox.left,
+            top: line.boundingBox.top,
+            right: line.boundingBox.right,
+            bottom: line.boundingBox.bottom,
+          ),
+    ];
+    return extractNameplateFields(linesInReadingOrder(lines));
   }
 
   void dispose() => _recognizer.close();

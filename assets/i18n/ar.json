@@ -476,6 +476,8 @@
   "search.tag_issue_note": "ملاحظة (اختياري)",
   "search.submit_report": "إرسال البلاغ",
   "search.tag_issue_reported": "تم الإبلاغ عن مشكلة العلامة لهذا الأصل.",
+  "search.tag_issue_queued": "لا توجد إشارة — تم حفظ مشكلة العلامة على هذا الهاتف. سيتم إرسالها عند عودة الاتصال.",
+  "search.tag_issue_rejected": "لم يقبل الخادم بلاغ العلامة هذا. تم حفظه على هذا الهاتف فقط.",
 
   "assetDetail.title": "الأصل",
   "assetDetail.not_found": "هذا الأصل غير متاح دون اتصال بعد. امسحه ضوئيًا أو ابحث عنه أولاً.",

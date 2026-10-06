@@ -1,18 +1,30 @@
 import 'dart:async';
 
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../core/offline/sync_client.dart';
-import '../state/providers.dart';
+import '../core/offline/waiting_reasons.dart';
+import '../state/sync_waiting_controller.dart';
 import '../theme/fe_colors.dart';
 import 'app_text.dart';
+import 'waiting_to_send_sheet.dart';
 
-/// Slate bar when offline, amber bar when online with a backlog. Renders nothing
-/// when online and the queue is empty.
+/// The shell's one-line sync status. Tapping it opens the "Waiting to send"
+/// sheet ([showWaitingToSendSheet]), which says per item why it hasn't gone
+/// and offers Retry / Discard.
+///
+/// - Offline: a dark bar ("Offline — your work is saved on this device").
+/// - Online: a calm pale-blue bar ("1 change waiting to send · View"), only
+///   when something is really waiting — an item that needs attention, or one
+///   older than 30 s ([shouldShowWaitingBanner]). A write that is sent within
+///   seconds no longer flashes a bar up (owner, 2026-10-06: "something random
+///   at the top of the app").
+/// - Otherwise nothing.
+///
+/// Must sit inside the shell's status-bar inset ([TopChromeLayout]); it pads
+/// nothing itself.
 class OfflineBanner extends ConsumerStatefulWidget {
   const OfflineBanner({super.key});
 
@@ -21,125 +33,122 @@ class OfflineBanner extends ConsumerStatefulWidget {
 }
 
 class _OfflineBannerState extends ConsumerState<OfflineBanner> {
-  bool _syncing = false;
-
-  /// Shown state. Starts online: at a cold start connectivity_plus can answer
-  /// "none" before Android has registered its network callback, and a one-shot
-  /// check then pinned the bar on screen with nothing re-checking it (device
-  /// report 2026-09-27: "offline bar at the top by default").
-  bool _offline = false;
-  StreamSubscription<List<ConnectivityResult>>? _sub;
-  Timer? _confirm;
-  Timer? _poll;
+  /// Re-checks the 30 s grace while something is queued: nothing else
+  /// rebuilds the bar when an item quietly crosses it.
+  Timer? _tick;
 
   @override
   void initState() {
     super.initState();
-    _sub = Connectivity().onConnectivityChanged.listen((_) => _check(), onError: (Object _) {});
-    _check();
+    _tick = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted && ref.read(waitingItemsProvider).isNotEmpty) setState(() {});
+    });
   }
 
   @override
   void dispose() {
-    _sub?.cancel();
-    _confirm?.cancel();
-    _poll?.cancel();
+    _tick?.cancel();
     super.dispose();
-  }
-
-  /// Online is believed at once; offline only when a second check ~2 s later
-  /// agrees. While offline, re-check every 10 s: the stream can miss the
-  /// offline→online edge (see SyncClient.startAutoFlush).
-  Future<void> _check() async {
-    final sync = ref.read(syncClientProvider);
-    final offline = await sync.isOffline;
-    if (!mounted) return;
-    if (!offline) {
-      _confirm?.cancel();
-      _poll?.cancel();
-      _poll = null;
-      if (_offline) setState(() => _offline = false);
-      return;
-    }
-    if (_offline) return;
-    _confirm?.cancel();
-    _confirm = Timer(const Duration(seconds: 2), () async {
-      final still = await sync.isOffline;
-      if (!mounted || !still) return;
-      setState(() => _offline = true);
-      _poll ??= Timer.periodic(const Duration(seconds: 10), (_) => _check());
-    });
-  }
-
-  Future<void> _syncNow(SyncClient sync) async {
-    setState(() => _syncing = true);
-    await sync.flushQueue();
-    if (mounted) setState(() => _syncing = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    final pending = ref.watch(pendingMutationCountProvider).valueOrNull ?? 0;
-    final sync = ref.watch(syncClientProvider);
+    final offline = ref.watch(deviceOfflineProvider);
+    final items = ref.watch(waitingItemsProvider);
+    final pending = items.length;
 
-    return Builder(
-      builder: (context) {
-        final offline = _offline;
-        if (!offline && pending == 0) return const SizedBox.shrink();
+    if (!offline && !shouldShowWaitingBanner(items, now: DateTime.now())) {
+      return const SizedBox.shrink();
+    }
 
-        final text = offline
-            ? (pending > 0
-                ? context.formatString(
-                    'widgets.offline_message_with_queued'.getString(context),
-                    [pending],
-                  )
-                : 'widgets.offline_message'.getString(context))
-            : context.formatString(
-                (pending == 1
-                        ? 'widgets.pending_sync_one'
-                        : 'widgets.pending_sync_other')
-                    .getString(context),
-                [pending],
-              );
+    final String text;
+    if (offline) {
+      text = pending > 0
+          ? context.formatString('widgets.offline_message_with_queued'.getString(context), [pending])
+          : 'widgets.offline_message'.getString(context);
+    } else {
+      text = context.formatString(
+        (pending == 1 ? 'widgets.waiting_send_one' : 'widgets.waiting_send_other').getString(context),
+        [pending],
+      );
+    }
 
-        return Container(
-          width: double.infinity,
-          color: offline ? FeColors.ink : FeColors.warningSoft,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
-            children: [
-              Icon(
-                LucideIcons.cloudOff,
-                size: 16,
-                color: offline ? Colors.white : FeColors.warning,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: AppText.bodySmall(
-                  text,
-                  color: offline ? Colors.white : FeColors.warning,
-                  weight: FontWeight.w600,
+    final fg = offline ? Colors.white : FeColors.ink;
+    return Semantics(
+      button: pending > 0,
+      child: Material(
+        key: const ValueKey('sync-banner'),
+        color: offline ? FeColors.ink : FeColors.infoSoft,
+        child: InkWell(
+          onTap: pending > 0 ? () => showWaitingToSendSheet(context) : null,
+          child: Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  offline ? LucideIcons.cloudOff : LucideIcons.cloudUpload,
+                  size: 16,
+                  color: offline ? Colors.white : FeColors.info,
                 ),
-              ),
-              if (!offline && pending > 0)
-                TextButton(
-                  onPressed: _syncing ? null : () => _syncNow(sync),
-                  style: TextButton.styleFrom(
-                    foregroundColor: FeColors.warning,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: const Size(0, 28),
-                    backgroundColor: FeColors.warningSoft,
-                  ),
-                  child: AppText(
-                    _syncing
-                        ? 'widgets.syncing_label'.getString(context)
-                        : 'widgets.sync_now'.getString(context),
-                  ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: AppText.bodySmall(text, color: fg, weight: FontWeight.w600, maxLines: 2),
                 ),
-            ],
+                if (pending > 0) ...[
+                  const SizedBox(width: 8),
+                  AppText.bodySmall(
+                    'widgets.waiting_view'.getString(context),
+                    color: offline ? Colors.white : FeColors.primary,
+                    weight: FontWeight.w700,
+                  ),
+                  Icon(
+                    Directionality.of(context) == TextDirection.rtl
+                        ? LucideIcons.chevronLeft
+                        : LucideIcons.chevronRight,
+                    size: 16,
+                    color: offline ? Colors.white : FeColors.primary,
+                  ),
+                ],
+              ],
+            ),
           ),
-        );
-      },
+        ),
+      ),
+    );
+  }
+}
+
+/// The shell's top chrome (sync banner, conflict panel) sits under the status
+/// bar / Dynamic Island, and the screen below it must not add that inset a
+/// second time.
+///
+/// The bug this fixes (iPhone, 2026-10-06): the banner was the first child of
+/// the shell's body Column with no safe area, so iOS drew the clock and
+/// battery over its text; and every branch screen wraps itself in its own
+/// `SafeArea`, which still saw the full status-bar inset and added it again
+/// *below* the banner — the large blank gap above "Orders". Now the shell
+/// owns the top inset once and hands the screens a MediaQuery with it removed.
+/// With nothing in [top] the result looks exactly as before.
+class TopChromeLayout extends StatelessWidget {
+  const TopChromeLayout({super.key, required this.top, required this.body});
+
+  final List<Widget> top;
+  final Widget body;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      bottom: false,
+      child: Column(
+        children: [
+          ...top,
+          Expanded(
+            child: MediaQuery.removePadding(context: context, removeTop: true, child: body),
+          ),
+        ],
+      ),
     );
   }
 }

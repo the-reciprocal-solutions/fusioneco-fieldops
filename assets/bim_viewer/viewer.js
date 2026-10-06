@@ -28,17 +28,31 @@ import * as VM from './viewer_math.js';
 const LAYERS = ['mep', 'structure', 'architecture', 'architecture_solid', 'massing'];
 
 // ── outbound messages ─────────────────────────────────────────────────────
+// The Dart channel. Android injects `window.FeViewer`; on iOS the plugin
+// defines it with a document-start user script (`window.FeViewer =
+// webkit.messageHandlers.FeViewer`) that can miss the first page load when
+// the app adds the channel late (2026-10-06, the iPhone's "broken" viewer:
+// every message, `ready` included, went nowhere). So fall back to the
+// WebKit message handler itself, which exists as soon as it is registered.
+function channel() {
+  if (window.FeViewer && typeof window.FeViewer.postMessage === 'function') return window.FeViewer;
+  const wk = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.FeViewer;
+  return wk && typeof wk.postMessage === 'function' ? wk : null;
+}
+
 function post(msg) {
   const text = JSON.stringify(msg);
   try {
-    if (window.FeViewer && typeof window.FeViewer.postMessage === 'function') {
-      window.FeViewer.postMessage(text);
-    }
+    const ch = channel();
+    if (ch) ch.postMessage(text);
   } catch (_) {
     /* the channel can vanish while the page is torn down */
   }
   (window.__feEvents = window.__feEvents || []).push(msg); // browser tests read this
 }
+
+// The last `ready` sent, so `hello` can repeat it (see feViewer.hello below).
+let readyMsg = null;
 
 window.addEventListener('error', (e) => post({ type: 'error', code: 'SCRIPT', message: String(e.message || e) }));
 window.addEventListener('unhandledrejection', (e) =>
@@ -840,6 +854,13 @@ const queued = (window.feViewer && window.feViewer.q) || [];
 window.feViewer = {
   run,
   version: 1,
+  // Handshake: the app calls this when the page has finished loading. If
+  // `ready` already went out (possibly before the app's channel existed),
+  // say it again; if not, it goes out by itself once the decoder is up.
+  // Ready twice is harmless: the app pushes a floor once per page.
+  hello: () => {
+    if (readyMsg) post(readyMsg);
+  },
   // Read-only snapshot for the browser tests (test/bim_viewer_js/); the app never calls it.
   debug: () => ({
     mode: state.mode,
@@ -860,7 +881,8 @@ resetView();
 requestAnimationFrame(frame);
 MeshoptDecoder.ready.then(
   () => {
-    post({ type: 'ready', version: 1, webgl2: renderer.capabilities.isWebGL2 });
+    readyMsg = { type: 'ready', version: 1, webgl2: renderer.capabilities.isWebGL2 };
+    post(readyMsg);
     queued.forEach(run);
   },
   (err) => post({ type: 'error', code: 'NO_WASM', message: String(err && err.message) }),

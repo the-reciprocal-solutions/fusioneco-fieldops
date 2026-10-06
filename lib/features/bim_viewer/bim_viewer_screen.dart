@@ -43,9 +43,15 @@ class BimViewerScreen extends ConsumerStatefulWidget {
 }
 
 class _BimViewerScreenState extends ConsumerState<BimViewerScreen> {
-  late final BimViewEngine _engine;
+  /// Replaced by [_retry3d]: a page that never came up is thrown away with
+  /// its WebView and loopback server, and a fresh one is started.
+  late BimViewEngine _engine;
   late final BimViewerController _controller;
   var _engineStarted = false;
+
+  /// Bumped per engine, so the WebView widget of a replaced engine is a new
+  /// element rather than an update of the old one.
+  var _engineGen = 0;
 
   @override
   void initState() {
@@ -57,12 +63,33 @@ class _BimViewerScreenState extends ConsumerState<BimViewerScreen> {
     // engine's ready event can't fire into a stream nobody listens to yet.
     scheduleMicrotask(() {
       if (!mounted) return;
-      _controller.attach(_engine);
-      unawaited(_engine.start().then((_) {
-        if (mounted) setState(() => _engineStarted = true);
-      }));
-      unawaited(_controller.open(floorId: widget.floorId, assetId: widget.assetId, assetName: widget.assetName));
+      _startEngine(_engine);
+      unawaited(_reopen());
     });
+  }
+
+  void _startEngine(BimViewEngine engine) {
+    _controller.attach(engine);
+    unawaited(engine.start().then((_) {
+      if (mounted && identical(engine, _engine)) setState(() => _engineStarted = true);
+    }));
+  }
+
+  Future<void> _reopen() =>
+      _controller.open(floorId: widget.floorId, assetId: widget.assetId, assetName: widget.assetName);
+
+  /// "Try 3D again": a new engine (WebView + server). The floor already in
+  /// the controller is pushed to it as soon as it reports ready.
+  void _retry3d() {
+    final old = _engine;
+    final next = ref.read(bimViewEngineFactoryProvider)();
+    setState(() {
+      _engine = next;
+      _engineStarted = false;
+      _engineGen++;
+    });
+    _startEngine(next);
+    unawaited(old.dispose());
   }
 
   @override
@@ -102,20 +129,21 @@ class _BimViewerScreenState extends ConsumerState<BimViewerScreen> {
 
   Widget _body(BuildContext context, BimViewerState s) {
     if (s.errorKey != null && s.floor == null) {
-      return Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            TechEmptyState(icon: LucideIcons.wifiOff, title: s.errorKey!.getString(context)),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () => _controller.open(floorId: widget.floorId, assetId: widget.assetId, assetName: widget.assetName),
-              icon: const Icon(LucideIcons.refreshCw, size: 16),
-              label: AppText.label('common.retry'.getString(context)),
-            ),
-          ],
-        ),
+      final (icon, title, subtitle) = bimLoadErrorCopy(s.errorKey!);
+      return _StatePage(
+        icon: icon,
+        title: title.getString(context),
+        subtitle: subtitle.getString(context),
+        onRetry: () => unawaited(_reopen()),
+      );
+    }
+    if (s.noModel) {
+      return _StatePage(
+        icon: LucideIcons.box,
+        title: 'bim_viewer.no_model_title'.getString(context),
+        subtitle: 'bim_viewer.no_model_subtitle'.getString(context),
+        // A model published a minute ago shows up on the next open.
+        onRetry: () => unawaited(_reopen()),
       );
     }
 
@@ -124,6 +152,7 @@ class _BimViewerScreenState extends ConsumerState<BimViewerScreen> {
         _Toolbar(state: s, controller: _controller),
         if (s.isDemo)
           const Padding(padding: EdgeInsets.fromLTRB(12, 0, 12, 8), child: Align(alignment: Alignment.centerLeft, child: ArDemoBanner())),
+        if (!s.model3dAvailable) _No3dBanner(onRetry: _retry3d),
         if (s.needsDownload || s.downloading != null || s.downloadErrorKey != null)
           _DownloadBanner(state: s, onDownload: _controller.download),
         Expanded(
@@ -136,7 +165,11 @@ class _BimViewerScreenState extends ConsumerState<BimViewerScreen> {
                   left: 12,
                   right: 12,
                   bottom: 12,
-                  child: _SelectionCard(selection: s.selection!, onClose: _controller.clearSelection),
+                  child: _SelectionCard(
+                    selection: s.selection!,
+                    floorId: s.floorId,
+                    onClose: _controller.clearSelection,
+                  ),
                 ),
             ],
           ),
@@ -146,7 +179,14 @@ class _BimViewerScreenState extends ConsumerState<BimViewerScreen> {
   }
 
   Widget _panes(BuildContext context, BimViewerState s) {
-    final model = _ModelPane(engine: _engine, started: _engineStarted, state: s, controller: _controller);
+    final model = _ModelPane(
+      key: ValueKey('bim-model-$_engineGen'),
+      engine: _engine,
+      started: _engineStarted,
+      state: s,
+      controller: _controller,
+      onRetry: _retry3d,
+    );
     final plan = _PlanPane(state: s, controller: _controller);
     switch (s.layout) {
       case BimViewLayout.model:
@@ -215,7 +255,13 @@ class _Toolbar extends StatelessWidget {
     final layouts = state.model3dAvailable ? BimViewLayout.values : const [BimViewLayout.plan];
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-      child: Row(
+      // A phone is too narrow for four labelled layout segments plus the
+      // camera switch: the labels overflowed (yellow stripes in debug,
+      // clipped text on the iPhone). Below 520 px the layouts are icons
+      // with tooltips; tablets and landscape keep the labels.
+      child: LayoutBuilder(builder: (context, box) {
+        final labels = box.maxWidth >= 520;
+        return Row(
         children: [
           Expanded(
             child: SegmentedButton<BimViewLayout>(
@@ -229,7 +275,8 @@ class _Toolbar extends StatelessWidget {
                       BimViewLayout.model => LucideIcons.box,
                       BimViewLayout.plan => LucideIcons.map,
                     }, size: 16),
-                    label: Text('bim_viewer.layout_${l.name}'.getString(context)),
+                    label: labels || layouts.length == 1 ? Text('bim_viewer.layout_${l.name}'.getString(context)) : null,
+                    tooltip: labels ? null : 'bim_viewer.layout_${l.name}'.getString(context),
                   ),
               ],
               selected: {state.layout},
@@ -258,27 +305,50 @@ class _Toolbar extends StatelessWidget {
             ),
           ],
         ],
-      ),
+        );
+      }),
     );
   }
 }
 
 class _ModelPane extends StatelessWidget {
-  const _ModelPane({required this.engine, required this.started, required this.state, required this.controller});
+  const _ModelPane({
+    super.key,
+    required this.engine,
+    required this.started,
+    required this.state,
+    required this.controller,
+    required this.onRetry,
+  });
 
   final BimViewEngine engine;
   final bool started;
   final BimViewerState state;
   final BimViewerController controller;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
     if (!state.model3dAvailable) {
       return Center(
-        child: TechEmptyState(
-          icon: LucideIcons.triangleAlert,
-          title: 'bim_viewer.no_3d_title'.getString(context),
-          subtitle: 'bim_viewer.no_3d_subtitle'.getString(context),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TechEmptyState(
+                icon: LucideIcons.triangleAlert,
+                title: 'bim_viewer.no_3d_title'.getString(context),
+                subtitle: 'bim_viewer.no_3d_subtitle'.getString(context),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(LucideIcons.refreshCw, size: 16),
+                label: AppText.label('bim_viewer.retry_3d'.getString(context)),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -419,10 +489,16 @@ class _DownloadBanner extends StatelessWidget {
   }
 }
 
+/// The selected element. Linked to an asset, it carries the three things a
+/// technician verifying in 3D does next: open the asset, **Verify** it (the
+/// FR-3 capture form, floor attached so the result can offer the plan) or
+/// **Flag** it (a snag raised on that asset). The actions sit on their own
+/// row: three buttons beside the name didn't fit a phone.
 class _SelectionCard extends StatelessWidget {
-  const _SelectionCard({required this.selection, required this.onClose});
+  const _SelectionCard({required this.selection, required this.floorId, required this.onClose});
 
   final BimSelection selection;
+  final String? floorId;
   final VoidCallback onClose;
 
   @override
@@ -430,46 +506,165 @@ class _SelectionCard extends StatelessWidget {
     final sub = [selection.ifcType, selection.discipline].where((v) => v != null && v.isNotEmpty).join(' · ');
     final assetId = selection.assetId;
     return TechCard(
-      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: FeColors.warning.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(LucideIcons.box, size: 16, color: FeColors.warning),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AppText.bodyMedium(selection.name, weight: FontWeight.w800, maxLines: 1, overflow: TextOverflow.ellipsis),
-                AppText.caption(
-                  assetId == null
-                      ? [if (sub.isNotEmpty) sub, 'bim_viewer.not_linked'.getString(context)].join(' · ')
-                      : sub,
-                  color: FeColors.ink2,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: FeColors.warning.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-              ],
-            ),
+                child: const Icon(LucideIcons.box, size: 16, color: FeColors.warning),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AppText.bodyMedium(selection.name, weight: FontWeight.w800, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    AppText.caption(
+                      assetId == null
+                          ? [if (sub.isNotEmpty) sub, 'bim_viewer.not_linked'.getString(context)].join(' · ')
+                          : sub,
+                      color: FeColors.ink2,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'common.clear'.getString(context),
+                icon: const Icon(LucideIcons.x, size: 18),
+                onPressed: onClose,
+              ),
+            ],
           ),
           if (assetId != null)
-            TextButton(
-              onPressed: () => context.push(Routes.assetDetail(assetId)),
-              child: AppText.label('bim_viewer.open_asset'.getString(context), color: FeColors.primary, weight: FontWeight.w700),
+            Padding(
+              padding: const EdgeInsets.only(top: 4, right: 8),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                alignment: WrapAlignment.end,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => context.push(Routes.assetDetail(assetId)),
+                    icon: const Icon(LucideIcons.externalLink, size: 14, color: FeColors.primary),
+                    label: AppText.label('bim_viewer.open_asset'.getString(context), color: FeColors.primary, weight: FontWeight.w700),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => context.push(Routes.snagNew(
+                      assetId: assetId,
+                      assetName: selection.name,
+                      floorId: floorId,
+                    )),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: FeColors.danger,
+                      side: const BorderSide(color: FeColors.danger),
+                    ),
+                    icon: const Icon(LucideIcons.flag, size: 14),
+                    label: AppText.label('bim_viewer.flag'.getString(context), color: FeColors.danger, weight: FontWeight.w700),
+                  ),
+                  FilledButton.icon(
+                    onPressed: () => context.push(Routes.verifyAsset(
+                      assetId,
+                      assetName: selection.name,
+                      floorId: floorId,
+                    )),
+                    style: FilledButton.styleFrom(backgroundColor: FeColors.primary),
+                    icon: const Icon(LucideIcons.clipboardCheck, size: 14, color: Colors.white),
+                    label: AppText.label('bim_viewer.verify'.getString(context), color: Colors.white, weight: FontWeight.w700),
+                  ),
+                ],
+              ),
             ),
-          IconButton(
-            tooltip: 'common.clear'.getString(context),
-            icon: const Icon(LucideIcons.x, size: 18),
-            onPressed: onClose,
-          ),
         ],
+      ),
+    );
+  }
+}
+
+/// What a failed floor load means, in plain words: (icon, title key,
+/// subtitle key). Never the raw error (CLAUDE.md, owner rule).
+(IconData, String, String) bimLoadErrorCopy(String errorKey) => switch (errorKey) {
+      'ar.error.offline' => (LucideIcons.wifiOff, 'bim_viewer.needs_signal_title', 'bim_viewer.needs_signal_subtitle'),
+      'ar.error.no_build' => (LucideIcons.box, 'bim_viewer.no_model_title', 'bim_viewer.no_model_subtitle'),
+      'ar.error.no_access' => (LucideIcons.shieldAlert, 'bim_viewer.no_access_title', 'ar.error.no_access'),
+      'ar.error.not_found' => (LucideIcons.mapPinOff, 'bim_viewer.not_found_title', 'ar.error.not_found'),
+      _ => (LucideIcons.triangleAlert, 'bim_viewer.load_failed_title', 'bim_viewer.load_failed_subtitle'),
+    };
+
+/// A whole-screen state (nothing to show yet) with its next step.
+class _StatePage extends StatelessWidget {
+  const _StatePage({required this.icon, required this.title, required this.subtitle, required this.onRetry});
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TechEmptyState(icon: icon, title: title, subtitle: subtitle),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(LucideIcons.refreshCw, size: 16),
+              label: AppText.label('common.retry'.getString(context)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Plan-only because the 3D page couldn't start: say so, offer a retry.
+class _No3dBanner extends StatelessWidget {
+  const _No3dBanner({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: TechCard(
+        tint: FeColors.warningSoft,
+        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+        child: Row(
+          children: [
+            const Icon(LucideIcons.triangleAlert, size: 18, color: FeColors.warning),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AppText.bodyMedium('bim_viewer.no_3d_title'.getString(context), weight: FontWeight.w700),
+                  AppText.caption('bim_viewer.no_3d_subtitle'.getString(context), color: FeColors.ink2),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: onRetry,
+              child: AppText.label('bim_viewer.retry_3d'.getString(context), color: FeColors.primary, weight: FontWeight.w700),
+            ),
+          ],
+        ),
       ),
     );
   }

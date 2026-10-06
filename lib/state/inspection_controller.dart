@@ -1,14 +1,62 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/inspection/conditional_logic.dart';
-import '../core/offline/sync_client.dart';
+import '../core/inspection/inspection_send_state.dart';
+import '../core/offline/offline_db.dart' show PendingMutation;
 import '../data/inspection_repository.dart';
 import '../domain/inspection.dart';
 import 'providers.dart';
 
-final inspectionRepositoryProvider = Provider<InspectionRepository>(
-  (ref) => InspectionRepository(ref.watch(syncClientProvider)),
-);
+final inspectionRepositoryProvider = Provider<InspectionRepository>((ref) {
+  final sync = ref.watch(syncClientProvider);
+  final repo = InspectionRepository(sync);
+  // 2026-10-06 — a queued submit that syncs clears the answers kept on the
+  // phone; one that fails on replay records why (check-in needed, refused…)
+  // for the form banner and the list flag. One hook per entity type.
+  void bump() => ref.read(inspectionSendTickProvider.notifier).state++;
+  sync.onReplayed(InspectionRepository.entityType, (id) async {
+    await repo.afterReplay(id);
+    bump();
+  });
+  sync.onReplayFailed(InspectionRepository.entityType, (id, failure) async {
+    await repo.afterReplayFailed(id, failure);
+    bump();
+  });
+  return repo;
+});
+
+/// Bumped after every change to a kept submit (`sync_meta` is not part of
+/// the queue, so [queueChangedProvider] alone would miss a refusal).
+final inspectionSendTickProvider = StateProvider<int>((ref) => 0);
+
+/// Where this inspection's last submit is: null when there is nothing to say
+/// (never submitted from this phone, or the server has it).
+final inspectionSendStatusProvider =
+    FutureProvider.family<InspectionSendStatus?, ({String id, String? serverStatus})>((ref, key) async {
+      ref.watch(inspectionSendTickProvider);
+      final queue = await ref.watch(pendingMutationsProvider.future);
+      final flushing = ref.watch(syncProgressProvider) != null;
+      final queued = queue.any(
+        (m) => m.entityType == InspectionRepository.entityType && m.entityId == key.id,
+      );
+      final draft = await ref.read(inspectionRepositoryProvider).readDraft(key.id);
+      return inspectionSendStatus(
+        queued: queued,
+        flushing: flushing,
+        draft: draft,
+        serverStatus: key.serverStatus,
+      );
+    });
+
+/// The id of the queued submit for [assignmentId], for a Retry tap.
+String? queuedSubmitId(List<PendingMutation> queue, String assignmentId) {
+  for (final m in queue) {
+    if (m.entityType == InspectionRepository.entityType && m.entityId == assignmentId) {
+      return m.clientMutationId;
+    }
+  }
+  return null;
+}
 
 /// The assigned-inspections list. A queued submission flushing (or being
 /// dropped as a conflict) moves an assignment from pending to completed
@@ -98,19 +146,21 @@ class InspectionDetailController
     return missing;
   }
 
-  /// Returns null on success (or a queued-offline outcome), the offline
-  /// message when queued, or an error string when the server rejected it.
-  Future<String?> submit(Map<String, dynamic> responseData) async {
+  /// Sends the answers (see [InspectionRepository.submit] for what each
+  /// outcome means). Never throws: anything unexpected is a plain refusal.
+  Future<InspectionSubmitOutcome> submit(Map<String, dynamic> responseData) async {
+    InspectionSubmitOutcome outcome;
     try {
-      final write = await ref
-          .read(inspectionRepositoryProvider)
-          .submit(arg, responseData);
+      outcome = await ref.read(inspectionRepositoryProvider).submit(arg, responseData);
+    } catch (_) {
+      outcome = const InspectionRefused(reasonKey: 'inspection.send.refused_hint');
+    }
+    ref.read(inspectionSendTickProvider.notifier).state++;
+    if (outcome is InspectionSubmitted) {
       await refresh();
       ref.invalidate(assignedInspectionsProvider);
-      return write.synced ? null : kOfflineQueuedMessage;
-    } catch (e) {
-      return 'Failed to submit this inspection. Please try again.';
     }
+    return outcome;
   }
 }
 

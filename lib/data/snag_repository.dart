@@ -53,6 +53,7 @@ class SnagDraft {
     this.voice,
     this.lat,
     this.lng,
+    this.photoRegions = const [],
   });
 
   final String id;
@@ -79,6 +80,10 @@ class SnagDraft {
   final VoiceRecording? voice;
   final double? lat;
   final double? lng;
+
+  /// Highlighted defect areas the technician kept on the FIRST photo (the one
+  /// AI assist looked at). Saved on that photo's evidence item.
+  final List<SnagRegion> photoRegions;
 
   SnagDraftSignature signature({String? raisedBy}) => SnagDraftSignature(
     trade: trade,
@@ -476,11 +481,13 @@ class SnagRepository {
     VoiceRecording? voice,
     double? lat,
     double? lng,
+    List<SnagRegion> firstPhotoRegions = const [],
   }) async {
     final evidence = <SnagEvidence>[];
     final uploads = <QueuedAttachment>[];
     final now = DateTime.now();
     for (final photo in photos) {
+      final first = evidence.isEmpty;
       final id = newId();
       final ext = _photoExtension(photo.bytes, photo.fileName.contains('.') ? photo.fileName.split('.').last.toLowerCase() : 'jpg');
       final path = await _media.saveOwn(snagId: snagId, evidenceId: id, bytes: photo.bytes, extension: ext);
@@ -494,6 +501,7 @@ class SnagRepository {
         capturedByName: actor.name,
         lat: lat,
         lng: lng,
+        regions: first ? firstPhotoRegions : const [],
       ));
       uploads.add(QueuedAttachment(
         bytes: photo.bytes,
@@ -547,6 +555,8 @@ class SnagRepository {
         'url': e.url ?? _placeholder(e.id),
         'capturedAt': e.capturedAt.toUtc().toIso8601String(),
         if (e.lat != null && e.lng != null) 'geo': {'lat': e.lat, 'lng': e.lng},
+        // Optional (2026-10-06): an older server ignores it.
+        if (e.isPhoto && e.regions.isNotEmpty) 'regions': [for (final r in e.regions) r.toJson()],
       },
   ];
 
@@ -589,6 +599,7 @@ class SnagRepository {
       voice: d.voice,
       lat: d.lat,
       lng: d.lng,
+      firstPhotoRegions: d.photoRegions,
     );
     final now = DateTime.now();
     final title = (d.title?.trim().isNotEmpty ?? false) ? d.title!.trim() : _defaultTitle(d.trade, d.issueType);
@@ -715,8 +726,15 @@ class SnagRepository {
     List<CapturedPhoto> photos = const [],
     bool duplicateReport = false,
     String? note,
+    List<SnagRegion> firstPhotoRegions = const [],
   }) async {
-    final (added, uploads) = await _capture(snagId: snag.id, stage: 'extra', actor: actor, photos: photos);
+    final (added, uploads) = await _capture(
+      snagId: snag.id,
+      stage: 'extra',
+      actor: actor,
+      photos: photos,
+      firstPhotoRegions: firstPhotoRegions,
+    );
     final now = DateTime.now();
     final next = snag.copyWith(
       evidence: [...snag.evidence, ...added],
@@ -853,8 +871,9 @@ class SnagRepository {
           if (brightness != null || sharpness != null)
             'quality': {'brightness': ?brightness, 'sharpness': ?sharpness},
         },
-        // The server gives the model 12 s; a little more for the photo's trip.
-        receiveTimeout: const Duration(seconds: 20),
+        // The server gives the model 15 s (it also draws the defect boxes
+        // since 2026-10-06); a little more for the photo's trip.
+        receiveTimeout: const Duration(seconds: 24),
       );
       final data = unwrapMap(res.data);
       if (data.isEmpty) return SnagAiResult.unavailable(captureTips: deviceTips);

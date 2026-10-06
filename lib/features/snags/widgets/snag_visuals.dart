@@ -11,6 +11,7 @@ import '../../../state/snag_controller.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../theme/fe_status_tokens.dart';
 import '../../../theme/theme_extensions.dart';
+import 'snag_region_overlay.dart';
 
 /// Translates [key] and fills its `%a` slots. Arguments are stringified here
 /// so call sites can pass counts directly.
@@ -120,6 +121,8 @@ class SnagPhoto extends ConsumerStatefulWidget {
     this.height,
     this.radius = 0,
     this.dark = false,
+    this.showRegions = false,
+    this.compactRegions = false,
   });
 
   final SnagEvidence? evidence;
@@ -128,6 +131,12 @@ class SnagPhoto extends ConsumerStatefulWidget {
   final double? height;
   final double radius;
   final bool dark;
+
+  /// Draw the evidence's kept defect highlights (2026-10-06) over the photo.
+  final bool showRegions;
+
+  /// Thumbnail style: outlines only, no chips.
+  final bool compactRegions;
 
   @override
   ConsumerState<SnagPhoto> createState() => _SnagPhotoState();
@@ -178,30 +187,34 @@ class _SnagPhotoState extends ConsumerState<SnagPhoto> {
         initialData: known,
         builder: (context, snap) {
           final file = snap.data;
-          if (file != null) {
-            return Image.file(
-              file,
-              width: width,
-              height: height,
-              fit: widget.fit,
-              cacheWidth: cacheWidth,
-              gaplessPlayback: true,
-              errorBuilder: (_, _, _) => placeholder,
-            );
-          }
-          if (snap.connectionState != ConnectionState.done) {
+          final url = e.url;
+          if (file == null && snap.connectionState != ConnectionState.done) {
             return SizedBox(width: width, height: height);
           }
-          final url = e.url;
-          if (url == null) return placeholder;
-          return Image.network(
-            url,
+          if (file == null && url == null) return placeholder;
+          // One provider for the picture and for the highlight layer's size
+          // lookup, so the photo is decoded once (same as Image.file /
+          // Image.network with cacheWidth).
+          final ImageProvider provider = ResizeImage.resizeIfNeeded(
+            cacheWidth,
+            null,
+            file != null ? FileImage(file) : NetworkImage(url!) as ImageProvider,
+          );
+          final image = Image(
+            image: provider,
             width: width,
             height: height,
             fit: widget.fit,
-            cacheWidth: cacheWidth,
             gaplessPlayback: true,
             errorBuilder: (_, _, _) => placeholder,
+          );
+          if (!widget.showRegions || e.regions.isEmpty) return image;
+          return SnagRegionLayer(
+            image: provider,
+            regions: e.regions,
+            fit: widget.fit,
+            compact: widget.compactRegions,
+            child: image,
           );
         },
       ),

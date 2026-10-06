@@ -41,9 +41,14 @@ class AuthState {
   );
 }
 
+/// Signed in until the technician signs out (owner, 2026-10-06). There is no
+/// client-side session clock any more: the access token is short and
+/// [ApiClient] renews it silently (`SessionRefresher`). [onSessionExpired]
+/// fires only when the server *refuses* a renewal — revoked on another
+/// device, password changed, account removed — and only then does the
+/// sign-in screen appear. The offline queue survives that (NFR-1, [logout]).
 class AuthController extends Notifier<AuthState> {
   StreamSubscription<void>? _expirySub;
-  Timer? _sessionExpiryTimer;
 
   @override
   AuthState build() {
@@ -53,12 +58,10 @@ class AuthController extends Notifier<AuthState> {
     });
     ref.onDispose(() {
       _expirySub?.cancel();
-      _sessionExpiryTimer?.cancel();
     });
 
     final session = store.readSession();
     if (session != null) {
-      _scheduleExpirationTimer(session);
       // Re-register the device token on app resume — it may have rotated
       // since the last cold start, and FCM has no other way to tell us.
       ref.read(pushServiceProvider).init();
@@ -67,20 +70,10 @@ class AuthController extends Notifier<AuthState> {
     return AuthState(session: session, permissions: store.readPermissions());
   }
 
-  void _scheduleExpirationTimer(Session session) {
-    _sessionExpiryTimer?.cancel();
-    final remaining = session.remainingValidity;
-    if (remaining <= Duration.zero) {
-      _handleSessionExpired();
-    } else {
-      _sessionExpiryTimer = Timer(remaining, () {
-        _handleSessionExpired();
-      });
-    }
-  }
-
   Future<void> _handleSessionExpired() async {
-    await logout();
+    // Several requests can be refused at once; end the session once.
+    if (!state.isAuthenticated) return;
+    await logout(revoke: false);
     state = state.copyWith(sessionExpired: true, clearSession: true);
   }
 
@@ -90,10 +83,21 @@ class AuthController extends Notifier<AuthState> {
       final repo = ref.read(authRepositoryProvider);
       final result = await repo.login(username: username, password: password);
 
-      await ref.read(secureStoreProvider).writeToken(result.token);
+      final secure = ref.read(secureStoreProvider);
+      await secure.writeToken(result.token);
+      if (result.refreshToken != null) {
+        await secure.writeRefreshToken(result.refreshToken);
+        await secure.clearLegacyLogin();
+      } else {
+        // An older server: no refresh token. Keep the sign-in in the
+        // keystore so the app can sign itself back in when the 24h token
+        // runs out (SessionRefresher's fallback). Removed on sign-out and
+        // as soon as the server issues refresh tokens.
+        await secure.writeRefreshToken(null);
+        await secure.writeLegacyLogin(username, password);
+      }
       final store = ref.read(sessionStoreProvider);
       await store.writeSession(result.session);
-      _scheduleExpirationTimer(result.session);
 
       var permissions = const Permissions();
       try {
@@ -113,12 +117,13 @@ class AuthController extends Notifier<AuthState> {
     }
   }
 
-  Future<void> logout() async {
-    _sessionExpiryTimer?.cancel();
+  /// [revoke] tells the server to forget this phone's refresh token (a manual
+  /// sign-out). False when the server already refused it.
+  Future<void> logout({bool revoke = true}) async {
+    if (revoke) await ref.read(apiClientProvider).revokeSession();
     // Deliberately not unregistering the device token here — phones are
     // personally issued, one per technician, so push should keep reaching
-    // this device (a job assigned overnight, say) even while signed out or
-    // between the 24h session expiring and the next login.
+    // this device (a job assigned overnight, say) even while signed out.
     await ref.read(secureStoreProvider).clear();
     await ref.read(sessionStoreProvider).clear();
     // NFR-1: never destroy unsent work. A queue that isn't empty stays on

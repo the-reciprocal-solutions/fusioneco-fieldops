@@ -27,6 +27,7 @@ import '../conversation/conversation_preview_card.dart';
 import 'ghost_camera_screen.dart';
 import 'snag_plan_screen.dart';
 import 'widgets/snag_sheets.dart';
+import 'widgets/snag_region_overlay.dart';
 import 'widgets/snag_visuals.dart';
 
 /// UC-10 — one snag: its photos, where it is, where it is in its life, and
@@ -406,7 +407,8 @@ class _Strip extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  SnagPhoto(evidence: p, radius: 18),
+                  // Kept defect highlights (2026-10-06) ride on the photo.
+                  SnagPhoto(evidence: p, radius: 18, showRegions: true),
                   Positioned(
                     left: 10,
                     top: 10,
@@ -440,15 +442,56 @@ class _Strip extends StatelessWidget {
   void _openFull(BuildContext context, SnagEvidence p) {
     Navigator.of(context).push(MaterialPageRoute(
       fullscreenDialog: true,
-      builder: (_) => Scaffold(
-        backgroundColor: Colors.black,
-        appBar: const FeHeader(title: '', variant: FeHeaderVariant.immersive),
-        body: InteractiveViewer(
-          maxScale: 5,
-          child: Center(child: SnagPhoto(evidence: p, fit: BoxFit.contain, dark: true)),
-        ),
-      ),
+      builder: (_) => _FullPhoto(evidence: p),
     ));
+  }
+}
+
+/// Full-screen photo viewer: pinch to zoom, highlights drawn on the photo
+/// itself (so they zoom with it) and a show/hide toggle when it has any.
+class _FullPhoto extends StatefulWidget {
+  const _FullPhoto({required this.evidence});
+  final SnagEvidence evidence;
+
+  @override
+  State<_FullPhoto> createState() => _FullPhotoState();
+}
+
+class _FullPhotoState extends State<_FullPhoto> {
+  var _highlights = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.evidence;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: const FeHeader(title: '', variant: FeHeaderVariant.immersive),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              maxScale: 5,
+              child: Center(
+                child: SnagPhoto(evidence: p, fit: BoxFit.contain, dark: true, showRegions: _highlights),
+              ),
+            ),
+          ),
+          if (p.regions.isNotEmpty)
+            PositionedDirectional(
+              bottom: 24 + MediaQuery.paddingOf(context).bottom,
+              start: 0,
+              end: 0,
+              child: Center(
+                child: SnagHighlightsToggle(
+                  count: p.regions.length,
+                  visible: _highlights,
+                  onChanged: (v) => setState(() => _highlights = v),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 

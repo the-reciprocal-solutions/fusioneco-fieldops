@@ -189,6 +189,18 @@ class BimViewerState {
   bool get needsDownload => !isDemo && missingTiles.isNotEmpty;
   bool get model3dAvailable => engineErrorCode == null;
 
+  /// The plan has something to extrude (walls or columns): with no tiles on
+  /// the phone, "Walls" still draws plan massing from it.
+  bool get planHasGeometry => (plan?.walls.isNotEmpty ?? false) || (plan?.columns.isNotEmpty ?? false);
+
+  /// The floor loaded, but there is nothing to show: no model tiles on the
+  /// server for it (no build published for this floor, or the floor's
+  /// storey isn't linked) and no plan to extrude walls from. The screen says
+  /// "No 3D model for this floor yet" instead of an empty grey canvas over
+  /// an empty plan (2026-10-06: what the owner's "broken page" looked like
+  /// on most floors of the dev site).
+  bool get noModel => floor != null && !loading && allTiles.isEmpty && !planHasGeometry;
+
   /// No shaded wall tiles on the phone: walls are extruded from the plan.
   bool get usesMassing => !solidTiles.any((t) => localPaths.containsKey(t.hash));
 
@@ -277,6 +289,10 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
   var _disposed = false;
   var _openToken = 0;
   String? _scenePushedFor;
+
+  /// The layout the user had when a fatal engine error forced plan-only;
+  /// put back when 3D comes up again (Retry, or a late `ready`).
+  BimViewLayout? _layoutBeforeFatal;
 
   @override
   BimViewerState build() {
@@ -513,7 +529,12 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
     unawaited(_events?.cancel());
     _engine = engine;
     _scenePushedFor = null;
-    _set(state.copyWith(engineReady: false, engineErrorCode: null));
+    // A new engine (the screen's Retry after "3D couldn't start") gets the
+    // user's layout back straight away, so its spinner shows where the 3D
+    // will appear rather than the plan alone.
+    final restore = _layoutBeforeFatal;
+    _layoutBeforeFatal = null;
+    _set(state.copyWith(engineReady: false, engineErrorCode: null, layout: restore));
     _events = engine.events.listen(_onEvent, onError: (_) {});
   }
 
@@ -530,7 +551,9 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
   void _onEvent(BimViewEvent e) {
     switch (e) {
       case BimReady():
-        _set(state.copyWith(engineReady: true, engineErrorCode: null));
+        final restore = _layoutBeforeFatal;
+        _layoutBeforeFatal = null;
+        _set(state.copyWith(engineReady: true, engineErrorCode: null, layout: restore));
         _pushScene();
       case BimPose():
         _set(state.copyWith(pose: e));
@@ -543,10 +566,17 @@ class BimViewerController extends AutoDisposeNotifier<BimViewerState> {
         // no points means the measurement is gone.
         _set(state.copyWith(measure: e.points.isEmpty ? null : e));
       case BimViewerError():
-        if (e.fatal) {
+        if (e.reloading) {
+          // A new page is loading in the same engine: it knows nothing yet.
+          // Its `ready` re-sends the floor (the once-per-floor guard is
+          // per page, not per engine).
+          _scenePushedFor = null;
+          _set(state.copyWith(engineReady: false, tilesLoaded: 0, tilesTotal: 0, tilesDone: false));
+        } else if (e.fatal) {
           // No 3D on this phone: keep the plan, full screen. Deliberately
           // not remembered: it's this phone's WebView today, not a choice,
-          // and the next visit may well have 3D again.
+          // and the next visit (or Retry) may well have 3D again.
+          if (state.layout != BimViewLayout.plan) _layoutBeforeFatal ??= state.layout;
           _set(state.copyWith(engineErrorCode: e.code, layout: BimViewLayout.plan));
         }
     }

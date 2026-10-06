@@ -24,14 +24,23 @@ import '../../state/snag_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/tech_popup.dart';
-import '../../widgets/voice_waveform.dart';
 import '../field_verification/photo_annotation_screen.dart';
+import 'widgets/snag_region_overlay.dart';
 import 'widgets/snag_sheets.dart';
 import 'widgets/snag_visuals.dart';
+import 'widgets/snag_walk_sheet.dart';
 
 /// UC-1 — walk mode. The camera stays live for the whole walk; a snag is a
 /// shutter press, a trade chip and a severity pill, then straight back to the
 /// viewfinder. Location is picked once per room and sticks until "Room done".
+///
+/// Redesign 2026-10-06 (owner iPhone test: "overwhelming… the UI is fully
+/// blocked with no frame displayed"): after the shot the photo keeps the
+/// screen — laid out above the details sheet's lowest resting height, so
+/// dragging the sheet down shows the WHOLE frame — with the AI's defect
+/// highlights drawn on it. The details live in a draggable bottom sheet
+/// ([SnagWalkComposeSheet]): AI line, trade, severity and Save & next up
+/// front, everything else behind "More details".
 ///
 /// Why a live [CameraController] instead of `image_picker`: `image_picker`
 /// hands off to the OS camera app and back for every photo — two full
@@ -77,6 +86,12 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
   var _aiRunning = false;
   var _aiRun = 0;
   var _saving = false;
+
+  /// The AI's defect highlights on the current shot, minus any the
+  /// technician removed; saved with the photo.
+  var _regions = <SnagRegion>[];
+  var _highlights = true;
+  final _sheet = DraggableScrollableController();
 
   final _voiceCapture = VoiceCapture();
   var _recording = false;
@@ -167,6 +182,7 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
     if (_recording) _voiceCapture.cancel();
     _voiceCapture.dispose();
     _title.dispose();
+    _sheet.dispose();
     super.dispose();
   }
 
@@ -273,6 +289,8 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
     _aiRunning = false;
     _aiRun++;
     _issueType = 'defect';
+    _regions = <SnagRegion>[];
+    _highlights = true;
   }
 
   Future<void> _annotate() async {
@@ -338,6 +356,7 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
     setState(() {
       _aiRunning = false;
       _ai = result;
+      _regions = List.of(result.regions);
     });
   }
 
@@ -410,6 +429,7 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
       voice: _voice,
       lat: _lat,
       lng: _lng,
+      photoRegions: List.of(_regions),
     );
     try {
       // UC-3 — the duplicate guard runs against everything this device
@@ -426,7 +446,13 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
       }
       final String message;
       if (decision.choice == DuplicateChoice.sameIssue && decision.snag != null) {
-        final r = await repo.addEvidence(decision.snag!, actor, photos: [photo], duplicateReport: true);
+        final r = await repo.addEvidence(
+          decision.snag!,
+          actor,
+          photos: [photo],
+          duplicateReport: true,
+          firstPhotoRegions: List.of(_regions),
+        );
         if (!mounted) return;
         message = snagTr(context, 'snags.added_to', [r.snag.displayRef]);
       } else {
@@ -472,44 +498,168 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
         : (ref.watch(snagsProvider(buildingId)).valueOrNull ?? const <Snag>[]);
     final walkCount = all.where((s) => s.surveyId == widget.surveyId).length;
     final room = _roomSnags(all);
+    final composing = _photo != null;
 
     return PopScope(
-      canPop: _photo == null,
+      canPop: !composing,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _photo != null) setState(_resetCompose);
       },
       child: Scaffold(
         backgroundColor: Colors.black,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            _preview(),
-            if (_photo != null) Image.memory(_photo!.bytes, fit: BoxFit.cover, gaplessPlayback: true),
-            // Scrim so the white overlay text stays legible on a bright wall.
-            const IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.black54, Colors.transparent, Colors.transparent, Colors.black87],
-                    stops: [0, 0.22, 0.6, 1],
+        body: LayoutBuilder(
+          builder: (context, c) {
+            final sizes = SnagWalkSheetSizes.forHeight(c.maxHeight);
+            // The frozen shot sits above the sheet's lowest resting height
+            // (its rounded top overlaps a little), so at peek nothing of the
+            // frame is hidden.
+            final photoBottom = (sizes.peek * c.maxHeight - 18).clamp(0.0, c.maxHeight);
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                if (!composing) _preview(),
+                if (composing)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: photoBottom,
+                    child: GestureDetector(
+                      // Tap the photo to drop the sheet and see the whole frame.
+                      onTap: () {
+                        if (_sheet.isAttached) {
+                          _sheet.animateTo(sizes.peek, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
+                        }
+                      },
+                      child: _frozenPhoto(),
+                    ),
+                  ),
+                // Scrims so the white overlay text stays legible on a bright wall.
+                const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.black54, Colors.transparent],
+                        stops: [0, 0.2],
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                if (!composing)
+                  const IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.transparent, Colors.black87],
+                          stops: [0.6, 1],
+                        ),
+                      ),
+                    ),
+                  ),
+                SafeArea(
+                  bottom: false,
+                  child: Column(
+                    children: [
+                      _topBar(walkCount, room.length, composing),
+                      if (composing) ...[const SizedBox(height: 8), _aiPhotoChip()],
+                    ],
+                  ),
+                ),
+                if (!composing)
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: SafeArea(top: false, child: _bottomBar(room)),
+                  ),
+                if (composing)
+                  SnagWalkComposeSheet(
+                    sizes: sizes,
+                    controller: _sheet,
+                    aiRunning: _aiRunning,
+                    ai: _ai,
+                    onApplyAllAi: _applyAllAi,
+                    onRetryAi: _runAi,
+                    trade: _trade,
+                    tradeOrder: [..._recentTrades, ...kSnagTrades.where((t) => !_recentTrades.contains(t))],
+                    onTrade: (t) => setState(() => _trade = t),
+                    priority: _priority,
+                    onPriority: (p) => setState(() => _priority = p),
+                    issueType: _issueType,
+                    onIssueType: (t) => setState(() => _issueType = t),
+                    title: _title,
+                    description: _description,
+                    saving: _saving,
+                    onSave: _save,
+                    onMarkUp: _annotate,
+                    onVoice: _toggleVoice,
+                    onSuggest: _assist,
+                    recording: _recording,
+                    voiceAdded: _voice != null,
+                    amplitude: _amplitude,
+                    suggesting: _assisting,
+                    suggested: _suggestion != null,
+                    transcript: _suggestion?.transcript,
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// The shot just taken, whole (`contain`), with the AI's highlights.
+  Widget _frozenPhoto() {
+    final image = MemoryImage(_photo!.bytes);
+    return ColoredBox(
+      color: Colors.black,
+      child: SnagRegionLayer(
+        image: image,
+        regions: _regions,
+        fit: BoxFit.contain,
+        visible: _highlights,
+        onDelete: (i) => setState(() => _regions.removeAt(i)),
+        child: SizedBox.expand(child: Image(image: image, fit: BoxFit.contain, gaplessPlayback: true)),
+      ),
+    );
+  }
+
+  /// The AI's presence on the photo itself: "looking…" while it works, then
+  /// a show/hide toggle for the highlights it drew.
+  Widget _aiPhotoChip() {
+    if (_aiRunning) {
+      return Container(
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: FeColors.ai.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(strokeWidth: 1.6, color: Colors.white),
             ),
-            SafeArea(
-              child: Column(
-                children: [
-                  _topBar(walkCount, room.length),
-                  const Spacer(),
-                  if (_photo == null) _bottomBar(room) else _composeCard(),
-                ],
-              ),
+            const SizedBox(width: 8),
+            Text(
+              'snags.ai.step_photo'.getString(context),
+              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
             ),
           ],
         ),
-      ),
+      );
+    }
+    if (_regions.isEmpty) return const SizedBox.shrink();
+    return SnagHighlightsToggle(
+      count: _regions.length,
+      visible: _highlights,
+      onChanged: (v) => setState(() => _highlights = v),
     );
   }
 
@@ -540,7 +690,7 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
     );
   }
 
-  Widget _topBar(int walkCount, int roomCount) {
+  Widget _topBar(int walkCount, int roomCount, bool composing) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
       child: Column(
@@ -549,12 +699,12 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
             children: [
               IconButton(
                 icon: const Icon(LucideIcons.x, color: Colors.white),
-                tooltip: 'snags.finish_walk'.getString(context),
-                onPressed: () => _photo != null ? setState(_resetCompose) : context.pop(),
+                tooltip: (composing ? 'snags.discard' : 'snags.finish_walk').getString(context),
+                onPressed: () => composing ? setState(_resetCompose) : context.pop(),
               ),
               Expanded(
                 child: GestureDetector(
-                  onTap: _photo == null ? _pickRoom : null,
+                  onTap: composing ? null : _pickRoom,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
@@ -575,42 +725,53 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
                           ),
                         ),
                         if (_space != null && _floor != null)
-                          Text(
-                            _floor!.name,
-                            style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
+                          Flexible(
+                            child: Text(
+                              _floor!.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
                           ),
-                        const SizedBox(width: 4),
-                        const Icon(LucideIcons.chevronDown, color: Colors.white70, size: 16),
+                        if (!composing) ...[
+                          const SizedBox(width: 4),
+                          const Icon(LucideIcons.chevronDown, color: Colors.white70, size: 16),
+                        ],
                       ],
                     ),
                   ),
                 ),
               ),
-              IconButton(
-                icon: Icon(
-                  _torch ? LucideIcons.flashlight : LucideIcons.flashlightOff,
-                  color: _torch ? FeColors.warning : Colors.white,
-                ),
-                onPressed: _toggleTorch,
-              ),
+              if (!composing)
+                IconButton(
+                  icon: Icon(
+                    _torch ? LucideIcons.flashlight : LucideIcons.flashlightOff,
+                    color: _torch ? FeColors.warning : Colors.white,
+                  ),
+                  onPressed: _toggleTorch,
+                )
+              else
+                const SizedBox(width: 48),
             ],
           ),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _Counter(icon: LucideIcons.doorOpen, label: snagTr(context, 'snags.count_room', [roomCount])),
-              const SizedBox(width: 8),
-              _Counter(icon: LucideIcons.footprints, label: snagTr(context, 'snags.count_walk', [walkCount])),
-              if (_survey != null) ...[
-                const SizedBox(width: 8),
-                _Counter(
-                  icon: LucideIcons.check,
-                  label: snagTr(context, 'snags.count_rooms_checked', [_survey!.inspectedSpaces.length]),
-                ),
+          // Counters only while shooting: after the shot the frame matters more.
+          if (!composing) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                _Counter(icon: LucideIcons.doorOpen, label: snagTr(context, 'snags.count_room', [roomCount])),
+                _Counter(icon: LucideIcons.footprints, label: snagTr(context, 'snags.count_walk', [walkCount])),
+                if (_survey != null)
+                  _Counter(
+                    icon: LucideIcons.check,
+                    label: snagTr(context, 'snags.count_rooms_checked', [_survey!.inspectedSpaces.length]),
+                  ),
               ],
-            ],
-          ),
+            ),
+          ],
         ],
       ),
     );
@@ -647,7 +808,13 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: SnagVisuals.priorityColor(s.priority), width: 2),
                         ),
-                        child: SnagPhoto(evidence: s.coverPhoto, radius: 10, dark: true),
+                        child: SnagPhoto(
+                          evidence: s.coverPhoto,
+                          radius: 10,
+                          dark: true,
+                          showRegions: true,
+                          compactRegions: true,
+                        ),
                       ),
                       Positioned(
                         right: 3,
@@ -681,27 +848,31 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
                 ),
               ),
               const SizedBox(width: 16),
-              GestureDetector(
-                onTap: _shoot,
-                child: Container(
-                  width: 78,
-                  height: 78,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 4),
-                  ),
-                  padding: const EdgeInsets.all(5),
+              Semantics(
+                button: true,
+                label: 'snags.walk.shutter'.getString(context),
+                child: GestureDetector(
+                  onTap: _shoot,
                   child: Container(
+                    width: 78,
+                    height: 78,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: _shooting ? Colors.white54 : Colors.white,
+                      border: Border.all(color: Colors.white, width: 4),
                     ),
-                    child: _shooting
-                        ? const Padding(
-                            padding: EdgeInsets.all(20),
-                            child: CircularProgressIndicator(strokeWidth: 2, color: FeColors.primary),
-                          )
-                        : const Icon(LucideIcons.plus, color: FeColors.ink, size: 28),
+                    padding: const EdgeInsets.all(5),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _shooting ? Colors.white54 : Colors.white,
+                      ),
+                      child: _shooting
+                          ? const Padding(
+                              padding: EdgeInsets.all(20),
+                              child: CircularProgressIndicator(strokeWidth: 2, color: FeColors.primary),
+                            )
+                          : const Icon(LucideIcons.plus, color: FeColors.ink, size: 28),
+                    ),
                   ),
                 ),
               ),
@@ -717,157 +888,6 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
           ),
         ),
       ],
-    );
-  }
-
-  Widget _composeCard() {
-    final s = _suggestion;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-      decoration: BoxDecoration(
-        color: FeColors.ink.withValues(alpha: 0.92),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                _ToolButton(icon: LucideIcons.pencilLine, label: 'snags.mark_up'.getString(context), onTap: _annotate),
-                const SizedBox(width: 8),
-                _ToolButton(
-                  icon: _recording ? LucideIcons.square : LucideIcons.mic,
-                  label: _recording
-                      ? 'snags.stop'.getString(context)
-                      : (_voice != null ? 'snags.voice_added'.getString(context) : 'snags.voice'.getString(context)),
-                  active: _recording || _voice != null,
-                  danger: _recording,
-                  onTap: _toggleVoice,
-                ),
-                const SizedBox(width: 8),
-                _ToolButton(
-                  icon: LucideIcons.sparkles,
-                  label: 'snags.suggest'.getString(context),
-                  busy: _assisting,
-                  active: s != null,
-                  onTap: _assist,
-                ),
-              ],
-            ),
-            if (_recording && _amplitude != null) ...[
-              const SizedBox(height: 8),
-              SizedBox(height: 28, child: VoiceWaveform(amplitudeStream: _amplitude!, color: FeColors.danger)),
-            ],
-            const SizedBox(height: 10),
-            _WalkAiStrip(running: _aiRunning, result: _ai, onApplyAll: _applyAllAi, onRetry: _runAi),
-            if (s?.transcript != null) ...[
-              const SizedBox(height: 8),
-              Text('“${s!.transcript}”', style: const TextStyle(color: Colors.white70, fontStyle: FontStyle.italic)),
-            ],
-            const SizedBox(height: 12),
-            TradeChipRail(
-              value: _trade,
-              dark: true,
-              suggested: _ai?.trade ?? s?.trade,
-              ordered: [..._recentTrades, ...kSnagTrades.where((t) => !_recentTrades.contains(t))],
-              onChanged: (t) => setState(() => _trade = t),
-            ),
-            const SizedBox(height: 10),
-            SeveritySelector(
-              value: _priority,
-              dark: true,
-              suggested: _ai?.priority ?? s?.priority,
-              onChanged: (p) => setState(() => _priority = p),
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 32,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: kSnagIssueTypes.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 6),
-                itemBuilder: (context, i) {
-                  final t = kSnagIssueTypes[i];
-                  final sel = t == _issueType;
-                  return GestureDetector(
-                    onTap: () => setState(() => _issueType = t),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: sel ? Colors.white : Colors.transparent,
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: Colors.white30),
-                      ),
-                      child: Text(
-                        SnagVisuals.issueLabel(context, t),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: sel ? FeColors.ink : Colors.white,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _title,
-              style: const TextStyle(color: Colors.white),
-              textCapitalization: TextCapitalization.sentences,
-              decoration: InputDecoration(
-                hintText: 'snags.title_hint'.getString(context),
-                hintStyle: const TextStyle(color: Colors.white54),
-                isDense: true,
-                filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.08),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-              ),
-            ),
-            if (_description != null) ...[
-              const SizedBox(height: 6),
-              Text(_description!, style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
-            ],
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: _saving ? null : () => setState(_resetCompose),
-                  child: Text('snags.discard'.getString(context), style: const TextStyle(color: Colors.white70)),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(50),
-                      backgroundColor: FeColors.primaryLight,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    ),
-                    onPressed: _saving ? null : _save,
-                    icon: _saving
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Icon(LucideIcons.check, size: 18),
-                    label: Text(
-                      'snags.save_next'.getString(context),
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -923,155 +943,4 @@ class _GhostButton extends StatelessWidget {
       ),
     ),
   );
-}
-
-class _ToolButton extends StatelessWidget {
-  const _ToolButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.active = false,
-    this.danger = false,
-    this.busy = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final bool active;
-  final bool danger;
-  final bool busy;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = danger ? FeColors.danger : (active ? FeColors.primaryLight : Colors.white);
-    return Expanded(
-      child: GestureDetector(
-        onTap: busy ? null : onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.14),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: color.withValues(alpha: 0.4)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (busy)
-                SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: color))
-              else
-                Icon(icon, size: 15, color: color),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-
-/// The walk's compact, dark AI strip: thinking dots while it works, then a
-/// one-line proposal with Apply all, photo tips and a "maybe already raised"
-/// hint. Never blocks Save & next.
-class _WalkAiStrip extends StatelessWidget {
-  const _WalkAiStrip({required this.running, required this.result, required this.onApplyAll, required this.onRetry});
-  final bool running;
-  final SnagAiResult? result;
-  final VoidCallback onApplyAll;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final r = result;
-    if (!running && r == null) return const SizedBox.shrink();
-    final summary = r == null || r.status != SnagAiStatus.ok
-        ? null
-        : [
-            if (r.trade != null) SnagVisuals.tradeLabel(context, r.trade!),
-            if (r.priority != null) SnagVisuals.priorityLabel(context, r.priority!),
-            ?r.title,
-          ].join(' · ');
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        gradient: LinearGradient(colors: [FeColors.ai.withValues(alpha: 0.35), FeColors.ai.withValues(alpha: 0.12)]),
-        border: Border.all(color: FeColors.ai.withValues(alpha: 0.5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(LucideIcons.sparkles, size: 15, color: Colors.white),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  running
-                      ? 'snags.ai.step_photo'.getString(context)
-                      : r!.status == SnagAiStatus.offline
-                      ? 'snags.ai.offline'.getString(context)
-                      : r.status == SnagAiStatus.unavailable
-                      ? 'snags.ai.unavailable'.getString(context)
-                      : (summary == null || summary.isEmpty ? 'snags.ai.nothing'.getString(context) : summary),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600),
-                ),
-              ),
-              if (running)
-                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              else if (r!.status == SnagAiStatus.ok && r.hasSuggestions)
-                TextButton(
-                  onPressed: onApplyAll,
-                  style: TextButton.styleFrom(foregroundColor: Colors.white, visualDensity: VisualDensity.compact),
-                  child: Text('snags.ai.apply_all'.getString(context)),
-                )
-              else
-                TextButton(
-                  onPressed: onRetry,
-                  style: TextButton.styleFrom(foregroundColor: Colors.white70, visualDensity: VisualDensity.compact),
-                  child: Text('snags.ai.retry'.getString(context)),
-                ),
-            ],
-          ),
-          if (!running && r != null)
-            for (final t in r.captureTips)
-              Padding(
-                padding: const EdgeInsets.only(top: 3),
-                child: Row(
-                  children: [
-                    const Icon(LucideIcons.lightbulb, size: 12, color: FeColors.warningSoft),
-                    const SizedBox(width: 5),
-                    Expanded(
-                      child: Text(
-                        'snags.ai.tip.$t'.getString(context),
-                        style: const TextStyle(color: Colors.white70, fontSize: 11.5),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          if (!running && r != null && r.duplicates.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 3),
-              child: Text(
-                snagTr(context, 'snags.ai.dupe_hint', [r.duplicates.first.displayRef]),
-                style: const TextStyle(color: Colors.white70, fontSize: 11.5),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 }

@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../app/env.dart';
+import '../../core/bim_viewer/web_view_errors.dart';
 import '../../core/storage/session_store.dart';
 import '../../state/auth_controller.dart';
 import '../../state/providers.dart';
@@ -63,6 +64,17 @@ class _TwinScreenState extends ConsumerState<TwinScreen> {
     _start();
   }
 
+  /// The error state's next step: a fresh WebView, from the top.
+  void _retry() {
+    setState(() {
+      _error = null;
+      _loading = true;
+      _attempts = 0;
+      _controller = null;
+    });
+    _start();
+  }
+
   Future<void> _start() async {
     if (ref.read(authControllerProvider).permissions.isDigitalTwin == false) {
       // Denied — build() renders the access-denied state instead. Skip the
@@ -70,7 +82,8 @@ class _TwinScreenState extends ConsumerState<TwinScreen> {
       return;
     }
 
-    final token = await ref.read(secureStoreProvider).readToken();
+    // Renewed first if it has run out: the web twin only gets this one copy.
+    final token = await ref.read(apiClientProvider).freshToken();
     final session = ref.read(authControllerProvider).session;
 
     if (!mounted) return;
@@ -147,12 +160,26 @@ class _TwinScreenState extends ConsumerState<TwinScreen> {
             if (mounted) setState(() => _loading = false);
           },
           onWebResourceError: (error) {
-            if (!error.isForMainFrame!) return;
-            if (mounted) {
-              setState(() {
-                _loading = false;
-                _error = error.description;
-              });
+            // 2026-10-06 (iPhone): WKWebView reports a load the app itself
+            // replaced (-999) and a link this screen hands to the browser
+            // (102, "frame load interrupted") as main-frame errors. Both
+            // used to swap a working twin for an error page; neither is a
+            // failure. A killed web process is: reload it.
+            switch (classifyWebViewError(error)) {
+              case WebViewErrorKind.benign:
+                return;
+              case WebViewErrorKind.processGone:
+                _controller?.reload();
+                return;
+              case WebViewErrorKind.failed:
+                if (mounted) {
+                  setState(() {
+                    _loading = false;
+                    // Plain words only: the raw description is WebKit's
+                    // ("NSURLErrorDomain error -1004"), never for a screen.
+                    _error = 'twin.load_error_subtitle'.getString(context);
+                  });
+                }
             }
           },
         ),
@@ -239,10 +266,26 @@ class _TwinScreenState extends ConsumerState<TwinScreen> {
       body: _error != null
           ? Padding(
               padding: const EdgeInsets.all(16),
-              child: TechEmptyState(
-                icon: LucideIcons.box,
-                title: 'twin.load_error_title'.getString(context),
-                subtitle: _error,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TechEmptyState(
+                    icon: LucideIcons.box,
+                    title: 'twin.load_error_title'.getString(context),
+                    subtitle: _error,
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _retry,
+                    style: OutlinedButton.styleFrom(
+                      backgroundColor: Colors.transparent,
+                      foregroundColor: Colors.white,
+                      side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                    ),
+                    icon: const Icon(LucideIcons.refreshCw, size: 16),
+                    label: AppText.label('common.retry'.getString(context), color: Colors.white),
+                  ),
+                ],
               ),
             )
           : Stack(

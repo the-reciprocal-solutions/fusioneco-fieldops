@@ -232,7 +232,7 @@ class _Rig {
     }
   }
 
-  Future<Snag> raise() async {
+  Future<Snag> raise({List<SnagRegion> regions = const []}) async {
     final r = await repo.raise(
       SnagDraft(
         id: '22222222-2222-4222-8222-222222222222',
@@ -242,6 +242,7 @@ class _Rig {
         title: 'Leak under basin',
         buildingId: _building,
         photos: [CapturedPhoto(bytes: _jpeg, fileName: 'image_picker_1.heic')],
+        photoRegions: regions,
       ),
       const SnagActor(id: 'u1', name: 'Tech'),
     );
@@ -275,6 +276,24 @@ void main() {
   setUp(() => tmp = Directory.systemTemp.createTempSync('snag_outbox'));
   tearDown(() => tmp.deleteSync(recursive: true));
 
+  test('kept defect highlights travel on the first photo and survive the server round trip', () async {
+    final server = <String, Map<String, dynamic>>{};
+    final bodies = <Map<String, dynamic>>[];
+    final rig = _Rig((m, p, d, q) {
+      if (m == 'POST' && p == '/api/snags') bodies.add(Map<String, dynamic>.from(d as Map));
+      return _ok(m, p, d, q, server);
+    }, tmp);
+    const kept = SnagRegion(x: 0.2, y: 0.3, w: 0.25, h: 0.2, label: 'damage', severity: SnagPriority.major);
+    final draft = await rig.raise(regions: const [kept]);
+    expect((await rig.local(draft.id)).evidence.single.regions, [kept], reason: 'on the phone at once');
+    await rig.settle();
+    final wire = (bodies.single['evidence'] as List).single as Map;
+    expect(wire['regions'], [
+      {'x': 0.2, 'y': 0.3, 'w': 0.25, 'h': 0.2, 'label': 'damage', 'severity': 'major'},
+    ]);
+    expect((await rig.local(draft.id)).evidence.single.regions, [kept], reason: 'the server copy keeps them');
+  });
+
   test('every snag entity type is kept on a server failure', () {
     expect(kKeepOnServerErrorEntityTypes, containsAll([SnagRepository.entityType, SnagRepository.surveyEntityType]));
   });
@@ -299,7 +318,7 @@ void main() {
     expect(snagSendStatus(after, queued: false, flushing: false).state, SnagSendState.synced);
   });
 
-  test('503 SNAG_ENGINE_NOT_ENABLED is never dropped; it says why and sends once enabled', () async {
+  test('503 SNAG_ENGINE_NOT_ENABLED (older server) is never dropped, reads as "keeps trying", sends once enabled', () async {
     final server = <String, Map<String, dynamic>>{};
     var enabled = false;
     final rig = _Rig((m, p, d, q) {
@@ -325,7 +344,7 @@ void main() {
     expect(waiting.sendIssue?.status, 503);
     final status = snagSendStatus(waiting, queued: true, flushing: false);
     expect(status.state, SnagSendState.retrying);
-    expect(status.reasonKey, 'snags.send.not_enabled_hint');
+    expect(status.reasonKey, 'snags.send.retrying_hint', reason: 'never "not switched on for your site"');
 
     enabled = true;
     await rig.sync.flushQueue();

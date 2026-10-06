@@ -91,6 +91,7 @@ class SnagAiResult {
     this.captureTips = const [],
     this.duplicates = const [],
     this.missing = const [],
+    this.regions = const [],
   });
 
   const SnagAiResult.offline({List<String> captureTips = const []})
@@ -117,6 +118,11 @@ class SnagAiResult {
   /// Codes from [kSnagMissingFields].
   final List<String> missing;
 
+  /// Where the defect is on the analysed photo (normalised, grounded — see
+  /// [SnagRegion]). Optional in the contract (2026-10-06): an older server
+  /// sends none and the photo simply shows no highlights.
+  final List<SnagRegion> regions;
+
   bool get hasSuggestions =>
       title != null ||
       description != null ||
@@ -140,13 +146,14 @@ class SnagAiResult {
     };
     final available = asBool(json['available']) ?? false;
     final conf = asDouble(json['confidence']);
+    final priority = SnagPriority.tryParse(s['priority']);
     return SnagAiResult(
       status: available ? SnagAiStatus.ok : SnagAiStatus.unavailable,
       title: _text(s['title'], 80),
       description: _text(s['description'], 600),
       issueType: kSnagIssueTypes.contains(s['issueType']) ? s['issueType'] as String : null,
       trade: kSnagTrades.contains(s['trade']) ? s['trade'] as String : null,
-      priority: SnagPriority.tryParse(s['priority']),
+      priority: priority,
       likelyCause: _text(s['likelyCause'], 300),
       recommendedFix: _text(s['recommendedFix'], 300),
       responsibleTrade: kSnagTrades.contains(s['responsibleTrade']) ? s['responsibleTrade'] as String : null,
@@ -157,6 +164,8 @@ class SnagAiResult {
         for (final m in json['missing'] is List ? json['missing'] as List : const [])
           if (kSnagMissingFields.contains(m)) m as String,
       ],
+      // Boxes only from a real answer: an unavailable one has nothing to point at.
+      regions: available ? SnagRegion.listFrom(json['regions'], fallbackSeverity: priority) : const [],
     );
   }
 

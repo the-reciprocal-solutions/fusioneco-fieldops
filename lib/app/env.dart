@@ -31,6 +31,12 @@ abstract final class Env {
   static const receiveTimeout = Duration(seconds: 30);
   static const uploadTimeout = Duration(seconds: 120);
 
+  /// Upper bound on sending one request body. Dio has none by default, so a
+  /// connection that stalls mid-upload (a lift, a plant-room door) could hold
+  /// the single flush run — and with it the whole queue — until the OS gave
+  /// up. Generous, because a slow but moving link must still finish.
+  static const sendTimeout = Duration(minutes: 5);
+
   /// Cached GETs and prefetched records expire after this.
   static const cacheTtl = Duration(hours: 24);
 

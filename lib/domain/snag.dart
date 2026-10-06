@@ -127,6 +127,117 @@ class SnagPin {
   Map<String, dynamic> toJson() => {'kind': 'plan', 'floorId': floorId, 'x': x, 'y': y};
 }
 
+/// A highlighted defect area on one photo (2026-10-06): a box in NORMALISED
+/// photo coordinates — 0..1 of the photo's width and height, origin at the
+/// photo's top-left — so it draws the same on a thumbnail and full screen.
+/// Photo space is never mirrored, so Arabic (RTL) draws the same box.
+///
+/// AI assist proposes them (`regions` in `POST /api/snags/ai/assist`); the
+/// ones the technician keeps travel on the photo's evidence item. Grounded
+/// exactly like the server's `snagRules.ts` `normaliseRegions` (change both):
+/// numbers only, clamped to the photo, slivers (< 2 %) and whole-photo boxes
+/// dropped, label limited to [kSnagIssueTypes], near-duplicates dropped, at
+/// most [maxCount]. Anything unusable is dropped, never guessed (fail closed).
+class SnagRegion {
+  const SnagRegion({
+    required this.x,
+    required this.y,
+    required this.w,
+    required this.h,
+    required this.label,
+    this.severity,
+  });
+
+  final double x;
+  final double y;
+  final double w;
+  final double h;
+
+  /// One of [kSnagIssueTypes].
+  final String label;
+  final SnagPriority? severity;
+
+  static const maxCount = 5;
+  static const minSide = 0.02;
+
+  static double _clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
+  static double _round4(double v) => (v * 10000).roundToDouble() / 10000;
+
+  /// One grounded region, or null when [json] is not a usable box.
+  static SnagRegion? tryParse(dynamic json, {SnagPriority? fallbackSeverity}) {
+    if (json is! Map) return null;
+    final raw = [json['x'], json['y'], json['w'], json['h']];
+    if (raw.any((v) => v is! num || !v.isFinite)) return null;
+    final [x, y, w, h] = [for (final v in raw) (v as num).toDouble()];
+    final x1 = _clamp01(x < x + w ? x : x + w);
+    final y1 = _clamp01(y < y + h ? y : y + h);
+    final x2 = _clamp01(x < x + w ? x + w : x);
+    final y2 = _clamp01(y < y + h ? y + h : y);
+    final bw = _round4(x2 - x1);
+    final bh = _round4(y2 - y1);
+    if (bw < minSide || bh < minSide) return null;
+    if (bw >= 0.98 && bh >= 0.98) return null;
+    final label = json['label']?.toString().trim().toLowerCase();
+    if (label == null || !kSnagIssueTypes.contains(label)) return null;
+    final sev = json['severity']?.toString().trim().toLowerCase();
+    return SnagRegion(
+      x: _round4(x1),
+      y: _round4(y1),
+      w: bw,
+      h: bh,
+      label: label,
+      severity: SnagPriority.tryParse(sev) ?? fallbackSeverity,
+    );
+  }
+
+  /// A grounded list: unusable entries and near-duplicates dropped, capped.
+  static List<SnagRegion> listFrom(dynamic json, {SnagPriority? fallbackSeverity}) {
+    if (json is! List) return const [];
+    final out = <SnagRegion>[];
+    for (final item in json) {
+      if (out.length >= maxCount) break;
+      final r = tryParse(item, fallbackSeverity: fallbackSeverity);
+      if (r == null || out.any((k) => k.iou(r) > 0.85)) continue;
+      out.add(r);
+    }
+    return out;
+  }
+
+  /// Intersection over union with [o], 0..1.
+  double iou(SnagRegion o) {
+    final ix = (_min(x + w, o.x + o.w) - _max(x, o.x)).clamp(0.0, 1.0).toDouble();
+    final iy = (_min(y + h, o.y + o.h) - _max(y, o.y)).clamp(0.0, 1.0).toDouble();
+    final inter = ix * iy;
+    final union = w * h + o.w * o.h - inter;
+    return union > 0 ? inter / union : 0.0;
+  }
+
+  static double _min(double a, double b) => a < b ? a : b;
+  static double _max(double a, double b) => a > b ? a : b;
+
+  Map<String, dynamic> toJson() => {
+    'x': x,
+    'y': y,
+    'w': w,
+    'h': h,
+    'label': label,
+    if (severity != null) 'severity': severity!.wire,
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is SnagRegion &&
+      other.x == x &&
+      other.y == y &&
+      other.w == w &&
+      other.h == h &&
+      other.label == label &&
+      other.severity == severity;
+
+  @override
+  int get hashCode => Object.hash(x, y, w, h, label, severity);
+}
+
 /// One photo or voice note on a snag. [localPath] is this device's copy
 /// (`snag_media/`), kept after sync so the inspector can still see their own
 /// photos offline; [url] is the uploaded copy and is null until then.
@@ -143,6 +254,7 @@ class SnagEvidence {
     this.note,
     this.lat,
     this.lng,
+    this.regions = const [],
   });
 
   final String id;
@@ -161,14 +273,18 @@ class SnagEvidence {
   final double? lat;
   final double? lng;
 
+  /// Highlighted defect areas the technician kept on this photo (photos only).
+  final List<SnagRegion> regions;
+
   bool get isPhoto => kind == 'photo';
   bool get isAfter => stage == 'after';
 
   factory SnagEvidence.fromJson(Map<String, dynamic> json) {
     final geo = json['geo'];
+    final kind = json['kind']?.toString() == 'audio' ? 'audio' : 'photo';
     return SnagEvidence(
       id: json['id']?.toString() ?? '',
-      kind: json['kind']?.toString() == 'audio' ? 'audio' : 'photo',
+      kind: kind,
       stage: switch (json['stage']?.toString()) {
         'after' => 'after',
         'extra' => 'extra',
@@ -182,6 +298,7 @@ class SnagEvidence {
       note: json['note']?.toString(),
       lat: geo is Map ? asDouble(geo['lat']) : null,
       lng: geo is Map ? asDouble(geo['lng']) : null,
+      regions: kind == 'photo' ? SnagRegion.listFrom(json['regions']) : const [],
     );
   }
 
@@ -197,6 +314,7 @@ class SnagEvidence {
     'capturedByName': ?capturedByName,
     'note': ?note,
     if (lat != null && lng != null) 'geo': {'lat': lat, 'lng': lng},
+    if (regions.isNotEmpty) 'regions': [for (final r in regions) r.toJson()],
   };
 
   SnagEvidence withLocalPath(String? path) => SnagEvidence(
@@ -211,6 +329,7 @@ class SnagEvidence {
     note: note,
     lat: lat,
     lng: lng,
+    regions: regions,
   );
 }
 

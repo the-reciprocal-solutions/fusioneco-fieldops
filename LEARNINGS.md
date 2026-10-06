@@ -527,6 +527,12 @@ Design: [docs/snag-assistant.md](docs/snag-assistant.md). Server: `../fusion-eco
 
 ## Model viewer (2D / 3D)
 
+### iOS WebView: wait for every setup step before loading the page, or the JS bridge misses "ready" (2026-10-06)
+**What happened:** Verify in 3D spun forever on iPhone and every viewer action waited on a "ready" that never arrived. `webview_bim_view_engine.dart` configured the WebView without awaiting each step and loaded the page at once; on iOS the JavaScript channel attaches late, so the page's ready message went nowhere.
+**Fix:** await each setup step before `loadRequest`; `viewer.js` has a second route back to the app; the app re-asks for ready; 20 s → plain "3D isn't available" + Try again. The loopback asset server closes on background and reopens on the same port on resume (iOS stops serving after lock).
+**What to watch:** test WebView pages in WebKit (`tool/bim_viewer/e2e.mjs` has a WebKit option), not only Chromium.
+**Where:** `lib/features/bim_viewer/webview_bim_view_engine.dart`, `tool/bim_viewer/`
+
 ### A camera-free 3D view doesn't fit `fe_ar`: three.js in a WebView behind a seam (2026-09-26)
 **What happened:** the Dalux-style viewer needed a non-AR 3D camera. The plan was a second mode in `packages/fe_ar`, but its Android renderer is SceneView's `ARSceneView`, which an ARCore session owns, and the plugin isn't wired into the app (P-005). **Fix:** `assets/bim_viewer/viewer.js` (three.js 0.160.1, MIT, vendored from the web client's `node_modules` with the `'three'` imports rewritten to relative paths, so no import map is needed) runs in a WebView behind `BimViewEngine`. It reads the same C7 tiles: `KHR_mesh_quantization` + `EXT_meshopt_compression` work through `GLTFLoader.setMeshoptDecoder`; `TEXCOORD_1` arrives as the attribute `uv1`; scene extras land in `gltf.scene.userData.fe`. **Watch:** keep every viewer rule in `viewer_math.js` (pure) so Node tests it, and rerun `tool/bim_viewer/e2e.mjs` on real server tiles after any `viewer.js` change. Headless Chromium draws WebGL2 with `--use-angle=swiftshader --enable-unsafe-swiftshader`. **State:** V1 built; page verified in a browser; Dart unverified (P-011).
 

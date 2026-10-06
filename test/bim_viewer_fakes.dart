@@ -60,6 +60,12 @@ class FakeViewerGateway implements ArGateway {
   final List<CornerCandidate> corners;
   final onDevice = <String, String>{};
   var floorError = false;
+
+  /// What the failure says when [floorError] is set (arErrorKey reads it).
+  var floorErrorText = 'network: offline';
+
+  /// A floor with no model at all: no tiles, no plan (no build published).
+  var empty = false;
   var downloads = 0;
 
   @override
@@ -67,23 +73,23 @@ class FakeViewerGateway implements ArGateway {
 
   @override
   Future<ArFloorContext> floorContext(String floorId, {String? focusCode}) async {
-    if (floorError) throw Exception('network: offline');
+    if (floorError) throw Exception(floorErrorText);
     return ArFloorContext(
       buildingId: 'bld',
       buildingName: 'Tower A',
       floorId: floorId,
       floorName: 'Level 3',
       builds: const [ArBuildRef(buildId: 'b1', lineage: 'mep', modelName: 'MEP')],
-      tiles: [tileMep, tileEdges],
+      tiles: empty ? const [] : [tileMep, tileEdges],
       markers: const [],
       corners: corners,
-      gridLines: const [ArGridLine(name: 'A', p0: Vec2(0, 0), p1: Vec2(0, 10))],
+      gridLines: empty ? const [] : const [ArGridLine(name: 'A', p0: Vec2(0, 0), p1: Vec2(0, 10))],
       floorFinishOffsetM: 0.05,
     );
   }
 
   @override
-  Future<ArPlan?> floorPlan(String floorId) async => planPlantRoom;
+  Future<ArPlan?> floorPlan(String floorId) async => empty ? null : planPlantRoom;
 
   @override
   Future<List<ArFeature>> features(ArFloorContext floor, {Set<String>? tileHashes}) async => const [featurePump];

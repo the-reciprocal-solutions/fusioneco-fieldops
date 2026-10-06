@@ -92,6 +92,12 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
   var _aiRunning = false;
   var _aiRun = 0;
   final _aiApplied = <SnagAiField>{};
+
+  /// The photo AI assist looked at, and the defect highlights still kept on
+  /// it (a technician removes a wrong one with its ×). Saved on that photo
+  /// only while it is still the first photo.
+  CapturedPhoto? _aiPhoto;
+  var _regions = <SnagRegion>[];
   var _saving = false;
 
   /// false once saved, so leaving after a save never asks.
@@ -214,8 +220,15 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
     setState(() {
       _aiRunning = false;
       _ai = result;
+      _aiPhoto = photo;
+      _regions = List.of(result.regions);
     });
   }
+
+  /// Highlights to save with the first photo — only if it is the one the
+  /// assistant looked at (a photo added in front of it must not inherit them).
+  List<SnagRegion> get _keptRegions =>
+      _aiPhoto != null && _photos.isNotEmpty && identical(_photos.first, _aiPhoto) ? List.of(_regions) : const [];
 
   void _applyAi(SnagAiField f) {
     final r = _ai;
@@ -293,7 +306,13 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
         builder: (_) => PhotoAnnotationScreen(photo: _photos[i]),
       ),
     );
-    if (marked != null && mounted) setState(() => _photos[i] = marked);
+    if (marked != null && mounted) {
+      setState(() {
+        // Mark-up keeps the photo's geometry, so its highlights still fit.
+        if (identical(_photos[i], _aiPhoto)) _aiPhoto = marked;
+        _photos[i] = marked;
+      });
+    }
   }
 
   Future<void> _pickRoom(SnagLocationTree tree) async {
@@ -400,6 +419,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
       dueDate: _due,
       photos: List.of(_photos),
       voice: _voice,
+      photoRegions: _keptRegions,
     );
     try {
       final pool = await repo.local(buildingId: _buildingId);
@@ -420,6 +440,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
             actor,
             photos: _photos,
             duplicateReport: true,
+            firstPhotoRegions: _keptRegions,
           );
           if (!mounted) return;
           bumpSnags(ref);
@@ -589,6 +610,9 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
             onApply: _applyAi,
             onApplyAll: _applyAllAi,
             onOpenDuplicate: (d) => context.push(Routes.snagDetail(d.id)),
+            photo: _aiPhoto != null && _photos.any((p) => identical(p, _aiPhoto)) ? _aiPhoto!.bytes : null,
+            regions: _regions,
+            onDeleteRegion: (i) => setState(() => _regions.removeAt(i)),
           ),
           const SizedBox(height: 10),
           OutlinedButton.icon(

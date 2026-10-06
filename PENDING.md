@@ -23,9 +23,16 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-029**
+Next number: **P-030**
 
 ## Open
+
+### P-029 · 2026-10-06 owner round (12 items): built and tested off-device, not run on an iPhone
+- **Status:** needs verification · **Priority:** P1 · **Area:** conversations, snags, shell/sync, session, AR, field verification, scanner, inspections
+- **Found:** 2026-10-06 (owner's 12-point list after the TestFlight build)
+- **Done so far:** reply-to-agent continuation + Next-actions chips; snag AI defect boxes, walk-mode bottom sheet, snag 503 state removed (server relaxes `c2o_findings` at boot); safe-area sync banner + "Waiting to send" sheet with per-item reasons; global tap-outside keyboard dismiss; refresh-token sessions (+ Keychain re-login fallback); AR card on by default with demo; Verify in 3D ready-handshake fix + error states; Scans page with 500/90-day history; inspection submit states (server gate exemption). App: analyze 0 errors, 976 tests pass (1 pre-existing `qr_payload_test`, P-003). Server 44c4082: 2460 vitest, tsc 0.
+- **Left:** deploy server 44c4082 to dev (then run `npm run seed:ar-demo` / Demo Data "AR demo model"); on an iPhone (incl. SE + Arabic): banner position + sheet, keyboard dismiss in chat/forms, no password prompt after 1 h and after a day, AR card + demo room, Verify in 3D open/select/Verify/Flag + lock-and-return, Scans page, snag walk sheet + boxes, reply without @ gets an answer, inspection submit after a stale check-in. Owner decision: keep or drop the Keychain password fallback. `scan_history` is kept on sign-out (per user). Web office screen doesn't draw snag boxes yet.
+- **Server pointers:** `docs/kb/pending/2026-10-06-{reply-continuation-live-check,snag-boot-step-and-highlights-unverified,technician-refresh-deploy,inspection-submit-gate-deploy-and-device-check}.md`
 
 ### P-028 · iOS: first TestFlight build (`com.fusionapps.fieldops`, team `82QNNH4KJZ`), never run on a device
 - **Status:** partial · **Priority:** P2 · **Area:** iOS build and release (`ios/`, `packages/fe_ar/ios`, `lib/core/push`)

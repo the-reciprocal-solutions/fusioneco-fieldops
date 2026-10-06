@@ -22,9 +22,45 @@ final arDoorAvailableProvider =
   return ref.watch(arRepositoryProvider).isArAvailable(floorId: key.floorId, assetId: key.assetId);
 });
 
-/// The dashboard's AR card: client flag on and at least one building with AR.
+/// Does any building this technician can see have a published AR model?
+/// False when the client switched AR off. Says what the dashboard card
+/// offers; it does not decide whether the card shows ([arCardModeProvider]).
 final arAnyBuildingProvider = FutureProvider.autoDispose<bool>((ref) async {
   final enabled = ref.watch(authControllerProvider.select((s) => s.permissions.isArView)) != false;
   if (!enabled) return false;
   return ref.watch(arRepositoryProvider).anyArBuilding();
+});
+
+/// What the dashboard's AR card shows.
+enum ArCardMode {
+  /// The client explicitly set `isArView = false`.
+  hidden,
+
+  /// Still asking whether a published model exists: the card shows its
+  /// usual actions without the "no model" line, so it doesn't flicker.
+  checking,
+
+  /// At least one building has a published AR model.
+  models,
+
+  /// No published model anywhere: "No AR model for your buildings yet",
+  /// with the demo room and "Scan an AR board".
+  noModels,
+}
+
+/// AR is on by default on the phone (owner, 2026-10-06: "make AR active by
+/// default"). This supersedes the 2026-09-27 rule that the card shows only
+/// for clients with a published model: now only an explicit
+/// `isArView == false` hides it. "Show in AR" doors on assets and orders
+/// still need a model for that floor ([arDoorAvailableProvider]) — a door
+/// into an empty AR screen helps nobody — and never replace "View in 3D".
+final arCardModeProvider = Provider.autoDispose<ArCardMode>((ref) {
+  final enabled = ref.watch(authControllerProvider.select((s) => s.permissions.isArView)) != false;
+  if (!enabled) return ArCardMode.hidden;
+  final any = ref.watch(arAnyBuildingProvider);
+  return switch (any) {
+    AsyncData(:final value) => value ? ArCardMode.models : ArCardMode.noModels,
+    AsyncError() => ArCardMode.noModels,
+    _ => ArCardMode.checking,
+  };
 });

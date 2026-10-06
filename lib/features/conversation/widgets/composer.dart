@@ -5,6 +5,7 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../core/conversation/mention_parser.dart';
+import '../../../core/conversation/next_steps.dart';
 import '../../../domain/conversation.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
@@ -166,10 +167,14 @@ class ConversationComposerState extends State<ConversationComposer> {
             orchestratorRole: 'conv.flow_agent_role'.getString(context),
             fallbackPeople: widget.fallbackPeople,
           );
-    final asksAgent = mentionsAgent(text, agentHandles: {
-      for (final c in _fetched)
-        if (c.isAgent) c.handle,
-    });
+    // Replying under an agent's answer reaches it without typing @agent
+    // (server continuation.ts), so no "add @agent" nudge there.
+    final toAgent = replyReachesAgent(widget.replyingTo, canMentionAgents: widget.canMentionAgents);
+    final asksAgent = toAgent ||
+        mentionsAgent(text, agentHandles: {
+          for (final c in _fetched)
+            if (c.isAgent) c.handle,
+        });
     final wantsSchedule = looksLikeScheduleRequest(text);
 
     return Container(
@@ -189,7 +194,8 @@ class ConversationComposerState extends State<ConversationComposer> {
               onPick: _pick,
               maxHeight: widget.pickerMaxHeight,
             ),
-          if (widget.replyingTo != null) _ReplyBanner(message: widget.replyingTo!, onCancel: widget.onCancelReply),
+          if (widget.replyingTo != null)
+            _ReplyBanner(message: widget.replyingTo!, toAgent: toAgent, onCancel: widget.onCancelReply),
           if (text.isEmpty && widget.canMentionAgents && q == null)
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -362,8 +368,11 @@ class MentionPickerList extends StatelessWidget {
 }
 
 class _ReplyBanner extends StatelessWidget {
-  const _ReplyBanner({required this.message, this.onCancel});
+  const _ReplyBanner({required this.message, this.toAgent = false, this.onCancel});
   final ConvMessage message;
+
+  /// The agent answers this reply (no @agent needed) — say so.
+  final bool toAgent;
   final VoidCallback? onCancel;
 
   @override
@@ -377,7 +386,7 @@ class _ReplyBanner extends StatelessWidget {
         const SizedBox(width: 6),
         Expanded(
           child: AppText.caption(
-            convTr(context, 'conv.replying_to', [message.author.name]),
+            convTr(context, toAgent ? 'conv.replying_to_agent' : 'conv.replying_to', [message.author.name]),
             color: FeColors.ink2,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

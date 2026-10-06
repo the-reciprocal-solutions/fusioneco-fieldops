@@ -17,8 +17,10 @@ import '../../core/ar/marker_code.dart';
 import '../../core/c2o/c2o_asset_resolver.dart';
 import '../../core/c2o/route_pack.dart';
 import '../../core/permit/permit_gas.dart';
+import '../../core/scanner/scan_history.dart';
 import '../../core/utils/qr_payload.dart';
 import '../../state/providers.dart';
+import '../../state/scan_history_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../theme/theme_extensions.dart';
 import '../../widgets/app_text.dart';
@@ -98,6 +100,19 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   String? _lastScanned;
   Timer? _cooldown;
 
+  /// When this scanner session began: the Scans page lists the scans from
+  /// here on first ("This session").
+  final _sessionStart = DateTime.now();
+
+  /// Writes the scan to the phone's history (lib/core/scanner/scan_history.dart).
+  /// Fire and forget: the history must never slow or stop scanning.
+  void _remember(ScanRecord Function(String id, String userId, DateTime at) build) {
+    final userId = ref.read(scanUserIdProvider);
+    if (userId == null) return;
+    final history = ref.read(scanHistoryProvider);
+    unawaited(history.record(build(history.newId(), userId, history.now())));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -142,6 +157,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     // after nothing else has claimed the value.
     final markerCode = MarkerCode.fromScan(raw, allowBare: false);
     if (markerCode != null) {
+      _remember((id, user, at) => scanRecordForOther(
+            id: id,
+            userId: user,
+            at: at,
+            raw: raw,
+            kind: ScanKind.marker,
+            code: markerCode,
+            target: Routes.arMarker(markerCode),
+          ));
       await _buzz();
       if (!mounted) return;
       setState(() => _processing = false);
@@ -158,6 +182,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     // C2O/AR scan precedence CLAUDE.md documents.
     final permitToken = permitCheckTokenFromScan(raw);
     if (permitToken != null) {
+      _remember((id, user, at) => scanRecordForOther(
+            id: id,
+            userId: user,
+            at: at,
+            raw: raw,
+            kind: ScanKind.permit,
+            code: shortCode(permitToken),
+            target: Routes.permitByToken(permitToken),
+          ));
       await _buzz();
       if (!mounted) return;
       setState(() => _processing = false);
@@ -179,6 +212,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       final offRoute = _activeRouteAssetIds != null &&
           c2oResult is C2oResolved &&
           !_activeRouteAssetIds!.contains(c2oResult.assetId);
+      _remember((id, user, at) => scanRecordForC2o(
+            id: id,
+            userId: user,
+            at: at,
+            raw: raw,
+            outcome: c2oResult,
+            offRoute: offRoute,
+          ));
       // Continuous mode (FR-1.2): join the session log and flash the
       // outcome, but never block — the camera keeps looking immediately.
       _c2oFlashTimer?.cancel();
@@ -204,6 +245,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     switch (resolution) {
       case final ScannedRecord record:
+        _remember((id, user, at) => scanRecordForLabel(
+              id: id,
+              userId: user,
+              at: at,
+              raw: raw,
+              record: record,
+              webBaseUrl: Env.webBaseUrl,
+            ));
         // One of ours. Hold it on screen behind a confirm tap.
         setState(() {
           _result = record;
@@ -212,6 +261,22 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         });
       case ScannedExternal(:final value, :final isUrl):
         setState(() => _processing = false);
+        final bareMarkerCode = isUrl ? null : MarkerCode.fromScan(value);
+        _remember((id, user, at) => scanRecordForOther(
+              id: id,
+              userId: user,
+              at: at,
+              raw: raw,
+              kind: isUrl
+                  ? ScanKind.link
+                  : (bareMarkerCode != null ? ScanKind.marker : ScanKind.text),
+              code: isUrl
+                  ? (Uri.tryParse(value)?.host ?? shortCode(value, keep: 24))
+                  : (bareMarkerCode ?? shortCode(value, keep: 40)),
+              target: isUrl
+                  ? value
+                  : (bareMarkerCode != null ? Routes.arMarker(bareMarkerCode) : null),
+            ));
         if (isUrl) {
           await launchUrl(Uri.parse(value), mode: LaunchMode.externalApplication);
           if (mounted) _toast('scanner.opened_in_browser'.getString(context));
@@ -384,6 +449,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           // left to point the camera at. FeHeader here is the light
           // `.standard` variant (only the body below it goes black for the
           // camera), so this needs an ink-coloured icon, not white.
+          // Every scan, past ones included (the phone keeps them).
+          IconButton(
+            tooltip: 'scanner.history'.getString(context),
+            icon: const Icon(LucideIcons.history, size: 18, color: FeColors.ink),
+            onPressed: () => context.push(Routes.scans()),
+          ),
           IconButton(
             tooltip: 'scanner.search'.getString(context),
             icon: const Icon(LucideIcons.search, size: 18, color: FeColors.ink),
@@ -476,7 +547,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               ],
               if (result == null && _c2oHistory.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                _C2oSessionStrip(history: _c2oHistory, onOpenDetail: _openAssetDetail),
+                _C2oSessionStrip(
+                  history: _c2oHistory,
+                  onOpenDetail: _openAssetDetail,
+                  onOpenAll: () => context.push(Routes.scans(sessionSince: _sessionStart)),
+                ),
               ],
             ],
           ),
@@ -858,12 +933,19 @@ class _C2oScanEntry {
 
 /// Compact, always-visible tally of the session so far — a dot per scan,
 /// most recent first, plus a running count. Never blocks the camera; this is
-/// what "queues without returning to a list" (FR-1.2) looks like without a
-/// separate list screen.
+/// what "queues without returning to a list" (FR-1.2) looks like.
+///
+/// 2026-10-06 (owner): on a phone the dots row only has room for about two
+/// scans, and there was no way to see the rest. The whole strip now opens
+/// the Scans page ([onOpenAll]) with every scan of this session first and
+/// the phone's past scans below; a resolved dot still opens its asset.
 class _C2oSessionStrip extends StatelessWidget {
-  const _C2oSessionStrip({required this.history, required this.onOpenDetail});
+  const _C2oSessionStrip({required this.history, required this.onOpenDetail, required this.onOpenAll});
 
   final List<_C2oScanEntry> history;
+
+  /// Opens the Scans page.
+  final VoidCallback onOpenAll;
 
   /// Opens a resolved entry's FR-2 detail screen. Only ever called for a
   /// [C2oResolved] entry — there is nothing to open for a mismatch, a
@@ -876,10 +958,10 @@ class _C2oSessionStrip extends StatelessWidget {
     final flagged = history.length - resolved;
     final offRoute = history.where((e) => e.offRoute).length;
 
-    return Container(
+    final strip = Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E),
+        color: Colors.white.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
       ),
@@ -987,7 +1069,25 @@ class _C2oSessionStrip extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(width: 6),
+          AppText(
+            'scans.view_all'.getString(context),
+            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
+          ),
+          Icon(LucideIcons.chevronRight, size: 16, color: Colors.white.withValues(alpha: 0.8)),
         ],
+      ),
+    );
+    return Semantics(
+      button: true,
+      label: 'scans.view_all'.getString(context),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onOpenAll,
+          borderRadius: BorderRadius.circular(12),
+          child: strip,
+        ),
       ),
     );
   }

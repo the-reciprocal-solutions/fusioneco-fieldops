@@ -22,8 +22,8 @@ enum SnagSendState {
   /// Queued; the session expired (401). Sends after the next sign-in.
   waitingSignIn,
 
-  /// Queued; the server failed (5xx) or is not taking snags yet. Retries
-  /// on its own — snag writes are never dropped for a server failure.
+  /// Queued; the server failed (5xx). Retries on its own — snag writes are
+  /// never dropped for a server failure.
   retrying,
 
   /// Not queued and not on the server: the server refused it (4xx), or an
@@ -70,10 +70,12 @@ SnagSendStatus snagSendStatus(Snag s, {required bool queued, required bool flush
       return const SnagSendStatus(SnagSendState.waitingSignIn, reasonKey: 'snags.send.signin_hint');
     }
     if (flushing) return const SnagSendStatus(SnagSendState.sending);
-    return SnagSendStatus(
-      SnagSendState.retrying,
-      reasonKey: issue.code == 'SNAG_ENGINE_NOT_ENABLED' ? 'snags.send.not_enabled_hint' : 'snags.send.retrying_hint',
-    );
+    // Any server-side failure — including an older server's
+    // `503 SNAG_ENGINE_NOT_ENABLED` — reads the same calm "keeps trying".
+    // Snags are a core feature on for every site (2026-10-06: the server now
+    // enables its own storage at boot), so the phone never tells a
+    // technician that snags are "not switched on" (owner iPhone test).
+    return const SnagSendStatus(SnagSendState.retrying, reasonKey: 'snags.send.retrying_hint');
   }
   if (issue != null && issue.dropped) {
     return SnagSendStatus(SnagSendState.notSent, reasonKey: refusedReasonKey(issue));

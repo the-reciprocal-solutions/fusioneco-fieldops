@@ -40,14 +40,15 @@ void main() {
     expect(st(_snag(localOnly: true, issue: _issue(401)), queued: true).state, SnagSendState.waitingSignIn);
   });
 
-  test('queued after a 5xx → retrying; engine-not-enabled gets its own words', () {
+  test('queued after a 5xx → retrying; an older server\'s engine-not-enabled reads the same, never "not switched on"', () {
     final r = st(_snag(localOnly: true, issue: _issue(500)), queued: true);
     expect(r.state, SnagSendState.retrying);
     expect(r.reasonKey, 'snags.send.retrying_hint');
-    expect(
-      st(_snag(localOnly: true, issue: _issue(503, code: 'SNAG_ENGINE_NOT_ENABLED')), queued: true).reasonKey,
-      'snags.send.not_enabled_hint',
-    );
+    // Snags are on for every site (owner iPhone test, 2026-10-06): no
+    // separate "not switched on for your site" state any more.
+    final legacy = st(_snag(localOnly: true, issue: _issue(503, code: 'SNAG_ENGINE_NOT_ENABLED')), queued: true);
+    expect(legacy.state, SnagSendState.retrying);
+    expect(legacy.reasonKey, 'snags.send.retrying_hint');
   });
 
   test('refused (dropped 4xx) and not queued → Not sent with a plain reason and Retry', () {

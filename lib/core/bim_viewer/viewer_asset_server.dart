@@ -32,6 +32,10 @@ class ViewerAssetServer {
   final ViewerAssetLoader _loadAsset;
   final String _token;
   HttpServer? _server;
+
+  /// The port of the last bind, reused by the next [start] so a page already
+  /// loaded from `base` keeps working after a [suspend] (see there).
+  int? _lastPort;
   final _assetCache = <String, List<int>>{};
   var _tiles = <String, String>{};
 
@@ -67,12 +71,47 @@ class ViewerAssetServer {
   /// What viewer.js prefixes to `<hash>.glb` (the `setTiles` command's base).
   String get tilesBase => '${base}tiles/';
 
+  /// Binds (again). After a [suspend] it asks for the same port first, so
+  /// [base] — and every URL the page already holds — stays valid; only if
+  /// that port was taken meanwhile does it fall back to a new one (callers
+  /// compare [base] before and after and reload the page then).
   Future<void> start() async {
     if (_server != null) return;
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    HttpServer? server;
+    final want = _lastPort;
+    if (want != null) {
+      try {
+        server = await HttpServer.bind(InternetAddress.loopbackIPv4, want);
+      } catch (_) {
+        server = null; // taken: a new port below
+      }
+    }
+    server ??= await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.autoCompress = false; // GLBs are meshopt-compressed already
     _server = server;
-    server.listen(_handle, onError: (_) {});
+    _lastPort = server.port;
+    final bound = server;
+    server.listen(
+      _handle,
+      onError: (_) {},
+      // iOS reclaims a suspended app's listening sockets; the stream then
+      // ends. Forget the dead server so the next [start] binds again.
+      onDone: () {
+        if (identical(_server, bound)) _server = null;
+      },
+    );
+  }
+
+  /// Stops listening but keeps the token, the registered tiles and the port
+  /// for the next [start]. The engine calls this when the app goes to the
+  /// background: on iOS a suspended app's listening socket is reclaimed by
+  /// the system, and a server that silently died would leave the page
+  /// unable to fetch a single tile after the phone was locked once
+  /// (Apple TN2277; GCDWebServer does the same stop/start dance).
+  Future<void> suspend() async {
+    final s = _server;
+    _server = null;
+    await s?.close(force: true);
   }
 
   /// Replaces the set of tiles the page may fetch: content hash → file.
@@ -84,6 +123,8 @@ class ViewerAssetServer {
   }
 
   Future<void> close() async {
+    _lastPort = null;
+    _tiles = {};
     final s = _server;
     _server = null;
     await s?.close(force: true);

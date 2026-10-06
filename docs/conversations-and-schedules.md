@@ -136,6 +136,39 @@ sequenceDiagram
   R-->>T: reply in thread (tinted), bubble goes
 ```
 
+## Replying to an agent and actionable answers (2026-10-06, second round)
+
+Owner on an iPhone: *"Reply to agent does not trigger an agent response"* and *"the agents' response should be an actionable next step… rather than giving the 'remind me' template for all responses."*
+
+**Root causes (all server-side; the app was sending the right thing).**
+- The Reply button sends `replyTo` = the little thread's root (`replyTargetFor`, replies are one level deep) and no `@`. The server started agents **only** for an explicit `@mention`, so the reply asked nobody.
+- `hasScheduleIntent` read "check / look / show me / give me" + "today / morning / each / every / until / at 5pm" + "me" as a schedule, so plain questions got a Schedule card or "When should I…?".
+- An old clarifying question swallowed every later reply in its little thread as the timing answer.
+- Every Flow Agent answer ended with the same two schedule chips ("Check this again tomorrow at 09:00", "Tell me when … is closed").
+
+**Now.** A plain reply under an agent's answer continues with that agent (same guards: one live session per thread, per-hour cap, offline reply, suggest-only; "thanks"/"ok" and replies naming a person don't wake it). Its run gets the earlier question and answer. Schedules are captured only for a clear later / repeat ask. The answer leads with "**Next actions**" (one to three field steps: what to check or measure, raise a snag, request a permit, escalate; "not in the records" instead of invented values). Schedule chips appear only under progress questions ("is it fixed?").
+
+**App side.**
+- `ConvMessage.nextSteps` (`domain/conversation.dart`, `ConvNextStep`): one-tap chips under an agent reply (`message_tile.dart`) — **Raise a snag** (pre-filled asset / work order / building → `Routes.snagNew`), **Open the asset** (`Routes.assetDetail`), **Permits** (`Routes.permits`). Each only opens a screen (`core/conversation/next_steps.dart routeForNextStep`, pushed from `conversation_view.dart`); nothing is written until the technician saves there. Unknown actions are dropped. Agent cards stay read-only ("Needs an admin's OK").
+- Composer: replying to an agent's message says "Replying to Flow Agent — it will answer" (`conv.replying_to_agent`) and drops the "add @agent" nudge (`replyReachesAgent`). The clarify "Answer" button still pre-fills `@agent` (harmless; a plain timing reply works too).
+- The fast poll after a reply already follows `invoked` from the server, so a continued run shows the thinking bubble like an `@agent` post.
+
+```mermaid
+sequenceDiagram
+  participant T as Technician (FieldOps)
+  participant API as POST /api/conversations/.../messages
+  participant C as continuation.ts
+  participant R as Flow Agent run
+  T->>API: Reply under the answer: "belt looks worn — what about the bearing?" (replyTo = root, no @)
+  API->>C: last word in the little thread from someone else = Flow Agent?
+  C-->>API: yes → startOrchestrator({followUp: earlier Q + answer})
+  API-->>T: 201 {invoked:[session]} → refresh + 5 s poll, thinking bubble
+  R-->>T: "Bearing limit is not in the records." + **Next actions** 1–3 + chips [Raise a snag] [Permits]
+  T->>T: tap Raise a snag → /snags/new pre-filled (nothing saved yet)
+```
+
+Tests: `test/conversation_next_steps_test.dart` (parse, routes, reply hint, chips and banner in EN/AR at 320 pt). Server: `src/services/conversations/__tests__/replyContinuation.test.ts`. **Not verified on a phone**, and the dev server the phone uses runs older server code until it is deployed.
+
 ## What was only simulated / not verified
 
 - **No live server run.** Every shape comes from the server's `types.ts` and the spec's contract sections, and was checked only by parsing tests.

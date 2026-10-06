@@ -231,6 +231,7 @@ class ConvMessage {
     this.scheduleDeleted = false,
     this.followUps = const [],
     this.clarify,
+    this.nextSteps = const [],
     this.outgoing = OutgoingState.sent,
     this.failure,
   });
@@ -269,6 +270,10 @@ class ConvMessage {
   /// this message with another `@agent` message (C1).
   final String? clarify;
 
+  /// One-tap next steps under an agent reply (2026-10-06): each only OPENS a
+  /// screen — raise a snag pre-filled, open the asset, permits. Never writes.
+  final List<ConvNextStep> nextSteps;
+
   /// Local-only: a message this phone is still sending (or holding offline).
   final OutgoingState outgoing;
 
@@ -301,6 +306,7 @@ class ConvMessage {
     scheduleDeleted: scheduleDeleted,
     followUps: followUps,
     clarify: clarify,
+    nextSteps: nextSteps,
     outgoing: outgoing ?? this.outgoing,
     failure: clearFailure ? null : (failure ?? this.failure),
   );
@@ -348,7 +354,45 @@ class ConvMessage {
       scheduleDeleted: cardHasWrapper && inner == null,
       followUps: maps(json['followUps']).map(ConvFollowUp.fromJson).where((f) => f.label.isNotEmpty).toList(),
       clarify: clarify is Map ? firstNonEmpty([clarify['question']]) : null,
+      nextSteps: maps(json['nextSteps']).map(ConvNextStep.fromJson).whereType<ConvNextStep>().toList(),
     );
+  }
+}
+
+/// What a [ConvNextStep] opens. Unknown server actions are dropped.
+enum ConvNextStepAction { raiseSnag, openAsset, openPermits }
+
+/// A one-tap next step under an agent reply (server `NextStepAction`). It
+/// opens a screen with [target] pre-filled; nothing is written until the
+/// person saves on that screen.
+class ConvNextStep {
+  const ConvNextStep({required this.id, required this.action, this.label = '', this.target = const {}});
+  final String id;
+  final ConvNextStepAction action;
+
+  /// The server's English label (the app words it from [action]).
+  final String label;
+
+  /// `assetId`, `assetName`, `assetRef`, `workOrderId`, `buildingId` — all optional strings.
+  final Map<String, String> target;
+
+  static ConvNextStep? fromJson(Map<String, dynamic> json) {
+    final action = switch (json['action']?.toString()) {
+      'raise_snag' => ConvNextStepAction.raiseSnag,
+      'open_asset' => ConvNextStepAction.openAsset,
+      'open_permits' => ConvNextStepAction.openPermits,
+      _ => null,
+    };
+    if (action == null) return null;
+    final raw = json['target'];
+    final target = <String, String>{
+      if (raw is Map)
+        for (final e in raw.entries)
+          if (e.value != null && e.value.toString().trim().isNotEmpty) e.key.toString(): e.value.toString().trim(),
+    };
+    // Opening an asset needs its id.
+    if (action == ConvNextStepAction.openAsset && (target['assetId'] ?? '').isEmpty) return null;
+    return ConvNextStep(id: json['id']?.toString() ?? action.name, action: action, label: json['label']?.toString() ?? '', target: target);
   }
 }
 

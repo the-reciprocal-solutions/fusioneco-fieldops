@@ -10,6 +10,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
 import '../../core/conversation/mention_parser.dart';
+import '../../core/conversation/next_steps.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/conversation/thread_layout.dart';
 import '../../domain/conversation.dart';
@@ -134,11 +135,19 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
     _composer.currentState?.focus();
   }
 
-  /// The Flow Agent asked one question: the answer is an @agent message
-  /// replying to it (the server reads it with the pending request).
+  /// The Flow Agent asked one question: the answer is a reply to it (the
+  /// server reads the next timing-like reply with the pending request; the
+  /// @agent prefill is kept so the text reads the same on the web).
   void _answer(ConvMessage m) {
     setState(() => _replyTo = m);
     _composer.currentState?.prefill('@$kOrchestratorHandle ');
+  }
+
+  /// A next step under an agent reply: open the screen (raise a snag
+  /// pre-filled, the asset, permits). Never a bottom-nav branch, so `push`.
+  void _nextStep(ConvNextStep s) {
+    _hideKeyboard();
+    unawaited(context.push(routeForNextStep(s)));
   }
 
   Future<void> _followUp(ConvMessage m, ConvFollowUp f) async {
@@ -441,6 +450,7 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
             onFollowUp: (f) => _followUp(message, f),
             acceptedFollowUps: _acceptedFollowUps,
             onAnswer: () => _answer(message),
+            onNextStep: _nextStep,
           ),
         );
     }

@@ -388,12 +388,27 @@ class BimMeasure extends BimViewEvent {
 }
 
 /// `NO_WEBGL`, `NO_WASM`, `CONTEXT_LOST`, `SCRIPT`, `COMMAND_FAILED`,
-/// `UNKNOWN_COMMAND`, or `LOAD_FAILED` (Dart side: the page never came up).
+/// `UNKNOWN_COMMAND`, or, from the Dart side: `LOAD_FAILED` (the page never
+/// came up), `NOT_READY` (it loaded but never said `ready` in time) and
+/// `RELOADING` (the page is being reloaded — iOS killed its process, or the
+/// loopback server came back on another port — so a `ready` follows and
+/// the floor must be sent again).
+///
+/// [message] is for logs only. It is never shown: the screen words every
+/// state itself.
 class BimViewerError extends BimViewEvent {
   const BimViewerError({required this.code, this.message});
   final String code;
   final String? message;
 
-  /// The page can't draw at all; show the 2D plan only.
-  bool get fatal => code == 'NO_WEBGL' || code == 'NO_WASM' || code == 'LOAD_FAILED' || code == 'CONTEXT_LOST';
+  /// The page can't draw at all; show the 2D plan only (with a Retry).
+  bool get fatal =>
+      code == 'NO_WEBGL' ||
+      code == 'NO_WASM' ||
+      code == 'LOAD_FAILED' ||
+      code == 'NOT_READY' ||
+      code == 'CONTEXT_LOST';
+
+  /// A fresh page is coming: forget what was sent to the old one.
+  bool get reloading => code == 'RELOADING';
 }

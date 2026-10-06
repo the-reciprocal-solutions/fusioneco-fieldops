@@ -14,6 +14,7 @@ import 'offline_db.dart';
 import 'queue_bus.dart';
 import 'replay_hooks.dart';
 import 'replay_notices.dart';
+import 'waiting_reasons.dart';
 
 /// The one line shown anywhere a write lands in the offline queue instead of
 /// the server — a note, a photo, a voice recording, a session, a close, an
@@ -105,6 +106,16 @@ class SyncClient {
 
   /// See [onReplayFailed]. One hook per entity type.
   final _failureHooks = <String, ReplayFailureHook>{};
+
+  /// Why each queued write did not go on its last replay, keyed by mutation
+  /// id — what the "Waiting to send" sheet explains (2026-10-06, owner: "1
+  /// change waiting to sync" sat there for days with no way to see why).
+  /// In memory: the next flush (≤ 20 s) rebuilds it after a restart, and a
+  /// lost entry only reads as "not sent yet".
+  final _lastStatus = <String, ReplayStatus>{};
+
+  /// Read-only view of the last replay outcome per queued mutation id.
+  Map<String, ReplayStatus> get lastReplayStatus => Map.unmodifiable(_lastStatus);
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   Timer? _pollTimer;
@@ -463,9 +474,19 @@ class SyncClient {
             includeRefusals: true,
           );
           await _db.deleteMutation(mutation.clientMutationId);
+          _lastStatus.remove(mutation.clientMutationId);
           replayed.add((entityType: mutation.entityType, entityId: mutation.entityId));
           changed = true;
         } on NetworkFailure {
+          // Stops the run (ordering). Told apart for the sheet: no signal at
+          // all, or signal but no answer for this one (a timeout, a stalled
+          // upload) — the second used to look identical and could hold the
+          // whole queue with nothing on screen saying why.
+          _lastStatus[mutation.clientMutationId] = ReplayStatus(
+            await _isOfflineSafe() ? WaitKind.network : WaitKind.noAnswer,
+            at: DateTime.now(),
+          );
+          changed = true;
           break;
         } on ApiFailure catch (e) {
           // An HttpFailure: the 428 location-gate trap: `middleware/auth.ts`
@@ -492,13 +513,20 @@ class SyncClient {
             maxAttempts: Env.maxMutationAttempts,
             keepOnServerError: kKeepOnServerErrorEntityTypes.contains(mutation.entityType),
           );
+          final code = _codeOf(e);
           await _reportFailure(
             mutation,
-            ReplayFailure(status: status, outcome: outcome, code: _codeOf(e)),
+            ReplayFailure(status: status, outcome: outcome, code: code),
           );
           switch (outcome) {
             case FlushOutcome.stopRun:
               stopped = true;
+              _lastStatus[mutation.clientMutationId] = ReplayStatus(
+                status == 428 ? WaitKind.location : WaitKind.signIn,
+                status: status,
+                at: DateTime.now(),
+              );
+              changed = true;
             case FlushOutcome.drop:
               await _db.addConflict(
                 label: mutation.label,
@@ -506,15 +534,39 @@ class SyncClient {
                 reason: e.message,
               );
               await _db.deleteMutation(mutation.clientMutationId);
+              _lastStatus.remove(mutation.clientMutationId);
               changed = true;
             case FlushOutcome.retryLater:
               await _db.bumpAttempts(
                 mutation.clientMutationId,
                 mutation.attempts + 1,
               );
+              _lastStatus[mutation.clientMutationId] = ReplayStatus(
+                code != null ? WaitKind.serverNotReady : WaitKind.serverBusy,
+                status: status,
+                code: code,
+                at: DateTime.now(),
+              );
               changed = true;
           }
           if (stopped) break;
+        } catch (e) {
+          // Anything that is not an ApiFailure — a body that no longer
+          // encodes, a local file error, a bug — used to escape the loop and
+          // abort the whole flush, on every run, forever: a "poisoned" item
+          // that blocked everything queued after it and was never counted or
+          // shown. Now it is kept (never dropped automatically: it may be the
+          // only copy of field evidence), counted, explained in the sheet
+          // ("couldn't be prepared on this phone", Retry / Discard), and the
+          // run moves on to the next item.
+          _lastStatus[mutation.clientMutationId] = ReplayStatus(
+            WaitKind.appError,
+            at: DateTime.now(),
+          );
+          try {
+            await _db.bumpAttempts(mutation.clientMutationId, mutation.attempts + 1);
+          } catch (_) {}
+          changed = true;
         }
 
         // Renew the lease after every item, so a long drain over a slow
@@ -541,6 +593,35 @@ class SyncClient {
       }
       _flushAgain = false;
     }
+  }
+
+  Future<bool> _isOfflineSafe() async {
+    try {
+      return await isOffline;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// "Retry" on one item in the "Waiting to send" sheet: the normal flush,
+  /// oldest first, up to that item — the only replay path (LEARNINGS
+  /// "Retrying one queued item must reuse the normal flush logic"). If a run
+  /// is already going, it runs once more when it ends.
+  Future<void> retryMutation(String clientMutationId) async {
+    if (_flushing) {
+      _flushAgain = true;
+      return;
+    }
+    await flushQueue(stopAfterId: clientMutationId);
+  }
+
+  /// "Discard" in the sheet, after the technician confirmed: the write is
+  /// deleted from this phone and never sent. Not logged as a conflict — it
+  /// was the technician's own choice, not a refusal.
+  Future<void> discardMutation(String clientMutationId) async {
+    await _db.deleteMutation(clientMutationId);
+    _lastStatus.remove(clientMutationId);
+    _bus.notify();
   }
 
   static String? _codeOf(ApiFailure e) {

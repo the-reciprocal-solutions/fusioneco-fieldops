@@ -1,10 +1,14 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../../domain/snag.dart';
 import '../../../domain/snag_ai.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
+import 'snag_region_overlay.dart';
 import 'snag_visuals.dart';
 
 /// One suggestion the technician can apply.
@@ -38,6 +42,9 @@ class SnagAiPanel extends StatelessWidget {
     required this.onApplyAll,
     this.onOpenDuplicate,
     this.hasPhoto = true,
+    this.photo,
+    this.regions = const [],
+    this.onDeleteRegion,
   });
 
   final bool running;
@@ -48,6 +55,12 @@ class SnagAiPanel extends StatelessWidget {
   final VoidCallback onApplyAll;
   final ValueChanged<SnagAiDuplicate>? onOpenDuplicate;
   final bool hasPhoto;
+
+  /// The photo the assistant looked at, and the highlights still kept on it
+  /// (the caller owns the list: [onDeleteRegion] removes a wrong box).
+  final Uint8List? photo;
+  final List<SnagRegion> regions;
+  final ValueChanged<int>? onDeleteRegion;
 
   @override
   Widget build(BuildContext context) {
@@ -135,6 +148,19 @@ class SnagAiPanel extends StatelessWidget {
               ] else if (fields.isEmpty) ...[
                 const SizedBox(height: 8),
                 AppText.bodySmall('snags.ai.nothing'.getString(context), color: FeColors.ink2),
+              ],
+              // Where the defect is: the photo with the AI's highlights, so the
+              // technician sees what it means before applying anything.
+              if (r.status == SnagAiStatus.ok && photo != null && regions.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                SnagAnnotatedPhoto(
+                  image: MemoryImage(photo!),
+                  regions: regions,
+                  height: 210,
+                  onDelete: onDeleteRegion,
+                ),
+                const SizedBox(height: 4),
+                AppText.caption('snags.ai.regions_hint'.getString(context), color: FeColors.ink2),
               ],
               if (r.status == SnagAiStatus.ok && r.confidence != null && r.confidence! < 0.5) ...[
                 const SizedBox(height: 8),

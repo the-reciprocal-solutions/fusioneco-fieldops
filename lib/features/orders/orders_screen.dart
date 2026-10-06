@@ -8,6 +8,7 @@ import '../../app/router.dart';
 import '../../core/utils/dates.dart';
 import '../../domain/inspection.dart';
 import '../../domain/maintenance_record.dart';
+import '../inspection/inspection_send_flag.dart';
 import '../../state/inspection_controller.dart';
 import '../../state/orders_controller.dart';
 import '../../theme/fe_colors.dart';
@@ -518,6 +519,10 @@ class _InspectionOrderCard extends StatelessWidget {
                               ),
                             ),
                           ],
+                          InspectionSendFlag(
+                            assignmentId: inspection.id,
+                            serverStatus: inspection.status,
+                          ),
                         ],
                       ),
                     ),

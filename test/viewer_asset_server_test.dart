@@ -100,4 +100,19 @@ void main() {
     expect(() => server.base, throwsStateError);
     await expectLater(get('${base}app/index.html'), throwsA(isA<SocketException>()));
   });
+
+  // iOS reclaims a suspended app's listening socket; the engine closes the
+  // server on pause and re-binds on resume (2026-10-06). The page's URLs
+  // must survive that: same port, same token, tiles still registered.
+  test('suspend + start comes back on the same base, tiles still served', () async {
+    server.setTiles({hash: '${tmp.path}/$hash.glb'});
+    final before = server.base;
+    await server.suspend();
+    expect(server.isRunning, isFalse);
+    await server.start();
+    expect(server.base, before);
+    final (status, body, _) = await get('${server.tilesBase}$hash.glb');
+    expect(status, 200);
+    expect(utf8.decode(body), 'glTF-bytes');
+  });
 }

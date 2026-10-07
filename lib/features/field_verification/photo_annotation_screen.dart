@@ -1,9 +1,10 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_localization/flutter_localization.dart';
+import 'package:image/image.dart' as img;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../core/capture/capture_services.dart';
@@ -20,6 +21,42 @@ class _Stroke {
   final List<Offset> points = [];
 }
 
+/// FR-3.5 — the annotated photo at the PHOTO's resolution, as JPEG.
+///
+/// Marks are drawn on a view [drawnAt] pixels wide; they are replayed onto
+/// the full-size [photo] through one canvas scale, so each lands where it was
+/// drawn and keeps its size relative to the photo. This replaced capturing
+/// the on-screen view, which saved a ~720px PNG of a 1600px capture under its
+/// `.jpg` name — evidence quietly downgraded and mislabelled.
+Future<Uint8List> flattenAnnotatedPhoto(
+  ui.Image photo,
+  Size drawnAt,
+  void Function(Canvas canvas, Size drawnAt) paintMarks,
+) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder)..drawImage(photo, Offset.zero, Paint());
+  canvas.scale(photo.width / drawnAt.width, photo.height / drawnAt.height);
+  paintMarks(canvas, drawnAt);
+  final flat = await recorder.endRecording().toImage(photo.width, photo.height);
+  final rgba = await flat.toByteData(format: ui.ImageByteFormat.rawRgba);
+  final pixels = img.Image.fromBytes(
+    width: flat.width,
+    height: flat.height,
+    bytes: rgba!.buffer,
+    numChannels: 4,
+  );
+  // Same quality as every other capture path (`downscaleJpeg`).
+  return Uint8List.fromList(img.encodeJpg(pixels, quality: 80));
+}
+
+/// The annotated photo is always JPEG, so its name must say so — the upload's
+/// content type is read from the extension.
+String annotatedFileName(String original) {
+  final dot = original.lastIndexOf('.');
+  final base = dot > 0 ? original.substring(0, dot) : original;
+  return '$base.jpg';
+}
+
 /// FR-3.5 — draw an arrow, circle, or freehand mark over a captured photo
 /// before it's queued: "the crack is here" survives as a mark on the photo
 /// itself, worth more than a sentence in the notes field.
@@ -27,10 +64,8 @@ class _Stroke {
 /// Renders the photo at its exact aspect ratio (decoded via
 /// `instantiateImageCodec`, the same approach FR-2.8's floor plan viewer
 /// uses) so the drawing surface has no letterboxed dead zone — every pixel
-/// the technician can draw on is a pixel of the photo. Flattening happens by
-/// capturing that same on-screen `RepaintBoundary` rather than compositing
-/// strokes onto the original bytes by hand, so what's drawn is exactly what
-/// gets saved.
+/// the technician can draw on is a pixel of the photo. Saving replays the
+/// same strokes onto the full-size photo ([flattenAnnotatedPhoto]).
 class PhotoAnnotationScreen extends StatefulWidget {
   const PhotoAnnotationScreen({super.key, required this.photo});
 
@@ -91,15 +126,15 @@ class _PhotoAnnotationScreenState extends State<PhotoAnnotationScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      final boundary =
-          _boundaryKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-      final image = await boundary.toImage(
-        pixelRatio: MediaQuery.of(context).devicePixelRatio,
+      final drawnAt = (_boundaryKey.currentContext!.findRenderObject() as RenderBox).size;
+      final bytes = await flattenAnnotatedPhoto(
+        _decoded!,
+        drawnAt,
+        (canvas, size) => _AnnotationPainter(_strokes).paint(canvas, size),
       );
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       if (!mounted) return;
       Navigator.of(context).pop(
-        CapturedPhoto(bytes: byteData!.buffer.asUint8List(), fileName: widget.photo.fileName),
+        CapturedPhoto(bytes: bytes, fileName: annotatedFileName(widget.photo.fileName)),
       );
     } finally {
       if (mounted) setState(() => _saving = false);

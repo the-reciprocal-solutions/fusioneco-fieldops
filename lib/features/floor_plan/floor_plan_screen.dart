@@ -6,6 +6,7 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../core/network/api_exception.dart';
 import '../../data/floor_plan_repository.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
@@ -16,12 +17,10 @@ import '../../widgets/fe_header.dart';
 /// FR-2.8 — the floor plan for [assetId]'s floor, pannable/zoomable, with
 /// the asset's own position pinned on it when one has been recorded.
 ///
-/// On-demand, not automatic: nothing about this screen runs until a
-/// technician opens it from the asset detail page — most scans never need
-/// a floor plan, and the image is a few MB, too large to fetch on every
-/// scan on the offhand chance it is wanted. Once opened here while online,
-/// [FloorPlanImageCache] keeps the image on disk, so re-opening the same
-/// floor later — including fully offline — shows it instantly.
+/// Never fetched per scan — the image is a few MB. It reaches the device
+/// either when a route covering this floor is downloaded
+/// (`RouteFloorPlanPrefetcher`) or the first time it is opened here online;
+/// after that [FloorPlanImageCache] keeps it on disk, so it shows offline.
 class FloorPlanScreen extends ConsumerStatefulWidget {
   const FloorPlanScreen({
     super.key,
@@ -61,8 +60,15 @@ class _FloorPlanScreenState extends ConsumerState<FloorPlanScreen> {
     FloorPlanRecord? record;
     try {
       record = await ref.read(floorPlanRepositoryProvider).get(widget.floorId);
+    } on NetworkFailure {
+      // No signal and this floor was never downloaded. Not "no plan" — it
+      // may well have one (caught on device: offline read as "No floor
+      // plan available").
+      if (mounted) setState(() => _state = _LoadState.offlineNotCached);
+      return;
     } catch (_) {
-      record = null;
+      if (mounted) setState(() => _state = _LoadState.error);
+      return;
     }
 
     if (!mounted) return;

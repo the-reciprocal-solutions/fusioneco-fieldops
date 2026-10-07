@@ -170,6 +170,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
           longitude: fix['longitude'] as double,
           city: fix['city'] as String?,
           district: fix['district'] as String?,
+          accuracyMeters: (fix['accuracyMeters'] as num?)?.toDouble(),
         );
       }
       _draftLoaded = true;
@@ -225,6 +226,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
               'longitude': _fix!.longitude,
               'city': _fix!.city,
               'district': _fix!.district,
+              'accuracyMeters': _fix!.accuracyMeters,
             },
     });
   }
@@ -234,6 +236,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
   /// the same shot instead of only in a browser-only system camera UI.
   Future<void> _addPhoto() async {
     if (_photos.length >= _maxPhotos) return;
+    _dropFocus();
     final photo = await Navigator.of(
       context,
     ).push<CapturedPhoto>(MaterialPageRoute(builder: (_) => const CameraCaptureScreen()));
@@ -242,7 +245,15 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
     _scheduleAutosave();
   }
 
+  /// A popped route hands focus back to whichever field last had it, so a
+  /// field typed in before the camera/annotation screen re-opened the
+  /// keyboard on return. Unfocusing the focused field itself (not the
+  /// route's FocusScope, which keeps the field in its own history) clears
+  /// that history, so there is nothing left to restore.
+  void _dropFocus() => FocusManager.instance.primaryFocus?.unfocus();
+
   Future<void> _annotatePhoto(int index) async {
+    _dropFocus();
     final annotated = await Navigator.of(context).push<CapturedPhoto>(
       MaterialPageRoute(builder: (_) => PhotoAnnotationScreen(photo: _photos[index])),
     );
@@ -273,6 +284,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
   }
 
   Future<void> _scanNameplate() async {
+    _dropFocus();
     final shot = await ImagePicker().pickImage(
       source: ImageSource.camera,
       maxWidth: 2000,
@@ -332,6 +344,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
         ],
         latitude: _fix?.latitude,
         longitude: _fix?.longitude,
+        gpsAccuracy: _fix?.accuracyMeters,
         flagForReinspection: _flagReinspection,
         flagReason: _flagReinspection ? _emptyToNull(_flagReason.text) : null,
         claimedSerial: widget.claimedSerial,
@@ -648,9 +661,15 @@ class _ObservedField extends StatelessWidget {
           const SizedBox(height: 6),
           Row(
             children: [
-              AppText.caption(
-                context.formatString('fieldVerify.claimed_value'.getString(context), [claimed!]),
-                color: FeColors.ink2,
+              // Flexible + ellipsis: a long claimed id (e.g. a GUID tag)
+              // otherwise overflowed the row and pushed the button off-screen.
+              Flexible(
+                child: AppText.caption(
+                  context.formatString('fieldVerify.claimed_value'.getString(context), [claimed!]),
+                  color: FeColors.ink2,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               const SizedBox(width: 8),
               InkWell(

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:technician_portal/core/c2o/asset_detail.dart';
 import 'package:technician_portal/core/c2o/route_download_service.dart';
 import 'package:technician_portal/core/c2o/route_pack.dart';
 import 'package:technician_portal/core/offline/offline_db.dart';
@@ -79,6 +80,19 @@ class _FakeFetcher implements RouteFetcher {
   }
 }
 
+class _FakeFloorPlans implements FloorPlanPrefetcher {
+  _FakeFloorPlans({this.failFor = const {}});
+
+  final Set<String> failFor;
+  final requested = <String>[];
+
+  @override
+  Future<void> prefetch(String floorId) async {
+    requested.add(floorId);
+    if (failFor.contains(floorId)) throw StateError('no signal for $floorId');
+  }
+}
+
 Map<String, dynamic> _packJson({
   String scope = 'package',
   String id = 'pkg-1',
@@ -154,6 +168,53 @@ void main() {
       ]);
     });
 
+    test('keeps who and when of the last check, and the open findings, for FR-2.6/2.7 offline', () async {
+      // Caught on device: the detail screen showed "Mismatch" with no name
+      // or date, and never any findings, for an asset read from a pack.
+      final assetCache = _FakeAssetCache();
+      final fetcher = _FakeFetcher(
+        packAnswer: _packJson(
+          assets: [
+            {
+              'id': 'asset-1',
+              'assetName': 'Chiller',
+              'lastVerification': {
+                'result': 'mismatch',
+                'verifiedAt': '2026-09-25T05:40:41.326Z',
+                'verifiedByName': 'Daniel Okafor',
+                'discrepancies': ['serialNumber'],
+              },
+              'openFindingCount': 1,
+              'openFindings': [
+                {
+                  'id': 'f-1',
+                  'severity': 'error',
+                  'message': 'Serial does not match the register',
+                  'fixHint': 'Re-check the nameplate',
+                  'ruleName': 'Field verification',
+                  'createdAt': '2026-09-25T05:40:41.326Z',
+                },
+              ],
+            },
+          ],
+        ),
+      );
+      final service = RouteDownloadService(
+        fetcher: fetcher,
+        assetCache: assetCache,
+        routeStore: _FakeRouteStore(),
+      );
+
+      await service.download(scope: RouteScope.package, id: 'pkg-1');
+
+      final detail = AssetDetail.fromClaims(assetCache.rows['asset-1']!.claims)!;
+      expect(detail.lastCheck!.result, 'mismatch');
+      expect(detail.lastCheck!.verifiedByName, 'Daniel Okafor');
+      expect(detail.lastCheck!.verifiedAt, DateTime.parse('2026-09-25T05:40:41.326Z'));
+      expect(detail.openFindings, hasLength(1));
+      expect(detail.openFindings.single.message, 'Serial does not match the register');
+    });
+
     test('an asset with no prior verification gets an empty history, not a null crash', () async {
       final assetCache = _FakeAssetCache();
       final fetcher = _FakeFetcher(
@@ -217,6 +278,57 @@ void main() {
 
       expect(fetcher.lastScope, 'system');
       expect(fetcher.lastProjectId, 'proj-1');
+    });
+  });
+
+  group('RouteDownloadService.download — floor plans (FR-2.8)', () {
+    // Caught on device: a route walked offline never had a floor plan,
+    // because plans were only ever fetched when opened online.
+    test('prefetches each floor the route touches, once', () async {
+      final floorPlans = _FakeFloorPlans();
+      final service = RouteDownloadService(
+        fetcher: _FakeFetcher(
+          packAnswer: _packJson(
+            assets: [
+              {'id': 'a1', 'floorID': 'floor-1'},
+              {'id': 'a2', 'floorID': 'floor-1'},
+              {'id': 'a3', 'floorID': 'floor-2'},
+              {'id': 'a4'},
+              {'id': 'a5', 'floorID': ''},
+            ],
+          ),
+        ),
+        assetCache: _FakeAssetCache(),
+        routeStore: _FakeRouteStore(),
+        floorPlans: floorPlans,
+      );
+
+      await service.download(scope: RouteScope.package, id: 'pkg-1');
+
+      expect(floorPlans.requested, unorderedEquals(['floor-1', 'floor-2']));
+    });
+
+    test('a floor that fails to prefetch does not fail the route download', () async {
+      final routeStore = _FakeRouteStore();
+      final floorPlans = _FakeFloorPlans(failFor: {'floor-1'});
+      final service = RouteDownloadService(
+        fetcher: _FakeFetcher(
+          packAnswer: _packJson(
+            assets: [
+              {'id': 'a1', 'floorID': 'floor-1'},
+              {'id': 'a2', 'floorID': 'floor-2'},
+            ],
+          ),
+        ),
+        assetCache: _FakeAssetCache(),
+        routeStore: routeStore,
+        floorPlans: floorPlans,
+      );
+
+      await service.download(scope: RouteScope.package, id: 'pkg-1');
+
+      expect(routeStore.saved, hasLength(1));
+      expect(floorPlans.requested, unorderedEquals(['floor-1', 'floor-2']));
     });
   });
 

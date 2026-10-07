@@ -12,9 +12,10 @@ import 'package:path_provider/path_provider.dart';
 /// image's URL changes (a re-upload gets a new URL, so the old file is
 /// simply never looked up again — no explicit invalidation needed).
 ///
-/// On-demand, not automatic: nothing downloads a plan until a technician
-/// actually opens one, per the FR-2.8 scoping — most scans never need it,
-/// and these files are too large to prefetch on every scan.
+/// Never prefetched per scan — these files are too large for that. Filled
+/// either on first open, or when a route is downloaded (the technician is
+/// deliberately preparing to lose signal, and a route touches few floors —
+/// see `RouteFloorPlanPrefetcher`).
 class FloorPlanImageCache {
   FloorPlanImageCache({Dio? dio}) : _dio = dio ?? Dio();
 

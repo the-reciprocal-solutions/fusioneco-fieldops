@@ -113,6 +113,10 @@ final routeDownloadServiceProvider = Provider<RouteDownloadService>(
     fetcher: ref.watch(routePackRepositoryProvider),
     assetCache: ref.watch(offlineDbProvider),
     routeStore: ref.watch(offlineDbProvider),
+    floorPlans: RouteFloorPlanPrefetcher(
+      ref.watch(floorPlanRepositoryProvider),
+      ref.watch(floorPlanImageCacheProvider),
+    ),
   ),
 );
 

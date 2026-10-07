@@ -1,3 +1,6 @@
+import '../app/env.dart';
+import '../core/c2o/route_download_service.dart';
+import '../core/floorplan/floor_plan_image_cache.dart';
 import '../core/network/envelope.dart';
 import '../core/offline/sync_client.dart';
 
@@ -72,8 +75,8 @@ class FloorPlanRepository {
 
   final SyncClient _sync;
 
-  Future<FloorPlanRecord?> get(String floorId) async {
-    final read = await _sync.syncGet('/api/floors/floors/$floorId');
+  Future<FloorPlanRecord?> get(String floorId, {Duration ttl = Env.cacheTtl}) async {
+    final read = await _sync.syncGet('/api/floors/floors/$floorId', ttl: ttl);
     final data = unwrap(read.data);
     // `GET /floors/:id` returns its match wrapped in a one-element list
     // (`Floor.findAll({where: {id}})` server-side), not a bare object.
@@ -82,6 +85,28 @@ class FloorPlanRepository {
         : (data is Map ? data : null);
     if (floorJson == null) return null;
     return FloorPlanRecord.fromJson(floorId, Map<String, dynamic>.from(floorJson));
+  }
+}
+
+/// FR-2.8 — what a route download uses to put a floor's plan on the device:
+/// the floor record into the sync cache (where [FloorPlanScreen] reads it)
+/// and the image into [FloorPlanImageCache].
+class RouteFloorPlanPrefetcher implements FloorPlanPrefetcher {
+  RouteFloorPlanPrefetcher(this._repository, this._images);
+
+  /// Longer than the default 24h cache: an expired entry is never served,
+  /// even offline, and a route is used for up to a day after download. A
+  /// plan is only looked at, never verified against, so a week is safe.
+  static const recordTtl = Duration(days: 7);
+
+  final FloorPlanRepository _repository;
+  final FloorPlanImageCache _images;
+
+  @override
+  Future<void> prefetch(String floorId) async {
+    final record = await _repository.get(floorId, ttl: recordTtl);
+    final imageUrl = record?.imageUrl;
+    if (imageUrl != null) await _images.getOrDownload(imageUrl);
   }
 }
 

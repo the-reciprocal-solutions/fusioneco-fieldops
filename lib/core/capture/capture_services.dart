@@ -53,10 +53,15 @@ class CapturedLocation {
     required this.longitude,
     this.city,
     this.district,
+    this.accuracyMeters,
   });
 
   final double latitude;
   final double longitude;
+
+  /// The radius the device reports the fix is good to. FR-3.9 sends it with
+  /// a check, so a 5 m fix and a stale 500 m last-known one are told apart.
+  final double? accuracyMeters;
 
   /// Place names for the coordinates, when the device could resolve them.
   /// Always optional: the coordinates are the record, these two are the
@@ -218,14 +223,14 @@ class LocationCapture {
           timeLimit: Duration(seconds: 10),
         ),
       );
-      return await _named(position.latitude, position.longitude);
+      return await _named(position.latitude, position.longitude, position.accuracy);
     } catch (_) {
       // A fresh fix can still fail outright — no GPS lock and no network to
       // assist with one. The device's last fix is usually close enough to
       // say which site the technician is at, and it comes back from cache
       // instantly rather than needing signal at all.
       final last = await Geolocator.getLastKnownPosition();
-      if (last != null) return _named(last.latitude, last.longitude);
+      if (last != null) return _named(last.latitude, last.longitude, last.accuracy);
       throw const CaptureFailure('Could not get your location.');
     }
   }
@@ -234,13 +239,15 @@ class LocationCapture {
   /// with no geocoder backend, no network, or an unnamed spot in the middle of
   /// a field still returns its coordinates. Losing the label must never cost
   /// us the location that gates the job.
-  Future<CapturedLocation> _named(double lat, double lng) async {
+  Future<CapturedLocation> _named(double lat, double lng, double accuracy) async {
+    // Geolocator reports 0 when the platform gives no accuracy at all.
+    final accuracyMeters = accuracy > 0 ? accuracy : null;
     try {
       final places = await _geocoding
           .placemarkFromCoordinates(lat, lng)
           .timeout(const Duration(seconds: 5));
       if (places.isEmpty) {
-        return CapturedLocation(latitude: lat, longitude: lng);
+        return CapturedLocation(latitude: lat, longitude: lng, accuracyMeters: accuracyMeters);
       }
 
       final place = places.first;
@@ -261,9 +268,10 @@ class LocationCapture {
         longitude: lng,
         city: city,
         district: district,
+        accuracyMeters: accuracyMeters,
       );
     } catch (_) {
-      return CapturedLocation(latitude: lat, longitude: lng);
+      return CapturedLocation(latitude: lat, longitude: lng, accuracyMeters: accuracyMeters);
     }
   }
 

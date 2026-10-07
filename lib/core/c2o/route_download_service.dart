@@ -17,13 +17,16 @@ class RouteDownloadService {
     required RouteFetcher fetcher,
     required C2oAssetCache assetCache,
     required RoutePackStore routeStore,
+    FloorPlanPrefetcher? floorPlans,
   }) : _fetcher = fetcher,
        _assetCache = assetCache,
-       _routeStore = routeStore;
+       _routeStore = routeStore,
+       _floorPlans = floorPlans;
 
   final RouteFetcher _fetcher;
   final C2oAssetCache _assetCache;
   final RoutePackStore _routeStore;
+  final FloorPlanPrefetcher? _floorPlans;
 
   /// FR-5.1's pre-download size check.
   Future<RoutePackEstimate> estimate({
@@ -61,6 +64,11 @@ class RouteDownloadService {
     final pack = RoutePack.fromJson(json);
 
     for (final asset in pack.assets) {
+      // Pass the server's last check and findings through whole — the
+      // detail screen needs who/when (FR-2.6) and the list (FR-2.7), and
+      // keeping only the result lost both offline (caught on device).
+      final lastVerification = asset.raw['lastVerification'];
+      final openFindings = asset.raw['openFindings'];
       await _assetCache.upsertC2oAsset(
         CachedC2oAsset(
           assetId: asset.id,
@@ -70,12 +78,8 @@ class RouteDownloadService {
           // reads `claims['asset']` and doesn't care how it got there.
           claims: {
             'asset': asset.raw,
-            'history': asset.lastVerificationResult == null
-                ? const []
-                : [
-                    {'result': asset.lastVerificationResult},
-                  ],
-            'openFindings': const [],
+            'history': lastVerification is Map ? [lastVerification] : const [],
+            'openFindings': openFindings is List ? openFindings : const [],
           },
           cachedAt: DateTime.now(),
           packStamp: pack.versionTag,
@@ -96,7 +100,28 @@ class RouteDownloadService {
       ),
     );
 
+    await _prefetchFloorPlans(pack);
     return pack;
+  }
+
+  /// FR-2.8 — downloading a route is the technician deliberately preparing
+  /// to lose signal, so the plans for the floors it touches come down now,
+  /// not on first open (caught on device: a route walked offline never had
+  /// a plan). Best effort: the route is already saved, and a floor that
+  /// fails here only means its plan screen says "not downloaded yet".
+  Future<void> _prefetchFloorPlans(RoutePack pack) async {
+    final floorPlans = _floorPlans;
+    if (floorPlans == null) return;
+
+    final floorIds = <String>{
+      for (final asset in pack.assets)
+        if (asset.raw['floorID'] case final String id when id.isNotEmpty) id,
+    };
+    for (final floorId in floorIds) {
+      try {
+        await floorPlans.prefetch(floorId);
+      } catch (_) {}
+    }
   }
 
   Future<List<DownloadedRoutePack>> listDownloaded() => _routeStore.listRoutePacks();
@@ -110,6 +135,13 @@ class RouteDownloadService {
   /// kept here rather than scattered across widgets.
   static bool isStale(DownloadedRoutePack pack, {Duration maxAge = const Duration(hours: 24)}) =>
       pack.age > maxAge;
+}
+
+/// Brings one floor's plan (metadata and image) onto the device so FR-2.8
+/// works offline. An interface so [RouteDownloadService] stays testable
+/// without the sync cache or the network.
+abstract interface class FloorPlanPrefetcher {
+  Future<void> prefetch(String floorId);
 }
 
 /// Narrow view of [RouteFetcher] this service needs — named separately so

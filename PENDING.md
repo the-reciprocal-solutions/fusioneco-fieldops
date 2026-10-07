@@ -23,9 +23,18 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-031**
+Next number: **P-032**
 
 ## Open
+
+### P-031 · Rich tray notifications + action buttons (2026-10-07): never run on a phone
+- **Status:** needs verification · **Priority:** P2 · **Area:** push (`lib/core/push`, `notification_route.dart`) + server `notificationService.ts`
+- **Found:** 2026-10-07 (owner: engaging technician notifications with action buttons that go to the right place)
+- **Done so far:** server sends `body`/`notificationId`/`type`/`category` + real APNs alert; PM-generated WO technician link fixed; invite/SLA/PM-overdue copy reworded. App draws body + badge + tone + up to 2 buttons (`push_content.dart`), Accept/Decline/Open/My orders/Scan handled in `PushService._handleResponse`, tap marks read, routing unified. `flutter analyze` (touched files) clean, notification tests pass (Flutter 3.47.2); server tsc 0, vitest 4301 pass (1 unrelated: `conversations/__tests__/replyContinuation.test.ts`). LEARNINGS → Push 2026-10-07.
+- **Left:** restart/deploy the server, then on the Android phone: invite push → Accept (online and in airplane mode: toast says queued, job opens) and → Decline (inbox opens); an invite already answered → Accept shows the server's refusal; PM-generated WO tap opens the job; SLA warning is red; snag assigned → rejected replaces one banner; Arabic labels; the notification clears after a button. iOS: foreground banners show the buttons (categories), server-drawn background alerts show title + body (no buttons: no APNs `category` sent; add one if wanted).
+- **Where:** `lib/core/push/push_content.dart`, `lib/core/push/local_notifications.dart`, `lib/core/push/push_service.dart`
+- **Next step:** `node scripts/test-push.mjs <technician>` in fusion-eco-server after creating a real invite, then tap each button.
+- **Server pointer:** `docs/kb/pending/2026-10-07-rich-push-payload-device-check.md`
 
 ### P-030 · AR first-placement fixes, setup coach and "Place by hand" (2026-10-06): no iPhone run yet
 - **Status:** needs verification · **Priority:** P1 · **Area:** AR setup
@@ -45,7 +54,7 @@ Next number: **P-031**
 - **Found:** 2026-10-05 (first Xcode build on the `a2251` Mac: 100 fe_ar link errors). Written locally as P-025; renumbered 2026-10-06 on pulling `ddd2a80`, which had already committed P-025…P-027.
 - **Done so far:** iOS now mirrors Android: icon (same artwork), name, usage strings, cleartext, navy splash with the mascot, the ting sound, foreground push banners and taps (notification-center delegate), and APNs-safe token fetch. fe_ar is a static framework, which fixes the Filament link errors. Bundle id and team agree in all three Runner configurations; the Appfile default and ios-testflight.md follow. See docs/build-release-and-platform.md §6 and LEARNINGS (AR, Push, Platform; 2026-10-05).
 - **Left:**
-  - `ios/Runner/GoogleService-Info.plist` from a Firebase **iOS** app registered as `com.fusionapps.fieldops` (project `fusion-eco-technician`). Until then builds only warn and the app runs with **no push**: don't hand such a build to testers as final. Also upload the APNs `.p8` key under Cloud Messaging.
+  - ~~`ios/Runner/GoogleService-Info.plist`~~ added 2026-10-07 (`BUNDLE_ID com.fusionapps.fieldops`, project `fusion-eco-technician`, committed `7e6c2e4`). **Still left:** upload the APNs `.p8` key under Firebase → Cloud Messaging for that iOS app, then prove it with `node scripts/test-push.mjs <user> --platform ios` in fusion-eco-server (prints FCM's answer per device; `messaging/third-party-auth-error` = APNs key missing). As of 2026-10-07 no iOS token has ever registered on the local DB.
   - App Store Connect app record for `com.fusionapps.fieldops`, then archive (`flutter build ipa` with both hosts, or Xcode → Product → Archive) and upload. Record the build in VERSIONING.md.
   - Device run: launch, splash, login, foreground push banner with the ting, background push, tap routing, camera / OCR / QR, the SQLCipher DB opening (ios-testflight.md §9 item 2), AR on an ARKit device.
   - Server (repo not on the `a2251` Mac): the APNs alert copy should carry `aps.sound = "notification_ting.wav"` so background pushes ting too.

@@ -1,6 +1,7 @@
 import '../../app/router.dart';
 import '../../domain/app_notification.dart';
 import '../conversation/conversation_links.dart';
+import '../push/push_content.dart';
 
 /// Where tapping a notification takes a technician. A port of the web's
 /// `getNotificationRoute.ts`, Technician branch only — this app has no other
@@ -8,79 +9,92 @@ import '../conversation/conversation_links.dart';
 ///
 /// Returns null when there is nowhere useful to go, and the caller should leave
 /// the technician on the notifications list rather than pushing a dead route.
-String? routeForNotification(AppNotification notification) {
+String? routeForNotification(AppNotification notification) => routeForNotificationFields(
+      link: notification.link,
+      entityId: notification.entityId,
+      entityType: notification.entityType,
+      title: notification.title,
+    );
+
+/// The one routing rule for both the in-app list ([routeForNotification])
+/// and a tapped push (`push_service.dart`, which only has the flat string
+/// keys of the FCM payload). It used to be written out twice, and the two
+/// copies had to be kept in step by hand.
+String? routeForNotificationFields({
+  String? link,
+  String? entityId,
+  String? entityType,
+  String? title,
+}) {
   // Conversations, agent sessions and schedules first: their links are web
   // admin pages, which the `/technician` rule below would throw away.
-  final conversation = conversationRouteFor(
-    entityType: notification.entityType,
-    entityId: notification.entityId,
-    link: notification.link,
-  );
+  final conversation = conversationRouteFor(entityType: entityType, entityId: entityId, link: link);
   if (conversation != null) return conversation;
 
-  final link = notification.link?.trim();
-  if (link != null && link.isNotEmpty) {
-    final route = _appRouteForWebLink(link);
+  final trimmedLink = link?.trim();
+  if (trimmedLink != null && trimmedLink.isNotEmpty) {
+    final route = _appRouteForWebLink(trimmedLink);
     if (route != null) return route;
     // A link pointing outside the technician portal — another role's page, or
     // an absolute URL. There is no screen here that can show it.
     return null;
   }
 
-  final entityId = notification.entityId?.trim();
-  final entityType = notification.entityType?.trim();
-  if (entityId == null || entityId.isEmpty) return null;
-  if (entityType == null || entityType.isEmpty) return null;
+  final id = entityId?.trim();
+  final type = entityType?.trim();
+  if (id == null || id.isEmpty) return null;
+  if (type == null || type.isEmpty) return null;
 
   // AI conversations resume in the Flow Agent workspace, which this app does
   // not have.
-  if (entityType == 'conversation') return null;
+  if (type == 'conversation') return null;
 
-  // The invite inbox, not the task page. `assignmentInviteService.ts` uses this
-  // exact title and only this title for invites, and the detail screen fires a
-  // dozen calls just to reach the accept/decline panel at the top of it.
-  if (notification.title == 'New assignment invite') return Routes.invites;
+  final data = PushData(title: title, entityId: id, entityType: type);
+  switch (pushKindOf(data)) {
+    // The invite inbox, not the task page. `assignmentInviteService.ts` uses
+    // this exact title and only this title for invites, and the detail screen
+    // fires a dozen calls just to reach the accept/decline panel at the top
+    // of it.
+    case PushKind.invite:
+      return Routes.invites;
+    // The job went to someone else; its detail page would only refuse them.
+    case PushKind.inviteWithdrawn:
+      return Routes.orders;
+    // Certification reminders name the technician themself.
+    case PushKind.certification:
+      return Routes.profile;
+    default:
+      break;
+  }
 
   // Inspections aren't an `OrderType` (see `maintenance_record.dart`'s doc
   // comment) — their detail route lives at `/inspections/:id`, not
   // `/orders/:type/:id`, so this one entity type is handled before the
   // four-way order lookup below.
-  if (entityType == 'Inspection') return Routes.inspectionDetail(entityId);
+  if (type == 'Inspection') return Routes.inspectionDetail(id);
   // Snag Assistant — the server also sends `/technician/snags/<id>` as the
   // link, which the branch above already maps; this covers a link-less one.
-  if (entityType == 'Snag') return Routes.snagDetail(entityId);
+  if (type == 'Snag') return Routes.snagDetail(id);
   // Permit to Work — the server also sends `/technician/permits/<id>` as the
   // link, which the branch above already maps; this covers a link-less one.
   // `ptwService.ts` stamps `entityType: "PermitToWork"`; `Permit` is kept
-  // too in case an older or generic notification path ever used it. Keep in
-  // step with `_routeForPushData` in push_service.dart.
-  if (entityType == 'Permit' || entityType == 'PermitToWork') {
-    return Routes.permitDetail(entityId);
-  }
+  // too in case an older or generic notification path ever used it.
+  if (type == 'Permit' || type == 'PermitToWork') return Routes.permitDetail(id);
   // AR install requests send the link `/technician/ar/install?floorId=<id>`,
   // which the prefix strip above maps onto [Routes.arInstall] as it is; a
   // link-less one names the floor as its entity. The server stamps
   // `ar_install_request` (installRequestService.ts INSTALL_REQUEST_ENTITY);
-  // the PascalCase spelling is kept in case it is ever normalised. Keep in
-  // step with `_routeForPushData` in push_service.dart.
-  if (entityType == 'ar_install_request' || entityType == 'ArInstallRequest') {
-    return Routes.arInstall(floorId: entityId);
+  // the PascalCase spelling is kept in case it is ever normalised.
+  if (type == 'ar_install_request' || type == 'ArInstallRequest') {
+    return Routes.arInstall(floorId: id);
   }
 
-  final slug = _slugForEntityType(entityType);
-  return slug == null ? null : Routes.orderDetail(slug, entityId);
+  // The server stamps PascalCase model names on most notifications and the
+  // snake_case invite-chain names on a few; both map to the same route
+  // segment ([orderTypeForEntity]).
+  final orderType = orderTypeForEntity(type);
+  return orderType == null ? null : Routes.orderDetail(orderType.slug, id);
 }
-
-/// The four entity names the server stamps on a notification, mapped to this
-/// app's route segments. Spelled out rather than derived: the server's names
-/// are PascalCase and the routes are not.
-String? _slugForEntityType(String entityType) => switch (entityType) {
-      'WorkOrder' => 'work-order',
-      'PreventiveMaintenance' => 'preventive',
-      'ReactiveMaintenance' => 'reactive',
-      'AnnualMaintenance' => 'annual',
-      _ => null,
-    };
 
 /// The server sends web paths. This app's routes are the same paths without the
 /// `/technician` prefix, so a technician link maps across directly — anything

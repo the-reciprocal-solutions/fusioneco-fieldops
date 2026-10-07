@@ -62,8 +62,9 @@ class AuthController extends Notifier<AuthState> {
 
     final session = store.readSession();
     if (session != null) {
-      // Re-register the device token on app resume — it may have rotated
-      // since the last cold start, and FCM has no other way to tell us.
+      // Restored session: attach push and send the token (it may have
+      // rotated since the last cold start). Resume re-sends it too, from
+      // TechnicianShell.didChangeAppLifecycleState.
       ref.read(pushServiceProvider).init();
     }
 

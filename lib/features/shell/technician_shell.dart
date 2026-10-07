@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
+import '../../core/push/push_service.dart';
 import '../../state/auth_controller.dart';
 import '../../state/notifications_controller.dart';
 import '../../state/providers.dart';
@@ -79,6 +80,10 @@ class _TechnicianShellState extends ConsumerState<TechnicianShell>
       if (ref.exists(notificationsControllerProvider)) {
         unawaited(ref.read(notificationsControllerProvider.notifier).refresh());
       }
+      // Re-send the FCM token: a first attempt can miss (iOS APNs token not
+      // there yet, offline at launch), and the token can rotate while the app
+      // sleeps. The server upserts, so repeating is harmless.
+      unawaited(ref.read(pushServiceProvider).syncToken());
     }
   }
 

@@ -8,9 +8,9 @@ import '../../app/router.dart';
 /// `entityId` = the record UUID, and a **web admin** link such as
 /// `/facility-management/snags?snag=<id>&message=<mid>`. The generic
 /// notification router drops any link outside `/technician`, so without this
-/// every conversation push would open nothing. Called first by BOTH
-/// `routeForNotification` (in-app list) and `_routeForPushData` (tray tap),
-/// which keeps the two routing tables from drifting on these types.
+/// every conversation push would open nothing. Called first by
+/// `routeForNotificationFields` (notification_route.dart), the one routing
+/// rule the in-app list and a tray tap both use.
 ///
 /// Schedules / sessions (orchestrator spec: `schedule:started|done|failed`,
 /// `session:started|done`) open their origin thread when the link names one,

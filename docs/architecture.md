@@ -216,8 +216,33 @@ The server rejects every **mutating** request from a technician whose last GPS f
 
 ## Push and realtime
 
-- **FCM** ([push_service.dart](../lib/core/push/push_service.dart)): server pushes are **data-only**, so the app draws every notification itself ([local_notifications.dart](../lib/core/push/local_notifications.dart), channel `fcm_default_channel`, custom `notification_ting` sound). The background handler is a top-level `@pragma('vm:entry-point')` function that re-inits Firebase. The device token is registered on login and on every cold start with a session (`POST /api/notifications/register-device`). It is **deliberately not unregistered on logout**: phones are personally issued, so an overnight assignment should still ring.
-- **Tap routing:** push data and in-app notifications both map `link` (a web `/technician/...` path, minus the prefix) or `entityType` + `entityId` to an app route. There are two copies of these rules, [notification_route.dart](../lib/core/utils/notification_route.dart) and `_routeForPushData`, and they must stay in step.
+- **FCM** ([push_service.dart](../lib/core/push/push_service.dart)): server pushes are **data-only**, so the app draws every notification itself ([local_notifications.dart](../lib/core/push/local_notifications.dart), channel `fcm_default_channel`, custom `notification_ting` sound). The background handler is a top-level `@pragma('vm:entry-point')` function that re-inits Firebase. Listeners attach once per process; the device token is sent (`POST /api/notifications/register-device`, server upserts) on login, on every cold start with a session, and on every app resume (`PushService.syncToken`), so a missed first attempt (iOS APNs token not ready, offline) or a second user on the same phone heals itself. It is **deliberately not unregistered on logout**: phones are personally issued, so an overnight assignment should still ring.
+- **What a notification shows** (since 2026-10-07, [push_content.dart](../lib/core/push/push_content.dart), pure and tested in `test/push_content_test.dart`): the server's `message` as an expandable body (the payload key is `body`; before this date only the title reached the phone), a short kind badge ("Job offer", "New job", "Action needed", …), a tone colour (red for `warning`/`error`), and up to two buttons. The kind comes from `entityType` + `title`; there is no kind key on the wire. One record keeps one tray slot: the id is an FNV hash of `<entityType>:<entityId>` (invites and their withdrawal share `order:<id>`), so a newer event replaces the older banner. Button and badge text is in a const en/ar table in that file, because the background isolate has no widget tree; the language is read from flutter_localization's SharedPreferences key.
+- **Buttons** (all open the app; `PushService._handleResponse` runs them signed in):
+
+  | Kind | Buttons | What they do |
+  |---|---|---|
+  | Invite (WO / PM / RM) | Accept · Decline | Accept = `AssignmentRepository.respond(accept: true)` (queues offline), then the job opens with a toast; a refusal opens the inbox with the server's reason. Decline opens the inbox (a reason is required). Annual has no respond route, so only "View invite". |
+  | New work, at risk (WO / PM / RM / AMC / inspection) | Open job · My orders | Detail route / orders tab |
+  | C2O route | View route · Scan tag | `/c2o-routes` / scanner |
+  | Snag, permit, AR install, certification | Open … | Same as a tap |
+  | Invite withdrawn, anything else | — | Tap only |
+
+  Any tap or button also marks the `notificationId` row read and refreshes the bell.
+- **Tap routing:** push data and in-app notifications both go through one function, `routeForNotificationFields` in [notification_route.dart](../lib/core/utils/notification_route.dart) (until 2026-10-07 there were two copies). It maps `link` (a web `/technician/...` path, minus the prefix) or `entityType` + `entityId` to an app route. A tap with nowhere to go opens the notifications list.
+
+```mermaid
+flowchart LR
+  S[Server createNotification] -->|data-only FCM: title, body, link, entityId, entityType, notificationId, type| BG[Background isolate / onMessage]
+  BG --> PC[push_content.dart: kind → title, body, badge, tone, buttons, slot id]
+  PC --> TRAY[Tray notification]
+  TRAY -->|tap| H[PushService._handleResponse]
+  TRAY -->|Accept| H
+  TRAY -->|Decline / Open / My orders / Scan| H
+  H -->|markRead notificationId| API[(API)]
+  H -->|Accept| AR[AssignmentRepository.respond → SyncClient queue] --> D[Order detail + toast]
+  H -->|other| R[routeForNotificationFields → router.go]
+```
 - **Socket.io** ([socket_service.dart](../lib/core/realtime/socket_service.dart)): one event, `new_notification`, only while the app is running. The URL is the API base with `/api` stripped. The socket is opened and closed by auth state in [socket_controller.dart](../lib/state/socket_controller.dart) and held by the shell, so the bell updates on any screen.
 
 ## Routing: `app/router.dart`

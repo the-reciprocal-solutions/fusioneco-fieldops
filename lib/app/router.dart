@@ -127,8 +127,8 @@ abstract final class Routes {
 
   // Permit to Work (docs/permit-to-work.md). The server's notification/push
   // link `/technician/permits/<id>` maps onto [permitDetail] the same way
-  // every other technician link does (prefix strip in notification_route.dart
-  // / push_service.dart) — no special-casing needed there.
+  // every other technician link does (prefix strip in notification_route.dart,
+  // shared by the bell list and tray taps) — no special-casing needed there.
   static const permits = '/permits';
   static String permitDetail(String id) => '/permits/$id';
 

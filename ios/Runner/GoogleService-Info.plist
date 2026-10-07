@@ -9,7 +9,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.thefusionapps.fusioneco.technician</string>
+	<string>com.fusionapps.fieldops</string>
 	<key>PROJECT_ID</key>
 	<string>fusion-eco-technician</string>
 	<key>STORAGE_BUCKET</key>
@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:552357954709:ios:f6b0096c790dcdd65d879c</string>
+	<string>1:552357954709:ios:7e5762502536ff605d879c</string>
 </dict>
 </plist>

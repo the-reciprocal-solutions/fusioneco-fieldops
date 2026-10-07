@@ -242,6 +242,56 @@ class Mat4 {
     ]);
   }
 
+  /// True when the upper 3×3 is a rotation (orthonormal columns) and the
+  /// bottom row is (0, 0, 0, 1): [invertRigid] is then exact. A "Place by
+  /// hand" transform with a scale other than 100 % is not
+  /// (`manual_place_math.dart`).
+  bool get isRigid {
+    final m = values;
+    const eps = 1e-6;
+    double dot(int a, int b) => m[a] * m[b] + m[a + 1] * m[b + 1] + m[a + 2] * m[b + 2];
+    return (dot(0, 0) - 1).abs() < eps &&
+        (dot(4, 4) - 1).abs() < eps &&
+        (dot(8, 8) - 1).abs() < eps &&
+        dot(0, 4).abs() < eps &&
+        dot(0, 8).abs() < eps &&
+        dot(4, 8).abs() < eps &&
+        m[3].abs() < eps &&
+        m[7].abs() < eps &&
+        m[11].abs() < eps &&
+        (m[15] - 1).abs() < eps;
+  }
+
+  /// Inverse of an affine transform `[A | t]` (any invertible 3×3, so scale
+  /// and stretch too), or null when singular. [invertRigid] stays the fast
+  /// path for the rigid matrices everything else produces.
+  Mat4? invertAffine() {
+    final m = values;
+    final a = m[0], b = m[4], c = m[8];
+    final d = m[1], e = m[5], f = m[9];
+    final g = m[2], h = m[6], i = m[10];
+    final co00 = e * i - f * h, co01 = -(d * i - f * g), co02 = d * h - e * g;
+    final det = a * co00 + b * co01 + c * co02;
+    if (det.abs() < 1e-12) return null;
+    final k = 1 / det;
+    // Inverse = adjugate / det; adjugate = transposed cofactors.
+    final i00 = co00 * k, i01 = -(b * i - c * h) * k, i02 = (b * f - c * e) * k;
+    final i10 = co01 * k, i11 = (a * i - c * g) * k, i12 = -(a * f - c * d) * k;
+    final i20 = co02 * k, i21 = -(a * h - b * g) * k, i22 = (a * e - b * d) * k;
+    final tx = m[12], ty = m[13], tz = m[14];
+    return Mat4([
+      i00, i10, i20, 0, // column 0
+      i01, i11, i21, 0,
+      i02, i12, i22, 0,
+      -(i00 * tx + i01 * ty + i02 * tz), -(i10 * tx + i11 * ty + i12 * tz), -(i20 * tx + i21 * ty + i22 * tz), 1,
+    ]);
+  }
+
+  /// [invertRigid] when this is rigid, else [invertAffine] (falling back to
+  /// the rigid inverse for a singular matrix, which never comes out of the
+  /// placement code: scale is clamped to 50–200 %).
+  Mat4 inverse() => isRigid ? invertRigid() : (invertAffine() ?? invertRigid());
+
   Vec3 transformPoint(Vec3 p) {
     final m = values;
     return Vec3(

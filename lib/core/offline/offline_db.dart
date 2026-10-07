@@ -8,6 +8,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../c2o/route_pack.dart' show RouteScope;
 import 'flush_policy.dart' show SyncLease;
+import '../scanner/scan_history.dart' show ScanHistoryStore, ScanRecord;
 import 'sign_out_wipe.dart';
 
 /// One queued upload inside a [PendingMutation] — a photo, a voice note, a
@@ -448,7 +449,31 @@ class StoredSnagRow {
   final bool localOnly;
 }
 
+/// One row for [SnagStore.upsertSnags].
+class SnagRowWrite {
+  const SnagRowWrite({
+    required this.id,
+    required this.json,
+    required this.status,
+    required this.localOnly,
+    required this.updatedAt,
+    this.buildingId,
+    this.surveyId,
+  });
+  final String id;
+  final Map<String, dynamic> json;
+  final String? buildingId;
+  final String? surveyId;
+  final String status;
+  final bool localOnly;
+  final DateTime updatedAt;
+}
+
 abstract interface class SnagStore {
+  /// Many rows in one batch — a building refresh used to write its snags
+  /// one transaction each (hundreds of SQLCipher round trips per pull).
+  Future<void> upsertSnags(List<SnagRowWrite> rows);
+
   Future<void> upsertSnag({
     required String id,
     required Map<String, dynamic> json,
@@ -651,6 +676,7 @@ class OfflineDb
         RoutePackStore,
         SnagStore,
         ArPackStore,
+        ScanHistoryStore,
         WipeExecutor {
   OfflineDb._(this._db);
 
@@ -658,6 +684,84 @@ class OfflineDb
   static const _conflictCap = 50;
 
   final Database _db;
+
+  // ------------------------------------------------------------ scan history
+  //
+  // The scanner's history (docs/c2o-field-verification.md "Scans page";
+  // lib/core/scanner/scan_history.dart). Added 2026-10-06 WITHOUT a schema
+  // version bump: other work bumps `version` in parallel, so this table is
+  // created on first use with IF NOT EXISTS instead, which is idempotent on
+  // every DB version. Kept on sign-out (sign_out_wipe.dart): rows carry
+  // their user id and every read filters on it.
+  static const _createScanHistorySql = '''
+    CREATE TABLE IF NOT EXISTS scan_history (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      json TEXT NOT NULL
+    )
+  ''';
+  Future<void>? _scanHistoryReady;
+
+  Future<void> _ensureScanHistory() => _scanHistoryReady ??= () async {
+        await _db.execute(_createScanHistorySql);
+        await _db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_scan_history_user_at ON scan_history (user_id, at)',
+        );
+      }();
+
+  @override
+  Future<void> putScan(ScanRecord record) async {
+    await _ensureScanHistory();
+    await _db.insert('scan_history', {
+      'id': record.id,
+      'user_id': record.userId,
+      'at': record.at.millisecondsSinceEpoch,
+      'kind': record.kind.name,
+      'status': record.status.name,
+      'json': record.encode(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  @override
+  Future<List<ScanRecord>> listScans(String userId, {int limit = 500}) async {
+    await _ensureScanHistory();
+    final rows = await _db.query(
+      'scan_history',
+      columns: ['json'],
+      where: 'user_id = ?',
+      whereArgs: [userId],
+      orderBy: 'at DESC',
+      limit: limit,
+    );
+    return [
+      for (final r in rows) ?ScanRecord.decode(r['json'] as String),
+    ];
+  }
+
+  @override
+  Future<void> deleteScansBefore(DateTime cutoff) async {
+    await _ensureScanHistory();
+    await _db.delete('scan_history', where: 'at < ?', whereArgs: [cutoff.millisecondsSinceEpoch]);
+  }
+
+  @override
+  Future<void> trimScans(String userId, int keep) async {
+    await _ensureScanHistory();
+    await _db.rawDelete(
+      'DELETE FROM scan_history WHERE user_id = ? AND id NOT IN '
+      '(SELECT id FROM scan_history WHERE user_id = ? ORDER BY at DESC LIMIT ?)',
+      [userId, userId, keep],
+    );
+  }
+
+  @override
+  Future<void> clearScans(String userId) async {
+    await _ensureScanHistory();
+    await _db.delete('scan_history', where: 'user_id = ?', whereArgs: [userId]);
+  }
 
   static Future<OfflineDb> open({required String passphrase}) async {
     final dir = await getDatabasesPath();
@@ -952,6 +1056,26 @@ class OfflineDb
     return rows.map(PendingMutation.fromRow).toList();
   }
 
+  /// The queue without bodies or attachment bytes, oldest first — what the
+  /// shell's banner and "Waiting to send" sheet need on every queue tick
+  /// ([listMutations] decodes every queued photo).
+  Future<List<({String id, String label, DateTime createdAt, int attempts})>> listQueueEntries() async {
+    final rows = await _db.query(
+      'pending_mutations',
+      columns: ['client_mutation_id', 'label', 'created_at', 'attempts'],
+      orderBy: 'created_at ASC',
+    );
+    return [
+      for (final r in rows)
+        (
+          id: r['client_mutation_id'] as String,
+          label: r['label'] as String? ?? 'Change',
+          createdAt: DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int),
+          attempts: r['attempts'] as int? ?? 0,
+        ),
+    ];
+  }
+
   Future<int> countMutations() async =>
       Sqflite.firstIntValue(
         await _db.rawQuery('SELECT COUNT(*) FROM pending_mutations'),
@@ -1211,6 +1335,24 @@ class OfflineDb
     'updated_at': updatedAt.millisecondsSinceEpoch,
     'json': jsonEncode(json),
   }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  @override
+  Future<void> upsertSnags(List<SnagRowWrite> rows) async {
+    if (rows.isEmpty) return;
+    final batch = _db.batch();
+    for (final r in rows) {
+      batch.insert('snags', {
+        'id': r.id,
+        'building_id': r.buildingId,
+        'survey_id': r.surveyId,
+        'status': r.status,
+        'local_only': r.localOnly ? 1 : 0,
+        'updated_at': r.updatedAt.millisecondsSinceEpoch,
+        'json': jsonEncode(r.json),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
 
   static StoredSnagRow _snagRow(Map<String, Object?> row) => StoredSnagRow(
     id: row['id'] as String,
@@ -1659,5 +1801,7 @@ class OfflineDb
     await _db.delete('ar_grid_lines');
     await _db.delete('ar_progress');
     await _db.delete('ar_prefs');
+    await _ensureScanHistory();
+    await _db.delete('scan_history');
   }
 }

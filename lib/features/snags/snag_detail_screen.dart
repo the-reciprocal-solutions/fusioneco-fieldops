@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import '../../app/router.dart';
 import '../../core/capture/capture_services.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/snag/snag_rules.dart';
+import '../../core/snag/snag_send_state.dart';
 import '../../data/snag_repository.dart';
 import '../../domain/conversation.dart';
 import '../../domain/snag.dart';
@@ -25,6 +27,7 @@ import '../conversation/conversation_preview_card.dart';
 import 'ghost_camera_screen.dart';
 import 'snag_plan_screen.dart';
 import 'widgets/snag_sheets.dart';
+import 'widgets/snag_region_overlay.dart';
 import 'widgets/snag_visuals.dart';
 
 /// UC-10 — one snag: its photos, where it is, where it is in its life, and
@@ -47,6 +50,24 @@ class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
   @override
   void initState() {
     super.initState();
+    // Opens from the local copy at once, then reads the server's full copy
+    // in the background: list pulls are lean (no timeline), and a snag whose
+    // queued create already synced gets its SN- number here even if the
+    // replay follow-up missed it. Offline this is a no-op.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      try {
+        final repo = ref.read(snagRepositoryProvider);
+        final before = await repo.localById(widget.snagId);
+        await repo.fetchOne(widget.snagId);
+        final after = await repo.localById(widget.snagId);
+        if (mounted && before != null && after != null && jsonEncode(before.toJson()) != jsonEncode(after.toJson())) {
+          bumpSnags(ref);
+        }
+      } catch (_) {
+        // Background freshness only; the local copy is already on screen.
+      }
+    });
     final message = widget.messageId;
     if (message != null && message.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -75,6 +96,21 @@ class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
         bumpSnags(ref);
         showTechPopup(context, message: e.message, isError: true);
       }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _retrySend(Snag s) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(snagRepositoryProvider).retrySend(s);
+      if (!mounted) return;
+      bumpSnags(ref);
+      showTechPopup(context, message: 'snags.send.retry_started'.getString(context));
+    } catch (_) {
+      if (mounted) showTechPopup(context, message: 'snags.send.retry_failed'.getString(context), isError: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -116,6 +152,7 @@ class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
     final async = ref.watch(snagByIdProvider(widget.snagId));
     final me = ref.watch(snagActorProvider)?.id ?? '';
     final pending = ref.watch(pendingSnagIdsProvider).valueOrNull ?? const <String>{};
+    final flushing = ref.watch(snagQueueFlushingProvider);
     return Scaffold(
       backgroundColor: FeColors.page,
       appBar: FeHeader(
@@ -147,7 +184,7 @@ class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
               child: TechEmptyState(icon: LucideIcons.searchX, title: 'snags.not_found'.getString(context)),
             );
           }
-          final waiting = s.localOnly || pending.contains(s.id);
+          final send = snagSendStatus(s, queued: pending.contains(s.id), flushing: flushing);
           final actions = s.localOnly ? const <SnagAction>[] : SnagRules.actionsFor(s, me);
           return Column(
             children: [
@@ -192,26 +229,9 @@ class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
                       const SizedBox(height: 6),
                       AppText.bodyMedium(s.description!, color: FeColors.ink2),
                     ],
-                    if (waiting) ...[
+                    if (!send.state.isSynced) ...[
                       const SizedBox(height: 12),
-                      TechCard(
-                        tint: FeColors.warningSoft,
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          children: [
-                            const Icon(LucideIcons.smartphone, color: FeColors.warning, size: 18),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: AppText.bodySmall(
-                                s.localOnly
-                                    ? 'snags.local_only_hint'.getString(context)
-                                    : 'snags.pending_hint'.getString(context),
-                                color: FeColors.ink,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                      _SendBanner(status: send, busy: _busy, onRetry: () => _retrySend(s)),
                     ],
                     const SizedBox(height: 16),
                     TechCard(child: SnagStatusStepper(snag: s)),
@@ -387,7 +407,8 @@ class _Strip extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  SnagPhoto(evidence: p, radius: 18),
+                  // Kept defect highlights (2026-10-06) ride on the photo.
+                  SnagPhoto(evidence: p, radius: 18, showRegions: true),
                   Positioned(
                     left: 10,
                     top: 10,
@@ -421,15 +442,56 @@ class _Strip extends StatelessWidget {
   void _openFull(BuildContext context, SnagEvidence p) {
     Navigator.of(context).push(MaterialPageRoute(
       fullscreenDialog: true,
-      builder: (_) => Scaffold(
-        backgroundColor: Colors.black,
-        appBar: const FeHeader(title: '', variant: FeHeaderVariant.immersive),
-        body: InteractiveViewer(
-          maxScale: 5,
-          child: Center(child: SnagPhoto(evidence: p, fit: BoxFit.contain, dark: true)),
-        ),
-      ),
+      builder: (_) => _FullPhoto(evidence: p),
     ));
+  }
+}
+
+/// Full-screen photo viewer: pinch to zoom, highlights drawn on the photo
+/// itself (so they zoom with it) and a show/hide toggle when it has any.
+class _FullPhoto extends StatefulWidget {
+  const _FullPhoto({required this.evidence});
+  final SnagEvidence evidence;
+
+  @override
+  State<_FullPhoto> createState() => _FullPhotoState();
+}
+
+class _FullPhotoState extends State<_FullPhoto> {
+  var _highlights = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.evidence;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: const FeHeader(title: '', variant: FeHeaderVariant.immersive),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: InteractiveViewer(
+              maxScale: 5,
+              child: Center(
+                child: SnagPhoto(evidence: p, fit: BoxFit.contain, dark: true, showRegions: _highlights),
+              ),
+            ),
+          ),
+          if (p.regions.isNotEmpty)
+            PositionedDirectional(
+              bottom: 24 + MediaQuery.paddingOf(context).bottom,
+              start: 0,
+              end: 0,
+              child: Center(
+                child: SnagHighlightsToggle(
+                  count: p.regions.length,
+                  visible: _highlights,
+                  onChanged: (v) => setState(() => _highlights = v),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 
@@ -670,6 +732,62 @@ class _ActionBar extends StatelessWidget {
                     : 'snags.no_actions'.getString(context),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+
+/// Honest send state on the detail screen (2026-10-06): what is happening
+/// to this snag on its way to the server, why, in plain words, and a Retry.
+class _SendBanner extends StatelessWidget {
+  const _SendBanner({required this.status, required this.busy, required this.onRetry});
+  final SnagSendStatus status;
+  final bool busy;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = SnagVisuals.sendColor(status.state);
+    final soft = switch (status.state) {
+      SnagSendState.notSent => FeColors.dangerSoft,
+      SnagSendState.sending => FeColors.infoSoft,
+      _ => FeColors.warningSoft,
+    };
+    return TechCard(
+      tint: soft,
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: status.state == SnagSendState.sending
+                ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: color))
+                : Icon(SnagVisuals.sendIcon(status.state), color: color, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AppText.bodyMedium(status.labelKey.getString(context), weight: FontWeight.w700, color: FeColors.ink),
+                if (status.reasonKey != null) ...[
+                  const SizedBox(height: 2),
+                  AppText.bodySmall(status.reasonKey!.getString(context), color: FeColors.ink),
+                ],
+              ],
+            ),
+          ),
+          if (status.state.canRetry) ...[
+            const SizedBox(width: 8),
+            TextButton.icon(
+              onPressed: busy ? null : onRetry,
+              icon: const Icon(LucideIcons.refreshCw, size: 16),
+              label: Text('snags.send.retry'.getString(context)),
+            ),
+          ],
         ],
       ),
     );

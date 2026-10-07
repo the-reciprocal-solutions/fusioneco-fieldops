@@ -37,12 +37,23 @@ final socketConnectionProvider = Provider<SocketService>((ref) {
     fireImmediately: true,
   );
 
-  ref.onDispose(service.disconnect);
+  // Long sessions (2026-10-06): the access token is short and renewed
+  // silently. The socket authenticates once per connection, so its own
+  // automatic reconnects would keep presenting the old, expired token —
+  // reconnect with the new one after every renewal (rooms are re-joined).
+  final renewed = ref.read(apiClientProvider).onSessionRenewed.listen((_) {
+    if (ref.read(authControllerProvider).isAuthenticated) unawaited(_connect(ref, service));
+  });
+
+  ref.onDispose(() {
+    renewed.cancel();
+    service.disconnect();
+  });
   return service;
 });
 
 Future<void> _connect(Ref ref, SocketService service) async {
-  final token = await ref.read(secureStoreProvider).readToken();
+  final token = await ref.read(apiClientProvider).freshToken();
   if (token == null || token.isEmpty) return;
   service.connect(token);
 }

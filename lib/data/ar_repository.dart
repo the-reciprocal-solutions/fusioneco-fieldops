@@ -335,9 +335,16 @@ class ArRepository {
     }
   }
 
-  /// Does any building this user can see have a published AR model? Gates the
-  /// dashboard's AR card. Offline with no cached answer: true only if an AR
-  /// floor pack is already on this phone.
+  /// Does any building this user can see have a published AR model? Decides
+  /// what the dashboard's AR card offers (models vs. "No AR model for your
+  /// buildings yet" + the demo room) — it no longer hides the card.
+  /// Offline with no cached answer: true only if an AR floor pack is already
+  /// on this phone.
+  ///
+  /// Any answer that is not a network failure — a 404 from a server older
+  /// than this route, a 500, an odd body — means "no models" (2026-10-06:
+  /// the dev server's 404 made the provider error out, which read as "no
+  /// AR" and hid the card on the owner's phone).
   Future<bool> anyArBuilding() async {
     try {
       final read = await _sync.syncGet('$_base/availability/buildings');
@@ -346,6 +353,8 @@ class ArRepository {
       return ids is List && ids.isNotEmpty;
     } on NetworkFailure {
       return (await _store.listArManifests()).any((m) => m.scope == 'floor');
+    } catch (_) {
+      return false;
     }
   }
 

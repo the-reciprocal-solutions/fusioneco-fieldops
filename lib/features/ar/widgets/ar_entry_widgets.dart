@@ -105,17 +105,23 @@ class ShowInArButton extends ConsumerWidget {
 /// The dashboard's door into AR: "Show the model where you stand". One tap
 /// to scan a board, one to pick a floor, and the install run when there is
 /// one. Demo mode is announced here too, so nobody forgets it's on.
+///
+/// On by default (owner, 2026-10-06): shown unless the client explicitly set
+/// `isArView = false` ([arCardModeProvider]). With no published model for
+/// the technician's buildings it says so in one plain line and offers the
+/// built-in demo room (works with no model and no board) and "Scan an AR
+/// board", instead of disappearing.
 class ArDashboardCard extends ConsumerWidget {
   const ArDashboardCard({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final demo = ref.watch(arPrefsProvider.select((p) => p.demo));
-    // Only for clients with AR (isArView on and at least one building with a
-    // published AR model). Demo mode keeps the card so a switched-on demo can
-    // always be switched off again.
-    final hasAr = ref.watch(arAnyBuildingProvider).valueOrNull ?? false;
-    if (!hasAr && !demo) return const SizedBox.shrink();
+    final mode = ref.watch(arCardModeProvider);
+    // A switched-on demo keeps the card even for a client with AR off, so it
+    // can always be switched off again.
+    if (mode == ArCardMode.hidden && !demo) return const SizedBox.shrink();
+    final noModels = mode == ArCardMode.noModels && !demo;
     // Installs are opt-in per client (`isArInstall`, P-007).
     final install = ref.watch(arInstallAllowedProvider);
     return Container(
@@ -148,7 +154,13 @@ class ArDashboardCard extends ConsumerWidget {
                     AppText.titleMedium('ar.dashboard.title'.getString(context), color: Colors.white, weight: FontWeight.w800),
                     const SizedBox(height: 2),
                     AppText.bodySmall(
-                      (demo ? 'ar.dashboard.sub_demo' : 'ar.dashboard.sub').getString(context),
+                      (demo
+                              ? 'ar.dashboard.sub_demo'
+                              : noModels
+                                  ? 'ar.dashboard.no_models'
+                                  : 'ar.dashboard.sub')
+                          .getString(context),
+                      key: const ValueKey('ar-card-sub'),
                       color: Colors.white70,
                     ),
                   ],
@@ -164,23 +176,49 @@ class ArDashboardCard extends ConsumerWidget {
           const SizedBox(height: 14),
           Row(
             children: [
-              Expanded(
-                child: _CardAction(
-                  icon: ArIcons.board,
-                  label: 'ar.dashboard.scan'.getString(context),
-                  // Demo mode has no real board to point at: open the sample
-                  // board's scan sheet as if it had just been read.
-                  onTap: () => context.push(demo ? Routes.arMarker(DemoArGateway.focusCode) : Routes.scan),
+              if (noModels) ...[
+                // Nothing published yet: the demo room works out of the box
+                // (sample building, nothing saved), and a board on site
+                // still resolves once its building gets a model.
+                Expanded(
+                  child: _CardAction(
+                    key: const ValueKey('ar-card-try-demo'),
+                    icon: ArIcons.demo,
+                    label: 'ar.dashboard.try_demo'.getString(context),
+                    onTap: () async {
+                      await ref.read(arPrefsProvider.notifier).setDemo(true);
+                      if (context.mounted) context.push(Routes.arMarker(DemoArGateway.focusCode));
+                    },
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _CardAction(
-                  icon: ArIcons.building,
-                  label: 'ar.dashboard.floor'.getString(context),
-                  onTap: () => context.push(Routes.arModels()),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _CardAction(
+                    key: const ValueKey('ar-card-scan-board'),
+                    icon: ArIcons.board,
+                    label: 'ar.dashboard.scan_board'.getString(context),
+                    onTap: () => context.push(Routes.scan),
+                  ),
                 ),
-              ),
+              ] else ...[
+                Expanded(
+                  child: _CardAction(
+                    icon: ArIcons.board,
+                    label: 'ar.dashboard.scan'.getString(context),
+                    // Demo mode has no real board to point at: open the sample
+                    // board's scan sheet as if it had just been read.
+                    onTap: () => context.push(demo ? Routes.arMarker(DemoArGateway.focusCode) : Routes.scan),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _CardAction(
+                    icon: ArIcons.building,
+                    label: 'ar.dashboard.floor'.getString(context),
+                    onTap: () => context.push(Routes.arModels()),
+                  ),
+                ),
+              ],
               if (install) ...[
                 const SizedBox(width: 8),
                 Expanded(
@@ -234,7 +272,7 @@ class _DemoToggle extends StatelessWidget {
 }
 
 class _CardAction extends StatelessWidget {
-  const _CardAction({required this.icon, required this.label, required this.onTap});
+  const _CardAction({super.key, required this.icon, required this.label, required this.onTap});
   final IconData icon;
   final String label;
   final VoidCallback onTap;

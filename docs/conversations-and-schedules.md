@@ -108,6 +108,67 @@ The **push already exists** (FCM, data-only, `LocalNotifications` draws the bann
 - In the list, these types get their own look: agent replies and schedules in violet, mentions and messages in blue, failed schedules in red.
 - On app resume, the bell count and an already-loaded list refresh, as a backstop for anything the socket missed.
 
+## Owner round 2026-10-06: keyboard, "@agent → no movement", reminders, agent activity
+
+**Root cause of "no movement" (server).** A technician's `@agent` post was stored and a run was queued, but the worker runs every person's run *as its starter* (`runtime/runAsStarter.ts`). A technician id lives in `technicians`, not `users`, and `loadAccess` was not told the role, so the run executed as an unknown principal with **no buildings**: every `flow_agent_runs` read matched nothing, the runner logged "run not found" and returned, and the run and its session stayed `queued` forever. Admins (web) never hit it. Fixed: the starter's role is looked up (`Technician`), as `reports/scheduleRunner` already did. Scheduled Flow Agent tasks owned by a technician had the same break.
+
+**App side.**
+- **Keyboard:** tap anywhere in the thread or drag it to close the keyboard; a hide-keyboard button sits left of the box while it is focused (an iOS multi-line box has no "done" key). When the thread is short (small phone, keyboard up) the Working card shrinks to one line and the @ list is capped at 35 % of the height.
+- **After an @agent post** the thread refreshes at once and polls every 5 s for 45 s, even when no session started (a Schedule card, a clarifying question, an offline reply or a note come back as thread lines, and a phone often has no socket).
+- **Agent activity:** a thinking bubble under the thread (avatar pulse, typing dots, "Flow Agent is thinking") lists every stage the server really sent for that session, oldest first, newest live (`ConversationState.trails`, `core/conversation/agent_activity.dart`). Queued over 2 min → "Still waiting to start…". A session that ends failed/stopped/offline with no agent reply → a plain "couldn't finish" line. A new agent reply is tinted for 4 s. A session still queued after 30 min is a lost run and no longer shows as working (here and on the snag card).
+- **Failures in plain words:** 428 (location), 401 and 5xx never show the server's raw text (`plainPostFailure`).
+- Typing / leave use the record UUID (the server's room key).
+
+**Reminders (server).** A reminder made in a thread now also posts a silent Flow Agent line "Reminder: …" (with the Schedule card) in that thread when it fires, so it is visible even when the phone shows no push.
+
+```mermaid
+sequenceDiagram
+  participant T as Technician (FieldOps)
+  participant API as POST /api/conversations/.../messages
+  participant W as Flow Agents worker
+  participant R as Runner
+  T->>API: "@agent is this fixed?"
+  API-->>T: 201 {message, invoked:[session]} — app refreshes now, polls 5 s
+  API->>W: enqueue run (triggeredBy = technician id)
+  W->>W: executeAsStarter: Technician? → loadAccess(id, "Technician") (was: no buildings)
+  W->>R: executeRun — stages → typing / session.updated
+  R-->>T: thinking bubble steps (socket or 5 s poll)
+  R-->>T: reply in thread (tinted), bubble goes
+```
+
+## Replying to an agent and actionable answers (2026-10-06, second round)
+
+Owner on an iPhone: *"Reply to agent does not trigger an agent response"* and *"the agents' response should be an actionable next step… rather than giving the 'remind me' template for all responses."*
+
+**Root causes (all server-side; the app was sending the right thing).**
+- The Reply button sends `replyTo` = the little thread's root (`replyTargetFor`, replies are one level deep) and no `@`. The server started agents **only** for an explicit `@mention`, so the reply asked nobody.
+- `hasScheduleIntent` read "check / look / show me / give me" + "today / morning / each / every / until / at 5pm" + "me" as a schedule, so plain questions got a Schedule card or "When should I…?".
+- An old clarifying question swallowed every later reply in its little thread as the timing answer.
+- Every Flow Agent answer ended with the same two schedule chips ("Check this again tomorrow at 09:00", "Tell me when … is closed").
+
+**Now.** A plain reply under an agent's answer continues with that agent (same guards: one live session per thread, per-hour cap, offline reply, suggest-only; "thanks"/"ok" and replies naming a person don't wake it). Its run gets the earlier question and answer. Schedules are captured only for a clear later / repeat ask. The answer leads with "**Next actions**" (one to three field steps: what to check or measure, raise a snag, request a permit, escalate; "not in the records" instead of invented values). Schedule chips appear only under progress questions ("is it fixed?").
+
+**App side.**
+- `ConvMessage.nextSteps` (`domain/conversation.dart`, `ConvNextStep`): one-tap chips under an agent reply (`message_tile.dart`) — **Raise a snag** (pre-filled asset / work order / building → `Routes.snagNew`), **Open the asset** (`Routes.assetDetail`), **Permits** (`Routes.permits`). Each only opens a screen (`core/conversation/next_steps.dart routeForNextStep`, pushed from `conversation_view.dart`); nothing is written until the technician saves there. Unknown actions are dropped. Agent cards stay read-only ("Needs an admin's OK").
+- Composer: replying to an agent's message says "Replying to Flow Agent — it will answer" (`conv.replying_to_agent`) and drops the "add @agent" nudge (`replyReachesAgent`). The clarify "Answer" button still pre-fills `@agent` (harmless; a plain timing reply works too).
+- The fast poll after a reply already follows `invoked` from the server, so a continued run shows the thinking bubble like an `@agent` post.
+
+```mermaid
+sequenceDiagram
+  participant T as Technician (FieldOps)
+  participant API as POST /api/conversations/.../messages
+  participant C as continuation.ts
+  participant R as Flow Agent run
+  T->>API: Reply under the answer: "belt looks worn — what about the bearing?" (replyTo = root, no @)
+  API->>C: last word in the little thread from someone else = Flow Agent?
+  C-->>API: yes → startOrchestrator({followUp: earlier Q + answer})
+  API-->>T: 201 {invoked:[session]} → refresh + 5 s poll, thinking bubble
+  R-->>T: "Bearing limit is not in the records." + **Next actions** 1–3 + chips [Raise a snag] [Permits]
+  T->>T: tap Raise a snag → /snags/new pre-filled (nothing saved yet)
+```
+
+Tests: `test/conversation_next_steps_test.dart` (parse, routes, reply hint, chips and banner in EN/AR at 320 pt). Server: `src/services/conversations/__tests__/replyContinuation.test.ts`. **Not verified on a phone**, and the dev server the phone uses runs older server code until it is deployed.
+
 ## What was only simulated / not verified
 
 - **No live server run.** Every shape comes from the server's `types.ts` and the spec's contract sections, and was checked only by parsing tests.

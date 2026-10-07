@@ -14,14 +14,35 @@ import 'providers.dart';
 
 final snagMediaProvider = Provider<SnagMedia>((ref) => SnagMedia());
 
-final snagRepositoryProvider = Provider<SnagRepository>(
-  (ref) => SnagRepository(
-    sync: ref.watch(syncClientProvider),
+final snagRepositoryProvider = Provider<SnagRepository>((ref) {
+  final sync = ref.watch(syncClientProvider);
+  final repo = SnagRepository(
+    sync: sync,
     api: ref.watch(apiClientProvider),
     store: ref.watch(offlineDbProvider),
     media: ref.watch(snagMediaProvider),
-  ),
-);
+  );
+  // 2026-10-06 — a queued snag write that syncs is confirmed at once (the
+  // server's copy replaces "waiting to send"), and a failed replay records
+  // why, for the plain-words reason on the card and detail. Registered here
+  // because this provider is built by the dashboard's snag card at startup,
+  // before the first flush can replay anything. Before this hook, a replayed
+  // create kept `localOnly` until the hub happened to pull that building.
+  void bump() => ref.read(snagTickProvider.notifier).state++;
+  sync.onReplayed(SnagRepository.entityType, (id) async {
+    await repo.afterReplay(id);
+    bump();
+  });
+  sync.onReplayFailed(SnagRepository.entityType, (id, failure) async {
+    await repo.afterReplayFailed(id, failure);
+    bump();
+  });
+  sync.onReplayed(SnagRepository.surveyEntityType, (id) async {
+    await repo.afterSurveyReplay(id);
+    bump();
+  });
+  return repo;
+});
 
 /// Bumped after every local snag/survey write so every list re-reads the
 /// store. The store is not part of the offline queue, so [queueChangedProvider]
@@ -62,12 +83,14 @@ final snagBuildingIdProvider = NotifierProvider<SnagBuildingIdController, String
   SnagBuildingIdController.new,
 );
 
+/// Cache first (see [SnagRepository.buildings]): paints the cached list at
+/// once, re-reads itself only if the background check found a change.
 final snagBuildingsProvider = FutureProvider<List<SnagBuilding>>(
-  (ref) => ref.watch(snagRepositoryProvider).buildings(),
+  (ref) => ref.watch(snagRepositoryProvider).buildings(onStale: ref.invalidateSelf),
 );
 
 final snagTreeProvider = FutureProvider.family<SnagLocationTree?, String>(
-  (ref, buildingId) => ref.watch(snagRepositoryProvider).tree(buildingId),
+  (ref, buildingId) => ref.watch(snagRepositoryProvider).tree(buildingId, onStale: ref.invalidateSelf),
 );
 
 /// Local snags, one building or all ([buildingId] null).
@@ -92,12 +115,16 @@ final snagSurveyProvider = FutureProvider.family<SnagSurvey?, String>((ref, id) 
   return ref.watch(snagRepositoryProvider).surveyById(id);
 });
 
-/// Snag ids with a write still in the offline queue — the "On device" badge.
+/// Snag ids with a write still in the offline queue.
 final pendingSnagIdsProvider = FutureProvider<Set<String>>((ref) async {
   ref.watch(queueChangedProvider);
   ref.watch(snagTickProvider);
   return ref.watch(offlineDbProvider).pendingEntityIds(SnagRepository.entityType);
 });
+
+/// True while the offline queue is draining — "Sending…" rather than
+/// "Waiting to send" on a queued snag.
+final snagQueueFlushingProvider = Provider<bool>((ref) => ref.watch(syncProgressProvider) != null);
 
 class SnagSyncState {
   const SnagSyncState({this.syncing = false, this.online, this.lastSyncedAt, this.resent = 0});

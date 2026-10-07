@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../state/ar_manual_place_controller.dart';
 import '../../../state/ar_prefs_controller.dart';
 import '../../../state/ar_session_controller.dart';
 import '../../../state/ar_setup_controller.dart';
@@ -12,6 +13,7 @@ import '../../../widgets/app_text.dart';
 import '../../../widgets/motion.dart';
 import '../ar_ui.dart';
 import '../widgets/ar_chrome.dart';
+import 'manual/ar_manual_place_overlay.dart' show ManualIcons;
 
 /// TabMethod / PhMethod (AR-54): how to place the model. The fastest option
 /// for where the user is comes first with a "Best here" tag; options that
@@ -36,6 +38,10 @@ class ArMethodChooser extends ConsumerWidget {
     final floorName = floor?.floorName ?? '';
     final where = session.args?.spaceName ?? floorName;
     final sunlight = ref.watch(arPrefsProvider.select((p) => p.sunlight));
+    // "Place by hand" (ArManualPlaceController) goes first when this floor
+    // has few corners, or corners failed twice this session.
+    final failures = ref.watch(arManualPlaceProvider.select((m) => m.cornerFailures));
+    final manualFirst = arManualRecommended(session, setup, failures);
 
     final options = <_MethodOption>[
       _MethodOption(
@@ -62,6 +68,13 @@ class ArMethodChooser extends ConsumerWidget {
         enabled: grid && corners > 0,
       ),
       _MethodOption(
+        method: null,
+        icon: ManualIcons.hand,
+        title: 'ar.method.manual'.getString(context),
+        subtitle: (failures >= 2 ? 'ar.method.manual_sub_failed' : 'ar.method.manual_sub').getString(context),
+        enabled: true,
+      ),
+      _MethodOption(
         method: ArPlaceMethod.resume,
         icon: ArIcons.resume,
         title: 'ar.method.resume'.getString(context),
@@ -75,12 +88,17 @@ class ArMethodChooser extends ConsumerWidget {
         subtitle: 'ar.method.gnss_sub'.getString(context),
         enabled: false,
       ),
-    ]..sort((a, b) {
-        if (a.method == recommended) return -1;
-        if (b.method == recommended) return 1;
-        if (a.enabled != b.enabled) return a.enabled ? -1 : 1;
-        return 0;
-      });
+    ];
+    bool isBest(_MethodOption o) => o.method == null ? manualFirst : (!manualFirst && o.method == recommended);
+    // A stable sort: List.sort isn't, and equal options must keep their order.
+    final ranked = [
+      ...options.where((o) => isBest(o)),
+      ...options.where((o) => !isBest(o) && o.enabled),
+      ...options.where((o) => !isBest(o) && !o.enabled),
+    ];
+    options
+      ..clear()
+      ..addAll(ranked);
 
     return ArCard(
       padding: EdgeInsets.all(tablet ? 22 : 18),
@@ -117,8 +135,12 @@ class ArMethodChooser extends ConsumerWidget {
               index: i,
               child: _MethodTile(
                 option: options[i],
-                recommended: options[i].method == recommended && options[i].enabled,
-                onTap: options[i].enabled ? () => ctrl.chooseMethod(options[i].method) : null,
+                recommended: isBest(options[i]) && options[i].enabled,
+                onTap: !options[i].enabled
+                    ? null
+                    : options[i].method == null
+                        ? () => ref.read(arManualPlaceProvider.notifier).chooseFromChooser(remember: setup.rememberChoice)
+                        : () => ctrl.chooseMethod(options[i].method!),
               ),
             ),
             const SizedBox(height: 8),
@@ -240,7 +262,8 @@ class _MethodOption {
     required this.subtitle,
     required this.enabled,
   });
-  final ArPlaceMethod method;
+  /// Null = "Place by hand", which is not a setup-ladder method.
+  final ArPlaceMethod? method;
   final IconData icon;
   final String title;
   final String subtitle;

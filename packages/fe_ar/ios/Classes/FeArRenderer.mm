@@ -8,6 +8,7 @@
 // line, so a fix in one belongs in the other.
 #import "FeArRenderer.h"
 
+#include <filament/Box.h>
 #include <filament/Camera.h>
 #include <filament/ColorGrading.h>
 #include <filament/Engine.h>
@@ -39,6 +40,7 @@
 #include <math/vec4.h>
 #include <utils/EntityManager.h>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <string>
@@ -63,6 +65,39 @@ constexpr int kStateWidth = 256;
 // touches the per-tile pass masks applyVisibility owns.
 constexpr uint8_t kLayerModel = 0x01;
 constexpr uint8_t kLayerCamera = 0x02;
+// The room-scan overlay (on while its alpha > 0) and the pulse rings (always
+// on: a ring exists only while it animates).
+constexpr uint8_t kLayerScan = 0x04;
+constexpr uint8_t kLayerPulse = 0x08;
+
+// fe_scan.mat vertex layout: float3 position, ubyte4 colour, float2 uv0.
+constexpr uint32_t kScanStride = 24;
+constexpr uint8_t kScanPriority = 1;   // over the camera (0), under the model (2..6)
+constexpr uint8_t kPulsePriority = 7;  // over everything
+constexpr double kPulseSeconds = 1.2;
+constexpr double kPulseStagger = 0.35;
+constexpr float kPulseStartM = 0.04;
+constexpr float kPulseGrowM = 0.30;
+constexpr size_t kMaxPulses = 12;
+constexpr int kRingSegments = 48;
+constexpr float kRingInner = 0.72f;
+
+struct ScanSurface {
+    Entity entity;
+    VertexBuffer* vertices = nullptr;
+    IndexBuffer* indices = nullptr;
+    MaterialInstance* material = nullptr;
+};
+
+struct Pulse {
+    Entity entity;
+    MaterialInstance* material = nullptr;
+    double start = 0;
+    float3 position;
+    float3 axisX;
+    float3 axisY;
+    float3 axisZ;
+};
 
 struct Pass {
     std::vector<Entity> entities;
@@ -181,7 +216,23 @@ struct CaptureRequest {
     bool _sectionEnabled;
     float _sectionY;
     float _translationY;
+    // The model's vertical scale ("Place by hand" at another size): tile Y
+    // maps to world Y as y * _scaleY + _translationY. 1 for every 4-DoF fit.
+    float _scaleY;
     NSMutableArray* _captureQueue;
+
+    // room scan + pulses
+    Material* _scanMaterial;
+    std::map<std::string, ScanSurface> _scan;
+    float _scanAlpha;
+    bool _scanContrast;
+    bool _placed;
+    double _seconds;
+    float3 _cameraPosition;
+    VertexBuffer* _ringVertices;
+    IndexBuffer* _ringIndices;
+    uint32_t _ringIndexCount;
+    std::vector<Pulse> _pulses;
 }
 
 - (nullable instancetype)initWithLayer:(CAMetalLayer*)layer {
@@ -192,13 +243,24 @@ struct CaptureRequest {
     _sectionEnabled = false;
     _sectionY = 0;
     _translationY = 0;
+    _scaleY = 1.0f;
     _grid = nullptr;
     _pins = nullptr;
     _captureQueue = [NSMutableArray new];
+    _scanMaterial = nullptr;
+    _scanAlpha = 0.0f;
+    _scanContrast = false;
+    _placed = false;
+    _seconds = 0;
+    _cameraPosition = float3{0.0f, 0.0f, 0.0f};
+    _ringVertices = nullptr;
+    _ringIndices = nullptr;
+    _ringIndexCount = 0;
     _sampler = TextureSampler(TextureSampler::MinFilter::NEAREST, TextureSampler::MagFilter::NEAREST);
 
     NSData* featureMat = [self materialNamed:@"fe_feature"];
     NSData* cameraMat = [self materialNamed:@"fe_camera_feed"];
+    NSData* scanMat = [self materialNamed:@"fe_scan"];
     _drawsCamera = cameraMat != nil;
 
     // Without the camera material the model is drawn over a transparent
@@ -219,7 +281,7 @@ struct CaptureRequest {
     _view->setScene(_scene);
     _view->setCamera(_camera);
     _view->setShadowingEnabled(false);
-    _view->setVisibleLayers(0xff, kLayerCamera); // unplaced: camera only
+    [self applyLayers]; // unplaced, no scan: camera (and pulses) only
     if (!_drawsCamera) _view->setBlendMode(View::BlendMode::TRANSLUCENT);
     // LINEAR tone mapping: overlay colours come out exactly as Dart asked
     // (fe_camera_feed.mat decodes the camera from sRGB to match).
@@ -260,6 +322,10 @@ struct CaptureRequest {
 
     _modelRoot = EntityManager::get().create();
     _engine->getTransformManager().create(_modelRoot);
+
+    _scanMaterial = scanMat ? Material::Builder().package(scanMat.bytes, scanMat.length).build(*_engine) : nullptr;
+    _hasScanMaterial = _scanMaterial != nullptr;
+    if (!_scanMaterial) NSLog(@"fe_ar: fe_scan.filamat not bundled; no room-scan overlay");
 
     if (cameraMat) [self setUpCameraFeed:cameraMat];
     return self;
@@ -303,6 +369,11 @@ struct CaptureRequest {
 - (void)dealloc {
     for (auto& kv : _tiles) [self destroyTile:kv.second];
     _tiles.clear();
+    [self clearScanSurfaces];
+    while (!_pulses.empty()) [self destroyPulseAt:_pulses.size() - 1];
+    if (_ringVertices) _engine->destroy(_ringVertices);
+    if (_ringIndices) _engine->destroy(_ringIndices);
+    if (_scanMaterial) _engine->destroy(_scanMaterial);
     [self replaceOverlay:&_grid with:nil];
     [self replaceOverlay:&_pins with:nil];
     if (_cameraMaterial) {
@@ -358,6 +429,10 @@ struct CaptureRequest {
     _view->setViewport(Viewport(0, 0, (uint32_t)drawableSize.width, (uint32_t)drawableSize.height));
     _camera->setCustomProjection(toMat4(projection), 0.05, 100.0);
     _camera->setModelMatrix(toMat4f(cameraModel));
+    _seconds = seconds;
+    _cameraPosition = float3{cameraModel.columns[3][0], cameraModel.columns[3][1], cameraModel.columns[3][2]};
+    [self stepScan];
+    [self stepPulses];
 
     // x-ray pulse, only on tiles that hold a highlight
     if (_featureMaterial) {
@@ -482,7 +557,7 @@ struct CaptureRequest {
     mi->setParameter("highlightColor", hl);
     mi->setParameter("opacity", _opacity);
     mi->setParameter("sectionEnabled", _sectionEnabled ? 1.0f : 0.0f);
-    mi->setParameter("sectionWorldY", _sectionY + _translationY);
+    mi->setParameter("sectionWorldY", _sectionY * _scaleY + _translationY);
     mi->setParameter("pass", (float)pass);
     mi->setParameter("isLines", look.lines ? 1.0f : 0.0f);
     mi->setParameter("time", 0.0f);
@@ -574,14 +649,28 @@ struct CaptureRequest {
     auto& tcm = _engine->getTransformManager();
     tcm.setTransform(tcm.getInstance(_modelRoot), toMat4f(matrix));
     const float ty = matrix.columns[3][1];
-    if (std::fabs(ty - _translationY) > 1e-4f) {
+    // Length of the Y column: 1 for a yaw-only fit, the size for a hand
+    // placement (its rotation is about Y only, so the column is (0, s, 0)).
+    const float sy = simd_length(simd_make_float3(matrix.columns[1]));
+    const bool scaleChanged = std::fabs(sy - _scaleY) > 1e-5f && sy > 1e-6f;
+    if (std::fabs(ty - _translationY) > 1e-4f || scaleChanged) {
         _translationY = ty;
+        if (scaleChanged) _scaleY = sy;
         if (_sectionEnabled) [self pushSection];
     }
 }
 
 - (void)setPlaced:(BOOL)placed {
-    _view->setVisibleLayers(0xff, placed ? (uint8_t)(kLayerCamera | kLayerModel) : kLayerCamera);
+    _placed = placed;
+    [self applyLayers];
+}
+
+/// The view's visible layers from the placed flag and the scan alpha.
+- (void)applyLayers {
+    uint8_t layers = kLayerCamera | kLayerPulse;
+    if (_placed) layers |= kLayerModel;
+    if (_scanAlpha > 0.001f) layers |= kLayerScan;
+    _view->setVisibleLayers(0xff, layers);
 }
 
 - (void)setOpacity:(float)opacity sectionY:(nullable NSNumber*)sectionY {
@@ -611,8 +700,10 @@ struct CaptureRequest {
 }
 
 - (void)pushSection {
-    // user-world Y = tile Y + the fit's vertical translation (yaw-only fit, CONTRACT C2)
-    const float y = _sectionY + _translationY;
+    // user-world Y = tile Y × the model's vertical scale + its vertical
+    // translation (yaw-only rotation, CONTRACT C2; scale 1 except "Place by
+    // hand" at another size)
+    const float y = _sectionY * _scaleY + _translationY;
     for (auto& kv : _tiles)
         for (auto& p : kv.second.passes)
             for (MaterialInstance* mi : p.materials) mi->setParameter("sectionWorldY", y);
@@ -658,6 +749,250 @@ struct CaptureRequest {
 
 - (void)setPinsGlb:(nullable NSData*)glb {
     [self replaceOverlay:&_pins with:glb];
+}
+
+// ------------------------------------------------------------------ room scan
+
+- (void)setScanSurface:(NSString*)key
+              vertices:(NSData*)vertices
+             transform:(simd_float4x4)transform
+              bornTime:(double)bornTime
+                  grid:(BOOL)grid {
+    if (!_scanMaterial) return;
+    [self removeScanSurface:key];
+    uint32_t count = (uint32_t)(vertices.length / kScanStride);
+    count -= count % 3;
+    if (count < 3) return;
+
+    // Copies: Filament uploads asynchronously and frees them in the callbacks.
+    const size_t vbytes = (size_t)count * kScanStride;
+    void* vdata = malloc(vbytes);
+    uint32_t* idata = (uint32_t*)malloc((size_t)count * sizeof(uint32_t));
+    if (!vdata || !idata) {
+        free(vdata);
+        free(idata);
+        return;
+    }
+    memcpy(vdata, vertices.bytes, vbytes);
+    float3 lo{INFINITY, INFINITY, INFINITY}, hi{-INFINITY, -INFINITY, -INFINITY};
+    for (uint32_t i = 0; i < count; i++) {
+        idata[i] = i;
+        const float* p = (const float*)((const uint8_t*)vdata + (size_t)i * kScanStride);
+        lo = min(lo, float3{p[0], p[1], p[2]});
+        hi = max(hi, float3{p[0], p[1], p[2]});
+    }
+
+    ScanSurface s;
+    s.vertices = VertexBuffer::Builder()
+                     .vertexCount(count)
+                     .bufferCount(1)
+                     .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, 0, kScanStride)
+                     .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, 12, kScanStride)
+                     .normalized(VertexAttribute::COLOR)
+                     .attribute(VertexAttribute::UV0, 0, VertexBuffer::AttributeType::FLOAT2, 16, kScanStride)
+                     .build(*_engine);
+    s.vertices->setBufferAt(*_engine, 0,
+                            VertexBuffer::BufferDescriptor(vdata, vbytes, [](void* buf, size_t, void*) { free(buf); }));
+    s.indices = IndexBuffer::Builder().indexCount(count).bufferType(IndexBuffer::IndexType::UINT).build(*_engine);
+    s.indices->setBuffer(*_engine, IndexBuffer::BufferDescriptor(idata, (size_t)count * sizeof(uint32_t),
+                                                                 [](void* buf, size_t, void*) { free(buf); }));
+    s.material = _scanMaterial->createInstance();
+    s.material->setParameter("mode", grid ? 1.0f : 0.0f);
+    s.material->setParameter("bornTime", (float)bornTime);
+    s.material->setParameter("tint", float4{1.0f, 1.0f, 1.0f, 1.0f});
+    s.material->setParameter("progress", 0.0f);
+    [self updateScanMaterial:s.material];
+
+    s.entity = EntityManager::get().create();
+    RenderableManager::Builder(1)
+        .boundingBox(Box().set(lo, hi))
+        .material(0, s.material)
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, s.vertices, s.indices, 0, count)
+        .culling(false)
+        .castShadows(false)
+        .receiveShadows(false)
+        .priority(kScanPriority)
+        .layerMask(0xff, kLayerScan)
+        .build(*_engine, s.entity);
+    _engine->getTransformManager().create(s.entity, {}, toMat4f(transform));
+    _scene->addEntity(s.entity);
+    _scan[key.UTF8String] = s;
+}
+
+- (void)setScanSurfaceTransform:(NSString*)key transform:(simd_float4x4)transform {
+    auto it = _scan.find(key.UTF8String);
+    if (it == _scan.end()) return;
+    auto& tcm = _engine->getTransformManager();
+    tcm.setTransform(tcm.getInstance(it->second.entity), toMat4f(transform));
+}
+
+- (void)destroyScanSurface:(ScanSurface&)s {
+    _scene->remove(s.entity);
+    _engine->destroy(s.entity);  // the renderable goes before its buffers and material instance
+    EntityManager::get().destroy(s.entity);
+    _engine->destroy(s.material);
+    _engine->destroy(s.vertices);
+    _engine->destroy(s.indices);
+}
+
+- (void)removeScanSurface:(NSString*)key {
+    auto it = _scan.find(key.UTF8String);
+    if (it == _scan.end()) return;
+    [self destroyScanSurface:it->second];
+    _scan.erase(it);
+}
+
+- (void)clearScanSurfaces {
+    for (auto& kv : _scan) [self destroyScanSurface:kv.second];
+    _scan.clear();
+}
+
+- (void)setScanAlpha:(float)alpha contrast:(BOOL)contrast {
+    _scanAlpha = std::min(std::max(alpha, 0.0f), 1.0f);
+    _scanContrast = contrast;
+    for (auto& kv : _scan) [self updateScanMaterial:kv.second.material];
+    [self applyLayers];
+}
+
+/// The per-frame and global parameters of one scan surface.
+- (void)updateScanMaterial:(MaterialInstance*)mi {
+    mi->setParameter("time", (float)_seconds);
+    mi->setParameter("overlayAlpha", _scanAlpha);
+    mi->setParameter("sweepOrigin", _cameraPosition);
+    mi->setParameter("contrast", _scanContrast ? 1.0f : 0.0f);
+}
+
+/// Per frame while the overlay shows: the paint-in, the sweep and the fade
+/// follow the clock and the camera.
+- (void)stepScan {
+    if (_scanAlpha <= 0.001f) return;
+    for (auto& kv : _scan) {
+        kv.second.material->setParameter("time", (float)_seconds);
+        kv.second.material->setParameter("sweepOrigin", _cameraPosition);
+    }
+}
+
+// ------------------------------------------------------------------ pulses
+
+/// The unit annulus in the XZ plane (uv0.x 0 at the inner edge, 1 at the outer).
+- (BOOL)ensureRing {
+    if (_ringVertices) return YES;
+    const int verts = 2 * (kRingSegments + 1);
+    uint8_t* v = (uint8_t*)calloc((size_t)verts, kScanStride);
+    uint16_t* idx = (uint16_t*)malloc((size_t)kRingSegments * 6 * sizeof(uint16_t));
+    if (!v || !idx) {
+        free(v);
+        free(idx);
+        return NO;
+    }
+    for (int i = 0; i <= kRingSegments; i++) {
+        const float a = (float)(2.0 * M_PI * i / kRingSegments);
+        for (int k = 0; k < 2; k++) {
+            const float r = k == 0 ? kRingInner : 1.0f;
+            uint8_t* o = v + (size_t)(i * 2 + k) * kScanStride;
+            const float pos[3] = {r * std::cos(a), 0.0f, r * std::sin(a)};
+            const float uv[2] = {(float)k, 0.0f};
+            memcpy(o, pos, sizeof(pos));
+            o[12] = o[13] = o[14] = o[15] = 255;
+            memcpy(o + 16, uv, sizeof(uv));
+        }
+    }
+    for (int i = 0; i < kRingSegments; i++) {
+        const uint16_t a = (uint16_t)(i * 2), b = (uint16_t)(i * 2 + 1), c = (uint16_t)(i * 2 + 2), d = (uint16_t)(i * 2 + 3);
+        uint16_t* t = idx + i * 6;
+        t[0] = a; t[1] = c; t[2] = b;
+        t[3] = b; t[4] = c; t[5] = d;
+    }
+    _ringIndexCount = (uint32_t)kRingSegments * 6;
+    _ringVertices = VertexBuffer::Builder()
+                        .vertexCount((uint32_t)verts)
+                        .bufferCount(1)
+                        .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, 0, kScanStride)
+                        .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::UBYTE4, 12, kScanStride)
+                        .normalized(VertexAttribute::COLOR)
+                        .attribute(VertexAttribute::UV0, 0, VertexBuffer::AttributeType::FLOAT2, 16, kScanStride)
+                        .build(*_engine);
+    _ringVertices->setBufferAt(*_engine, 0, VertexBuffer::BufferDescriptor(v, (size_t)verts * kScanStride,
+                                                                           [](void* buf, size_t, void*) { free(buf); }));
+    _ringIndices = IndexBuffer::Builder().indexCount(_ringIndexCount).bufferType(IndexBuffer::IndexType::USHORT).build(*_engine);
+    _ringIndices->setBuffer(*_engine, IndexBuffer::BufferDescriptor(idx, (size_t)_ringIndexCount * sizeof(uint16_t),
+                                                                    [](void* buf, size_t, void*) { free(buf); }));
+    return YES;
+}
+
+- (void)pulseAt:(simd_float3)position normal:(simd_float3)normal rgb:(uint32_t)rgb {
+    if (!_scanMaterial || ![self ensureRing]) return;
+    // The ring's plane faces `normal`: its local +Y goes there.
+    float3 y{normal.x, normal.y, normal.z};
+    const float len = std::sqrt(dot(y, y));
+    y = len > 1e-4f ? y / len : float3{0.0f, 1.0f, 0.0f};
+    const float3 helper = std::fabs(y.y) < 0.9f ? float3{0.0f, 1.0f, 0.0f} : float3{1.0f, 0.0f, 0.0f};
+    const float3 x = normalize(cross(helper, y));
+    const float3 z = cross(x, y);
+    for (int k = 0; k < 2; k++) {
+        while (_pulses.size() >= kMaxPulses) [self destroyPulseAt:0];
+        Pulse p;
+        p.start = _seconds + k * kPulseStagger;
+        // a hair off the surface, so it never fights the wall it marks
+        p.position = float3{position.x, position.y, position.z} + y * 0.004f;
+        p.axisX = x;
+        p.axisY = y;
+        p.axisZ = z;
+        p.material = _scanMaterial->createInstance();
+        p.material->setParameter("mode", 2.0f);
+        p.material->setParameter("tint", linearRgb(rgb, 0.95f));
+        p.material->setParameter("progress", 1.0f);  // invisible until it starts
+        p.material->setParameter("overlayAlpha", 1.0f);
+        p.material->setParameter("contrast", 0.0f);
+        p.material->setParameter("time", (float)_seconds);
+        p.material->setParameter("bornTime", 0.0f);
+        p.material->setParameter("sweepOrigin", _cameraPosition);
+        p.entity = EntityManager::get().create();
+        RenderableManager::Builder(1)
+            .boundingBox(Box().set(float3{-1.0f, -0.01f, -1.0f}, float3{1.0f, 0.01f, 1.0f}))
+            .material(0, p.material)
+            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, _ringVertices, _ringIndices, 0, _ringIndexCount)
+            .culling(false)
+            .castShadows(false)
+            .receiveShadows(false)
+            .priority(kPulsePriority)
+            .layerMask(0xff, kLayerPulse)
+            .build(*_engine, p.entity);
+        _engine->getTransformManager().create(p.entity, {}, [self pulseTransform:p radius:kPulseStartM]);
+        _scene->addEntity(p.entity);
+        _pulses.push_back(p);
+    }
+}
+
+- (mat4f)pulseTransform:(const Pulse&)p radius:(float)r {
+    return mat4f(float4{p.axisX * r, 0.0f}, float4{p.axisY, 0.0f}, float4{p.axisZ * r, 0.0f}, float4{p.position, 1.0f});
+}
+
+- (void)destroyPulseAt:(size_t)i {
+    Pulse& p = _pulses[i];
+    _scene->remove(p.entity);
+    _engine->destroy(p.entity);
+    EntityManager::get().destroy(p.entity);
+    _engine->destroy(p.material);
+    _pulses.erase(_pulses.begin() + (long)i);
+}
+
+/// Grows and fades each ring (ease-out), and drops finished ones.
+- (void)stepPulses {
+    auto& tcm = _engine->getTransformManager();
+    for (size_t i = _pulses.size(); i-- > 0;) {
+        Pulse& p = _pulses[i];
+        const double t = (_seconds - p.start) / kPulseSeconds;
+        if (t >= 1.0) {
+            [self destroyPulseAt:i];
+            continue;
+        }
+        if (t < 0.0) continue;
+        const float u = (float)t;
+        const float eased = 1.0f - (1.0f - u) * (1.0f - u);
+        tcm.setTransform(tcm.getInstance(p.entity), [self pulseTransform:p radius:kPulseStartM + kPulseGrowM * eased]);
+        p.material->setParameter("progress", u);
+    }
 }
 
 @end

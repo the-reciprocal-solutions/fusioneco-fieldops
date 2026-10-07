@@ -44,9 +44,9 @@ The four stateful singletons are **built in `main()` and injected with `override
 |---|---|
 | Auth | `Authorization: Bearer <token>` from `SecureStore` on every request |
 | Idempotency | every non-GET gets `X-Client-Mutation-Id` (UUID v4), unless the caller passed one ([:36](../lib/core/network/api_client.dart#L36)). Queued replays reuse the **original** id, so the server's idempotency guard dedupes them. |
-| 401 | emits `onSessionExpired` → `AuthController` logs out (see the risk below) |
+| 401 | silent renewal + one replay (`SessionRefresher`, see "Session" below); only a **refused** renewal emits `onSessionExpired`. A renewal that can't reach the server becomes a `NetworkFailure`, so writes queue. |
 | 428 | emits `onLocationRequired` → `CheckInController` raises the blocking check-in gate |
-| Timeouts | connect 15s / receive 30s / uploads 120s ([env.dart](../lib/app/env.dart)) |
+| Timeouts | connect 15s / receive 30s / uploads 120s / send 5 min ([env.dart](../lib/app/env.dart)). The send cap (2026-10-06) stops a stalled upload from holding the single flush run indefinitely. |
 
 Every Dio error is mapped by [mapDioException](../lib/core/network/api_exception.dart#L52) into a sealed `ApiFailure`:
 
@@ -104,6 +104,23 @@ sequenceDiagram
 
 A 2xx whose body carries `captureConflict` (FR-4.8) is recorded as a **non-dropped** conflict ("flagged" in Sync Center). The write succeeded, but the register changed while the device was offline.
 
+**Why an item is still waiting (2026-10-06).** `flushQueue` records a `ReplayStatus` per mutation id in `SyncClient.lastReplayStatus` (in memory, rebuilt by the next flush): no signal, no answer while online (timeout or stalled upload: stops the run like no signal), 5xx (`serverBusy`), 5xx with a machine code (`serverNotReady`, e.g. `SNAG_ENGINE_NOT_ENABLED`), 428, 401 after a refused renewal, or **could not be prepared on this phone**. That last one is any non-`ApiFailure` exception. It used to escape the loop and abort every flush on the same item forever (a "poisoned" item that blocked the whole queue and never showed why). Now it is counted, kept (never auto-dropped, since it may be the only copy of evidence) and skipped so the rest drain. The pure [waiting_reasons.dart](../lib/core/offline/waiting_reasons.dart) `explainQueue` turns queue + statuses into one plain reason per item. Items behind a run-stopping item read "waiting for the change above".
+
+The shell's banner ([offline_banner.dart](../lib/widgets/offline_banner.dart)) shows when offline. Online, it shows only when an item needs attention or has waited longer than 30 s (`shouldShowWaitingBanner`), so outbox-first saves no longer flash a bar. Tapping it opens the **Waiting to send** sheet ([waiting_to_send_sheet.dart](../lib/widgets/waiting_to_send_sheet.dart)): each item, its reason, **Retry** (`SyncClient.retryMutation` → the normal flush up to that item) and **Discard** (confirm dialog → `discardMutation`, deleted and not logged as a conflict). The banner sits inside `TopChromeLayout`, which owns the status-bar inset once and removes it from the branch screens' `MediaQuery`. Before this, the banner was drawn under the iOS status bar and each screen's own `SafeArea` added a second gap below it.
+
+```mermaid
+flowchart LR
+  F[flushQueue item] -->|2xx| OK[delete + clear status]
+  F -->|NetworkFailure| N{device offline?}
+  N -->|yes| W1[network: stop run]
+  N -->|no| W2[noAnswer: stop run]
+  F -->|428 / 401| S[location / signIn: stop run]
+  F -->|5xx| R[serverBusy or serverNotReady: retry later, continue]
+  F -->|other 4xx or attempts| D[conflict log]
+  F -->|any other exception| P[appError: keep, count, continue]
+  W1 & W2 & S & R & P --> E[explainQueue] --> B[banner + Waiting to send sheet]
+```
+
 **Triggers.** Flushing is cheap to no-op, so it is called from many places:
 
 - [`startAutoFlush`](../lib/core/offline/sync_client.dart#L122): connectivity-change listener, a **20s poll**, and an immediate run. It starts from the shell's first frame ([technician_shell.dart:56](../lib/features/shell/technician_shell.dart#L56)) and after login.
@@ -144,13 +161,49 @@ The **passphrase** is a random 256-bit value minted once into the platform keyst
 
 ## Session, auth and permissions
 
-- **Login:** `POST /api/auth/technician-login` (username or email) → `token` into `SecureStore`, `technician` → [Session](../lib/core/storage/session_store.dart#L7) into SharedPreferences. `Session.userId` (UUID) is what every `/technician/:id` call takes. `technicianId` (TECH001) is display only.
+- **Login:** `POST /api/auth/technician-login` (username or email, plus `refresh: true`) → `token` into `SecureStore`, `technician` → [Session](../lib/core/storage/session_store.dart#L7) into SharedPreferences. `Session.userId` (UUID) is what every `/technician/:id` call takes. `technicianId` (TECH001) is display only.
 - **Partner accounts are refused:** a non-`in-house` `partnerRole` is logged straight back out ([login_screen.dart:46](../lib/features/login/login_screen.dart#L46)). Partners use the web `/partner/*` portal.
-- **24h session:** enforced client-side three ways: the saved timestamp, `Session.isExpired`, and an in-app timer ([auth_controller.dart:70](../lib/state/auth_controller.dart#L70)). A server 401 also ends it.
 - **Permissions** come from `GET /api/auth/config` (raw, un-enveloped). Only six fields reach the UI. `isAiAgent`/`isCreateAsset`/`isAssetReport` are opt-in (default false). `isDigitalTwin` is **nullable** and opt-out: only an explicit `false` hides "View in 3D".
 - **Base URL override:** the login screen can save a custom API host (`apiBaseUrl` pref). Both `main()` and the background engine honour it.
 
-> ⚠️ **Known risk (as of 2026-09-25):** [AuthController.logout](../lib/state/auth_controller.dart#L116) calls `OfflineDb.wipe()`, which deletes `pending_mutations`. `logout()` runs on manual sign-out, on the in-app 24h timer, on the session-expired dialog, and on **any 401 from any request**. Unsynced field work is therefore discarded in those cases. This contradicts `background_sync.dart`'s "the queue is kept; it drains the next time someone signs in" and `flush_policy.dart`'s reason for treating 401 as `stopRun`. By contrast, a session that expires while the app is *closed* keeps its queue, because `readSession()` clears only the prefs. That queue then replays under whoever signs in next. Resolve this before relying on the queue across a session boundary.
+### Long sessions: signed in until you sign out (2026-10-06)
+
+The owner: "make the technician login session longer so it doesn't ask for a password every time and logs in automatically until they manually log out." Until then the app ended every session after 24h three ways (the saved timestamp, `Session.isExpired`, an in-app timer), the server's token also lasted 24h, and **any** 401 signed the technician out. All three are gone.
+
+- **Tokens.** With `refresh: true` the server (≥ 2026-10-06, `fusion-eco-server` [technician-session-refresh.md](../../fusion-eco-server/documentation/technician-session-refresh.md)) answers with a **1 h access token** and a **refresh token** (`ftr1.<sessionId>.<secret>`). It stores only a hash, **rotates** it on every use, honours the just-replaced one for a 24 h grace (a lost response in a basement), revokes the whole session if an older one comes back, and revokes it on sign-out. It expires after 90 days unused (sliding). Both tokens live in the keystore (`SecureStore`: iOS Keychain / Android EncryptedSharedPreferences), never in prefs.
+- **Renewal** ([session_refresher.dart](../lib/core/network/session_refresher.dart), single-flight): `POST /api/auth/technician-refresh {refreshToken}`. 200 → new pair stored. 400/401/403 → **rejected**. No answer or 5xx → **unavailable** (keep everything). 404 (route missing) → fallback below.
+- **Older server fallback.** A server that sends no refresh token gets the 24h token as before. The app then keeps the sign-in name + password **in the keystore only** and signs itself back in when that token runs out. They are deleted on sign-out, when the server refuses them (password changed), and as soon as the server issues a refresh token. This is what keeps the dev server (older code) from asking for the password daily until it is redeployed.
+- **On a 401** ([api_client.dart](../lib/core/network/api_client.dart)): renew, then replay the request once with the same body, the same `X-Client-Mutation-Id` and a cloned `FormData`. A visibly expired JWT is renewed **before** sending, so an upload isn't sent twice. If the replay still gets 401, the route refuses this user for another reason: the error goes to the caller and there is no sign-out. **Rejected** → `onSessionExpired` → `AuthController` signs out (`logout(revoke: false)`) → the "session expired" dialog → login. **Unavailable** → `NetworkFailure`, so `SyncClient` queues the write and nobody is signed out.
+- **The queue survives** a refused renewal: `logout()` keeps `pending_mutations` (NFR-1) and `wipeForSignOut` keeps unsent work (P-002). A flush that meets a 401 stops the run and keeps everything (`flush_policy.dart`).
+- **Manual sign-out** calls `POST /api/auth/technician-logout` (best effort, 5 s) to revoke the refresh token, then clears the token, the refresh token and any keystore login.
+- **Other token holders.** The socket authenticates once per connection. `socket_controller.dart` reconnects with the new token on `ApiClient.onSessionRenewed`, and connects with `ApiClient.freshToken()`. The twin WebView also takes `freshToken()`. The Android background engine builds its own `ApiClient`, so it renews too. The grace window covers it and the app racing for the same refresh token.
+
+```mermaid
+sequenceDiagram
+  participant App as Screen / SyncClient
+  participant AC as ApiClient
+  participant SR as SessionRefresher
+  participant API as Server
+  App->>AC: request (access token)
+  AC->>API: request
+  API-->>AC: 401
+  AC->>SR: renew() (single-flight)
+  SR->>API: POST /auth/technician-refresh {refreshToken}
+  alt 200
+    API-->>SR: new access + rotated refresh
+    SR-->>AC: renewed
+    AC->>API: replay once (same mutation id)
+    API-->>App: 2xx
+  else 401 refused
+    SR-->>AC: rejected
+    AC-->>App: HttpFailure 401 + onSessionExpired → sign-in screen (queue kept)
+  else no signal / 5xx
+    SR-->>AC: unavailable
+    AC-->>App: NetworkFailure → write queued, still signed in
+  end
+```
+
+> Resolved 2026-10-06: the "known risk" that logout on the 24h timer or any 401 discarded unsynced work was fixed on 2026-09-27 (NFR-1, P-002). The 24h timer and logout-on-any-401 are now gone too. Still open: a *different* technician signing in on the same phone replays the previous one's queue under their own token (improvements #11).
 
 ## Location check-in gate
 

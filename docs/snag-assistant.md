@@ -2,7 +2,7 @@
 
 A module in FieldOps for **snagging**: raising, fixing and verifying defects during construction punch-out, FM takeover (mobilisation) surveys, the defects liability period (DLP), and day-to-day operations. It is a peer of Work Orders, not part of them.
 
-Status (2026-09-26): v1 built end to end. The app module is in `lib/features/snags/`, `lib/core/snag/`, `lib/data/snag_repository.dart` and `lib/state/snag_controller.dart`. The server side is `/api/snags` in `../fusion-eco-server`, documented in `../fusion-eco-server/documentation/snag-assistant.md`. `dart analyze` is clean, 39 Flutter tests pass, and the server's related suites pass 79/79 (§8; step-by-step testing in §9). One server step needs a human to run it: `npm run findings:promote -- --apply` (§7.3). Until then the server answers snag writes with `503 SNAG_ENGINE_NOT_ENABLED`, and the app keeps the snags on the device. The module has not yet been run on a device (PENDING P-001).
+Status (2026-09-26): v1 built end to end. The app module is in `lib/features/snags/`, `lib/core/snag/`, `lib/data/snag_repository.dart` and `lib/state/snag_controller.dart`. The server side is `/api/snags` in `../fusion-eco-server`, documented in `../fusion-eco-server/documentation/snag-assistant.md`. `dart analyze` is clean, 39 Flutter tests pass, and the server's related suites pass 79/79 (§8; step-by-step testing in §9). Since 2026-10-06 snags need no manual server step: the server's boot schema guard enables snag storage on every database itself (§7.3), and the app no longer has a "not switched on for your site" state. The module has not yet been run on a device (PENDING P-001).
 ---
 
 ## 1. Research: what goes wrong with snagging today
@@ -67,7 +67,7 @@ flowchart LR
   Hub[Snag hub<br/>waiting on you · readiness] -->|Start walk| Setup[Pick building + survey]
   Setup --> Room[Pick floor › room]
   Room --> Cam((Live camera))
-  Cam -->|shutter| Compose[Compose card<br/>trade · severity · ✨ · 🎤 · ✏️]
+  Cam -->|shutter| Compose[Photo + AI highlights<br/>details sheet: AI · trade · severity · Save]
   Compose -->|save| Dup{Similar open<br/>snag nearby?}
   Dup -->|no| Saved[Saved on device<br/>haptic + counter]
   Dup -->|same issue| PlusOne[+1 evidence on<br/>existing snag]
@@ -79,6 +79,25 @@ flowchart LR
   Hub --> Detail[Snag detail]
   Detail -->|Mark ready| Ghost((Ghost camera<br/>before overlay))
 ```
+
+**Walk mode after the shot (redesign 2026-10-06, owner iPhone test: "overwhelming… the UI is fully blocked with no frame displayed").** The shot keeps the screen; the details are a draggable bottom sheet (`widgets/snag_walk_sheet.dart`, `SnagWalkComposeSheet`):
+
+```mermaid
+flowchart TB
+  subgraph Screen[Walk screen after the shutter]
+    P["Frozen shot (BoxFit.contain) laid out ABOVE the sheet's peek height<br/>+ AI defect highlights (tap × to drop a wrong box)<br/>+ top chip: 'Looking…' → '2 highlighted' show/hide"]
+    S["Details sheet (DraggableScrollableSheet)"]
+  end
+  S --> Peek["peek ≈156 pt: AI line · More details · Save & next<br/>(drag down / tap the photo → whole frame visible)"]
+  S --> Col["collapsed ≈312 pt (opens here): + trade rail + severity"]
+  S --> Full["full (More details): issue type · title · mark-up · voice · suggest-from-voice"]
+```
+
+- The frame is never hidden: the photo area ends where the sheet's lowest resting height begins, so dragging down (or tapping the photo) shows all of it. While shooting, the live camera is full-screen as before, and the room/walk counters show only then.
+- Save & next and "More details" are pinned to the sheet's foot at every height; discard is the ✕ in the top bar. Quick snag's flow (shutter → trade → severity → save) is unchanged and needs no drag.
+- Typing a title expands the sheet to full height so the field stays above the keyboard. Sizes come from `SnagWalkSheetSizes.forHeight` (pure, tested from 300 pt — an SE with the keyboard up — to 1180 pt). Tested at 320×568 in English and Arabic (`test/snag_walk_sheet_test.dart`).
+
+**AI defect highlights (2026-10-06).** AI assist also returns `regions` — boxes normalised to the photo (`{x,y,w,h,label,severity}`, server doc §4a "Regions"). `SnagRegion` (`domain/snag.dart`) re-grounds them exactly like the server (clamp, slivers and whole-photo boxes dropped, label = an issue type, ≤ 5). `widgets/snag_region_overlay.dart` draws them: colour by severity, a chip "Damage · Major", a short double pulse on first show (skipped with reduced motion), a show/hide toggle, and × to remove a wrong box. `snagRegionRect` maps normalised → pixels for `cover` and `contain`; photo space is never mirrored in RTL. They show on the create step (annotated photo in the AI panel), on walk mode's frozen shot, and on the detail screen's photo strip and full-screen viewer (read-only). The kept boxes are saved on the analysed photo's evidence item (`evidence[].regions`, first photo only, and only while it is still the photo the AI looked at).
 
 Visual language: the existing soft-card kit (`TechCard`, `TechChip`, `IconBadge`, `ProgressRing`, `StaggeredEntrance`). Severity uses the existing priority hues: critical is `priorityCritical`, major is `priorityHigh`, minor is `priorityMedium`, cosmetic is `priorityLow`. Walk mode and the ghost camera are dark and immersive, like the scanner. Everything else is the light Navy Professional theme.
 
@@ -130,11 +149,31 @@ flowchart TB
 3. Call `syncRequest(...)` with `entityType: 'Snag'` and the snag id. Photos are `QueuedAttachment`s with a `__pending_snag_<evidenceId>__` placeholder.
 4. If the request is synced, overwrite the local row with the server's copy (server id, URLs, `number`). If it is queued, the row keeps `localOnly=1` until a later list fetch returns it.
 
+**Outbox first (2026-10-06).** Raising a snag, "+1"/extra photos and every survey write no longer try the network inline. They are written locally, then `SyncClient.queueRequest` parks them in the queue and kicks a flush in the background (a flush already running re-runs once at the end). Save returns in milliseconds; the card shows the honest state. Transitions (start/ready/verify/reject) stay online-first so a refusal such as `409 SELF_VERIFY` is seen at once; if one fails without queuing, the optimistic change is rolled back.
+
+```mermaid
+flowchart LR
+  Save[Save] --> Local[(snags row localOnly)] --> Q[(queue)]
+  Q -->|flush: upload photo, POST| S[/api/snags/]
+  S -- 2xx --> H[onReplayed → GET /api/snags/:id → server copy, SN- number]
+  S -- 5xx / upload w/o URL --> K[kept: retried forever, sendIssue = 5xx]
+  S -- 428 / 401 --> W[run stops, waits for check-in / sign-in]
+  S -- other 4xx --> C[conflict log + sendIssue dropped → Not sent + Retry]
+```
+
+**Send states** (`core/snag/snag_send_state.dart`, pure): Synced · Sending… · Waiting to send (no signal / check-in / sign-in / server not ready — each with a plain reason) · Not sent (refused, or stranded by an older build) with Retry. Card flag, detail banner and walk film-strip dot all use it. `SnagRepository.afterReplayFailed` records `{status, code, dropped}` on the snag row (`sendIssue`, local only).
+
+**Why it used to look "saved locally but never persisted"** (iPhone report 2026-10-06): (1) a queued create that synced kept `localOnly=1` until the hub happened to pull that building — no replay follow-up was registered for snags; (2) any non-5xx failure on the inline online path (upload refused, upload answered without a URL) left the snag on the phone with nothing queued; (3) a 5xx (e.g. `503 SNAG_ENGINE_NOT_ENABLED`) was dropped to the conflict log after 5 polls ≈ 100 s; (4) iOS moves the app container on every app update, so stored absolute photo paths broke (`SnagMedia.reroot` now re-roots on `snag_media/`).
+
+**Speed.** Buildings and room trees are cache-first with background revalidation. Building pulls ask `view=list` (no `activity`) and, after one full pull, `updatedSince=<last serverTime − 2 min>`; a full pull (with prune) runs at most every 6 h. Rows are written in one batch (`SnagStore.upsertSnags`). The hub list is lazy (slivers); thumbnails are memoised and decoded at display size. The detail screen opens from the local row and reads the full snag in the background.
+
+**AI assist (2026-10-06).** After the first photo the create screen asks `POST /api/snags/ai/assist` (server doc §4a) in the background: suggestions for title, trade, severity, issue type, description, likely cause, fix and who should fix it, each with Apply (and Apply all); photo tips (dark/blurry are measured on the phone, `core/snag/snag_photo_quality.dart`, so they work offline); open snags nearby that look the same; and what is still missing. Fields set from it carry an "AI suggested" badge until edited. Walk mode shows the AI strip at the top of its details sheet and ✨ marks on the chips. Since 2026-10-06 it also highlights where the defect is on the photo (`regions`, see §4 "AI defect highlights"); the server waits up to 15 s for the engine and the app 24 s. Offline it says "AI assist needs a connection. Your snag still saves." Nothing is saved without a tap.
+
 **Merge on read.** The server's copy of a snag replaces the local copy unless that snag still has a pending mutation in the queue, in which case the local copy is ahead and wins. Snags that exist only locally are kept. A server-side rejection (a 4xx such as `409 SELF_VERIFY`) goes to the conflict log through the normal flush policy. Once that mutation is gone, the next fetch restores the server's truth.
 
 **Ids.** The client mints UUIDs for snags, evidence and surveys, so replays are idempotent: `POST /api/snags` with an existing id returns the existing row. The human reference `SN-00042` is assigned by the server. Until the server assigns it, the app shows `#` plus the first 6 characters of the id.
 
-**Server 5xx.** `syncRequest` only queues on `NetworkFailure` by default. Snag writes pass `queueOnServerError: true`, which parks a 5xx as well, so a server that is not yet enabled for snags (503) cannot lose a walk. `SnagRepository.resendStranded()` re-queues a create that ran out of retries once `GET /api/snags/engine` reports enabled.
+**Server 5xx.** Snag and survey writes are in `kKeepOnServerErrorEntityTypes` (`flush_policy.dart`): a 5xx keeps them queued indefinitely instead of dropping them after `maxMutationAttempts`, so a server that is not yet enabled for snags (503) cannot lose a walk. `SnagRepository.resendStranded()` still re-queues creates an older build gave up on, once `GET /api/snags/engine` reports enabled — but never one the server refused (4xx); those wait for Retry.
 
 **Photos offline.** Photos are stored under `snag_media/` in the app documents directory. `SnagMediaCache` downloads the photos of open and ready snags in a building for offline verification ("Download for offline" in the hub).
 
@@ -170,9 +209,11 @@ The C2O code that re-validates packages (`loadPriorFindings` and `resolveStaleFi
 | POST | `/api/snags/surveys/:id/spaces` | room sweep upsert |
 | POST | `/api/snags/surveys/:id/complete` | close survey |
 
-### 7.3 The one manual step
+### 7.3 Snag storage is enabled automatically (no manual step since 2026-10-06)
 
-`c2o_findings."runId"` and `"packageId"` are `NOT NULL`, and a field snag has neither. `npm run findings:promote` does a dry run. `npm run findings:promote -- --apply` runs `ALTER COLUMN … DROP NOT NULL` on both. No data changes and the operation is reversible, but it is an ALTER on the shared Postgres, so it is **not** run automatically (server CLAUDE.md DB-safety rule). Until it is applied, `POST /api/snags` answers `503 SNAG_ENGINE_NOT_ENABLED`. The app treats that 503 like any other 5xx: the write stays queued and the snag stays on the device.
+`c2o_findings."runId"` and `"packageId"` were `NOT NULL`, and a field snag has neither. Until 2026-10-06 that needed a manual `npm run findings:promote -- --apply`; any server where nobody ran it answered `503 SNAG_ENGINE_NOT_ENABLED`, and the phone said "Snags aren't switched on for your site yet" while still letting the technician raise snags (owner's iPhone test). Now the server's boot schema guard relaxes exactly those two columns itself (idempotent, no row touched; server `documentation/boot-schema-guard.md` step 5), and retries on the next snag write if boot could not. There is no per-site switch for snags.
+
+The app no longer has a "not switched on" state: a 503 from an older server is shown like any other server hiccup ("Couldn't send yet. It's safe on this phone and keeps trying by itself."), and the write stays queued (`kKeepOnServerErrorEntityTypes`). A snag waits only for real reasons: no signal, the location check-in, or sign-in.
 
 ## 8. Tests
 
@@ -196,7 +237,7 @@ Work top to bottom: each stage assumes the one before it passed. You need **two 
 
 ```mermaid
 flowchart LR
-  S1[9.1 Server<br/>automated] --> S2[9.2 Enable<br/>findings:promote] --> S3[9.3 API smoke<br/>curl] --> S4[9.4 App<br/>automated] --> S5[9.5 Device<br/>walk-through]
+  S1[9.1 Server<br/>automated] --> S2[9.2 Check enabled<br/>boot guard] --> S3[9.3 API smoke<br/>curl] --> S4[9.4 App<br/>automated] --> S5[9.5 Device<br/>walk-through]
 ```
 
 ### 9.1 Server: automated checks
@@ -212,14 +253,11 @@ npx tsc --noEmit -p . 2>&1 | grep -i "snag\|c2o-finding\|runStore\|middleware/au
 
 **Expected:** all tests pass. `snagRules` covers the guards, `runStore` covers the "never auto-resolve a field snag" fence, and `authLocationGate` covers the 428 exemption for snag POSTs. The `grep` prints nothing. The rest of the repo already has about 470 unrelated `tsc` errors, from Express 5 param typing.
 
-### 9.2 Enable snag writes (once per database)
+### 9.2 Snag writes are enabled at boot (check once per database)
 
-1. Start the server once with this code (`npm run dev`). The boot schema guard adds the new `c2o_findings` columns and creates `snag_surveys`. Check that the boot log reports the added columns and no errors.
-2. `npm run findings:promote` is a **dry run**. It should list `runId`/`packageId` as `NOT NULL`, the snag columns as `present`, and the statements it would run.
-3. `npm run findings:promote -- --apply`. This is an ALTER on the shared Postgres; it changes no rows.
-4. `GET /api/snags/engine` should now return `{"enabled": true}` (see 9.3). No restart is needed.
-
-**Negative check, before step 3:** a snag create returns `503` with `"code":"SNAG_ENGINE_NOT_ENABLED"`, and `/engine` returns `enabled:false`.
+1. Start the server with this code (`npm run dev`). The boot schema guard adds the `c2o_findings` snag columns, creates `snag_surveys`, and (step 5) relaxes `runId`/`packageId` to NULL-able. On a database that still had them NOT NULL the log shows `[schema]   ~ c2o_findings.runId DROP NOT NULL …` (and `packageId`); on later boots nothing.
+2. `GET /api/snags/engine` returns `{"enabled": true}` (see 9.3). `npm run findings:promote` (dry run) should now list both columns as `nullable`.
+3. Only if the database opts out of the guard (`DB_AUTO_ENSURE_SCHEMA=false`): run `npm run findings:promote -- --apply` by hand, as before.
 
 ### 9.3 API smoke test (curl)
 
@@ -272,7 +310,7 @@ For the snag from steps a–i you should see `status = verified`, `reopenedCount
 
 ### 9.4 App: automated checks
 
-This needs Flutter ≥ 3.44. On this Mac, bootstrap it first: LEARNINGS → Platform, 2026-09-26.
+This needs Flutter ≥ 3.44. Check `flutter --version`: the `a2251` Mac has 3.47.6 since 2026-10-05. On a machine below 3.44, bootstrap it first: LEARNINGS → Platform, 2026-09-26.
 
 ```bash
 flutter pub get --enforce-lockfile
@@ -320,7 +358,7 @@ Record anything that fails against PENDING P-001, with the step number.
 
 ## 10. Open items
 
-- Run `findings:promote -- --apply` on each environment (§7.3).
+- ~~Run `findings:promote -- --apply` on each environment (§7.3).~~ Done automatically by the server's boot guard since 2026-10-06.
 - The known queue P1s apply to snags as to every other write: logout wipes the queue, and a 5xx on a create can let a queued transition replay first. The transition then 404s into the conflict log, and the next fetch heals it.
 - UC-14 to UC-17 in §3.
 - The web office view (`app/facility-management/snags`) and the partner portal surface.

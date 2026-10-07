@@ -5,11 +5,13 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../../core/snag/snag_send_state.dart';
 import '../../../domain/snag.dart';
 import '../../../state/snag_controller.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../theme/fe_status_tokens.dart';
 import '../../../theme/theme_extensions.dart';
+import 'snag_region_overlay.dart';
 
 /// Translates [key] and fills its `%a` slots. Arguments are stringified here
 /// so call sites can pass counts directly.
@@ -79,6 +81,20 @@ abstract final class SnagVisuals {
     SnagContext.fitout => LucideIcons.armchair,
   };
 
+  static IconData sendIcon(SnagSendState state) => switch (state) {
+    SnagSendState.synced => LucideIcons.cloudCheck,
+    SnagSendState.sending => LucideIcons.cloudUpload,
+    SnagSendState.notSent => LucideIcons.cloudAlert,
+    _ => LucideIcons.clock,
+  };
+
+  static Color sendColor(SnagSendState state) => switch (state) {
+    SnagSendState.synced => FeColors.success,
+    SnagSendState.sending => FeColors.info,
+    SnagSendState.notSent => FeColors.danger,
+    _ => FeColors.warning,
+  };
+
   static FeChipStyle chip(Color hue) => FeChipStyle(
     background: Color.alphaBlend(hue.withValues(alpha: 0.12), Colors.white),
     foreground: hue,
@@ -89,7 +105,14 @@ abstract final class SnagVisuals {
 /// A snag photo from the best source available: this device's own copy,
 /// then a downloaded copy, then the network. Offline with none of those, a
 /// quiet placeholder rather than a broken-image icon.
-class SnagPhoto extends ConsumerWidget {
+///
+/// Speed (2026-10-06): the file lookup is memoised per evidence (it used to
+/// restart on every rebuild, and every snag write rebuilds the list, so each
+/// thumbnail flashed blank), a known file paints on the first frame, and the
+/// image is decoded at the size it is shown (`cacheWidth`) instead of the
+/// full 1600 px capture — a 76 px list thumbnail no longer costs a full
+/// decode each.
+class SnagPhoto extends ConsumerStatefulWidget {
   const SnagPhoto({
     super.key,
     required this.evidence,
@@ -98,6 +121,8 @@ class SnagPhoto extends ConsumerWidget {
     this.height,
     this.radius = 0,
     this.dark = false,
+    this.showRegions = false,
+    this.compactRegions = false,
   });
 
   final SnagEvidence? evidence;
@@ -107,37 +132,89 @@ class SnagPhoto extends ConsumerWidget {
   final double radius;
   final bool dark;
 
+  /// Draw the evidence's kept defect highlights (2026-10-06) over the photo.
+  final bool showRegions;
+
+  /// Thumbnail style: outlines only, no chips.
+  final bool compactRegions;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final e = evidence;
+  ConsumerState<SnagPhoto> createState() => _SnagPhotoState();
+}
+
+class _SnagPhotoState extends ConsumerState<SnagPhoto> {
+  Future<File?>? _file;
+  String? _for;
+
+  String? _keyOf(SnagEvidence? e) => e == null ? null : '${e.id}|${e.localPath}|${e.url}';
+
+  Future<File?>? _lookup() {
+    final e = widget.evidence;
+    final key = _keyOf(e);
+    if (key != _for || _file == null) {
+      _for = key;
+      _file = e == null ? null : ref.read(snagMediaProvider).localFile(e);
+    }
+    return _file;
+  }
+
+  int? _decodeWidth(BuildContext context) {
+    final w = widget.width;
+    if (w == null || !w.isFinite) return null;
+    // ×2: with BoxFit.cover a landscape photo fills a square box by height,
+    // so it needs up to ~1.8× the box width in pixels (16:9) to stay sharp.
+    return (w * MediaQuery.devicePixelRatioOf(context) * 2).round();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final e = widget.evidence;
+    final width = widget.width;
+    final height = widget.height;
     final placeholder = Container(
       width: width,
       height: height,
-      color: dark ? FeColors.ink : FeColors.line,
+      color: widget.dark ? FeColors.ink : FeColors.line,
       alignment: Alignment.center,
-      child: Icon(LucideIcons.imageOff, color: dark ? Colors.white38 : FeColors.ink2, size: 20),
+      child: Icon(LucideIcons.imageOff, color: widget.dark ? Colors.white38 : FeColors.ink2, size: 20),
     );
     if (e == null) return _clip(placeholder);
+    final cacheWidth = _decodeWidth(context);
+    final known = ref.read(snagMediaProvider).peek(e);
     return _clip(
       FutureBuilder<File?>(
-        future: ref.read(snagMediaProvider).localFile(e),
+        future: _lookup(),
+        initialData: known,
         builder: (context, snap) {
           final file = snap.data;
-          if (file != null) {
-            return Image.file(file, width: width, height: height, fit: fit, gaplessPlayback: true);
-          }
-          if (snap.connectionState != ConnectionState.done) {
+          final url = e.url;
+          if (file == null && snap.connectionState != ConnectionState.done) {
             return SizedBox(width: width, height: height);
           }
-          final url = e.url;
-          if (url == null) return placeholder;
-          return Image.network(
-            url,
+          if (file == null && url == null) return placeholder;
+          // One provider for the picture and for the highlight layer's size
+          // lookup, so the photo is decoded once (same as Image.file /
+          // Image.network with cacheWidth).
+          final ImageProvider provider = ResizeImage.resizeIfNeeded(
+            cacheWidth,
+            null,
+            file != null ? FileImage(file) : NetworkImage(url!) as ImageProvider,
+          );
+          final image = Image(
+            image: provider,
             width: width,
             height: height,
-            fit: fit,
+            fit: widget.fit,
             gaplessPlayback: true,
             errorBuilder: (_, _, _) => placeholder,
+          );
+          if (!widget.showRegions || e.regions.isEmpty) return image;
+          return SnagRegionLayer(
+            image: provider,
+            regions: e.regions,
+            fit: widget.fit,
+            compact: widget.compactRegions,
+            child: image,
           );
         },
       ),
@@ -145,7 +222,7 @@ class SnagPhoto extends ConsumerWidget {
   }
 
   Widget _clip(Widget child) =>
-      radius == 0 ? child : ClipRRect(borderRadius: BorderRadius.circular(radius), child: child);
+      widget.radius == 0 ? child : ClipRRect(borderRadius: BorderRadius.circular(widget.radius), child: child);
 }
 
 /// Four-way severity picker: coloured pills, big enough for a gloved thumb.

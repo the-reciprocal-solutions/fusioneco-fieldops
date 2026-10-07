@@ -50,17 +50,10 @@ class Session {
 
   bool get isInHouse => partnerRole == null || partnerRole == 'in-house';
 
-  /// Session is valid for 24 hours from login
-  bool get isExpired {
-    if (loginAt == null) return false;
-    return DateTime.now().difference(loginAt!) >= const Duration(hours: 24);
-  }
-
-  Duration get remainingValidity {
-    if (loginAt == null) return const Duration(hours: 24);
-    final remaining = const Duration(hours: 24) - DateTime.now().difference(loginAt!);
-    return remaining.isNegative ? Duration.zero : remaining;
-  }
+  // No client-side expiry (2026-10-06): the session lasts until the
+  // technician signs out or the server refuses to renew it — see
+  // `SessionRefresher` and docs/architecture.md "Session". The old 24h
+  // timer signed people out mid-shift and asked for the password daily.
 
   factory Session.fromLoginResponse(
     Map<String, dynamic> technician, {
@@ -184,7 +177,6 @@ class SessionStore {
   static const _sessionTimestampKey = 'session_timestamp';
   static const _permissionsKey = 'permissions';
   static const _baseUrlKey = 'apiBaseUrl';
-  static const sessionDuration = Duration(hours: 24);
 
   final SharedPreferences _prefs;
 
@@ -194,24 +186,11 @@ class SessionStore {
   Session? readSession() {
     final raw = _prefs.getString(_sessionKey);
     if (raw == null) return null;
-
-    // Check 24h validity via timestamp
-    final savedTimeMs = _prefs.getInt(_sessionTimestampKey);
-    if (savedTimeMs != null) {
-      final savedTime = DateTime.fromMillisecondsSinceEpoch(savedTimeMs);
-      if (DateTime.now().difference(savedTime) >= sessionDuration) {
-        clear();
-        return null;
-      }
-    }
-
+    // No 24h cut-off any more: an expired access token is renewed on the
+    // first request (ApiClient → SessionRefresher); only a refused renewal
+    // ends the session.
     try {
-      final session = Session.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-      if (session.isExpired) {
-        clear();
-        return null;
-      }
-      return session;
+      return Session.fromJson(jsonDecode(raw) as Map<String, dynamic>);
     } catch (_) {
       return null;
     }

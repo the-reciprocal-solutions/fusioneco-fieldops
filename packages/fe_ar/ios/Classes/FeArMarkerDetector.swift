@@ -370,6 +370,9 @@ final class FeArMarkerDetector {
             : list.allSatisfy { $0.method == "tag" } ? "tag"
             : list.contains { $0.method == "plane" } ? "plane" : "lidar"
         let edges = list.compactMap { $0.qrEdgeMm }
+        // LiDAR check: does the locked centre sit on the wall the depth sensor
+        // sees now? (Extension `surfaceResidualMm`; nil without LiDAR.)
+        let residual = session.currentFrame.flatMap { FeArDepthProbe.surfaceResidual(frame: $0, world: centre) }
         emit([
             "type": "marker",
             "rawPayload": payload,
@@ -381,6 +384,7 @@ final class FeArMarkerDetector {
             "distanceM": Double(Self.median(list.map { $0.distance })),
             "viewAngleDeg": Double(Self.median(list.map { $0.viewAngle })),
             "qrEdgeMm": edges.count >= list.count / 2 ? Double(Self.median(edges)) as Any : NSNull(),
+            "surfaceResidualMm": residual.map { Double($0 * 1000) as Any } ?? NSNull(),
         ])
         samples[payload] = nil
         tagSamples[payload] = nil

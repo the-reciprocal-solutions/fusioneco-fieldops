@@ -3,6 +3,7 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../../core/snag/snag_send_state.dart';
 import '../../../domain/snag.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
@@ -18,19 +19,24 @@ class SnagCard extends StatelessWidget {
     required this.snag,
     required this.onTap,
     this.pending = false,
+    this.send,
     this.trailing,
   });
 
   final Snag snag;
   final VoidCallback onTap;
 
-  /// A write for it is still queued (or the server has never seen it).
+  /// A write for it is still queued.
   final bool pending;
+
+  /// Where it is on its way to the server; derived from [pending] when null.
+  final SnagSendStatus? send;
   final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final hue = SnagVisuals.priorityColor(snag.priority);
+    final sendStatus = send ?? snagSendStatus(snag, queued: pending, flushing: false);
     final overdue = snag.isOverdue(DateTime.now());
     return TechCard(
       onTap: onTap,
@@ -113,11 +119,11 @@ class SnagCard extends StatelessWidget {
                       label: SnagVisuals.priorityLabel(context, snag.priority),
                       color: hue,
                     ),
-                    if (pending || snag.localOnly)
+                    if (!sendStatus.state.isSynced)
                       _Flag(
-                        icon: LucideIcons.smartphone,
-                        label: 'snags.on_device'.getString(context),
-                        color: FeColors.warning,
+                        icon: SnagVisuals.sendIcon(sendStatus.state),
+                        label: sendStatus.labelKey.getString(context),
+                        color: SnagVisuals.sendColor(sendStatus.state),
                       ),
                     if (snag.reportCount > 1)
                       _Flag(

@@ -11,8 +11,10 @@ import 'package:path_provider/path_provider.dart';
 import '../core/ar/alignment_estimator.dart';
 import '../core/ar/ar_engine.dart';
 import '../core/ar/corner_matcher.dart';
+import '../core/ar/manual_place_math.dart' show ManualPlacement;
 import '../core/ar/marker_code.dart';
 import '../core/ar/reanchor_rule.dart';
+import '../core/ar/scan_overlay.dart';
 import '../core/ar/vec.dart';
 import 'ar_catalog_controller.dart';
 import 'ar_demo_director.dart';
@@ -89,6 +91,7 @@ class ArMarkerSighting {
     this.anchorId,
     this.qrEdgeMm,
     this.raw,
+    this.surfaceResidualMm,
   });
 
   final int seq;
@@ -106,6 +109,10 @@ class ArMarkerSighting {
 
   /// The QR's measured edge, for the print-scale check (115 mm expected).
   final double? qrEdgeMm;
+
+  /// The engine's LiDAR check of the locked centre against the wall (mm,
+  /// iOS), or null.
+  final double? surfaceResidualMm;
 
   /// §4.2 acceptance: 0.5–2.0 m, within 35° of square-on, steady.
   bool get distanceOk => distanceM >= 0.5 && distanceM <= 2.0;
@@ -156,6 +163,8 @@ class ArBadgeInfo {
     this.residualM = 0,
     this.nudgeM = 0,
     this.walkedSinceCheckM,
+    this.handPlaced = false,
+    this.scalePct,
   });
 
   final AlignmentQuality quality;
@@ -164,6 +173,14 @@ class ArBadgeInfo {
   final double residualM;
   final double nudgeM;
   final double? walkedSinceCheckM;
+
+  /// "Place by hand" (`ArManualPlaceController`): amber "Placed by hand",
+  /// never green.
+  final bool handPlaced;
+
+  /// The hand placement's size when it is not 100 % ("not true size"), else
+  /// null.
+  final int? scalePct;
 }
 
 class ArSessionState {
@@ -205,6 +222,9 @@ class ArSessionState {
     this.coachSeq = 0,
     this.recordingPath,
     this.playbackPath,
+    this.scan,
+    this.scanChoice,
+    this.thermalStatus = 0,
   });
 
   final ArSessionPhase phase;
@@ -275,6 +295,27 @@ class ArSessionState {
   final String? recordingPath;
   final String? playbackPath;
 
+  /// What the room scan has measured (the engine's `scan` events), or null
+  /// before the first.
+  final ScanProgress? scan;
+
+  /// The user's "Show room scan" choice this session; null = automatic
+  /// ([ScanOverlayPolicy]).
+  final bool? scanChoice;
+
+  /// The engine's last thermal status (0 none … 6 shutdown).
+  final int thermalStatus;
+
+  /// Whether the room-scan overlay should show now.
+  bool get scanOverlayOn => ScanOverlayPolicy.show(
+        userChoice: scanChoice,
+        setup: stage == ArSessionStage.setup,
+        locked: isLocked,
+        paused: paused,
+        demo: demo,
+        thermalStatus: thermalStatus,
+      );
+
   AlignmentQuality get quality => fit?.quality ?? AlignmentQuality.none;
   bool get isPlaced => quality != AlignmentQuality.none;
   bool get isLocked => quality == AlignmentQuality.locked;
@@ -300,6 +341,8 @@ class ArSessionState {
     residualM: fit?.maxResidualM ?? 0,
     nudgeM: nudgeM,
     walkedSinceCheckM: observations.isEmpty ? null : math.max(0, walkedM - walkedAtCheckM),
+    handPlaced: fit?.isHandPlaced ?? false,
+    scalePct: (fit?.isTrueSize ?? true) ? null : (fit!.scale * 100).round(),
   );
 
   ArSessionState copyWith({
@@ -348,6 +391,9 @@ class ArSessionState {
     bool clearRecording = false,
     String? playbackPath,
     bool clearPlayback = false,
+    ScanProgress? scan,
+    bool? scanChoice,
+    int? thermalStatus,
   }) => ArSessionState(
     phase: phase ?? this.phase,
     stage: stage ?? this.stage,
@@ -386,6 +432,9 @@ class ArSessionState {
     coachSeq: coachSeq ?? this.coachSeq,
     recordingPath: clearRecording ? null : (recordingPath ?? this.recordingPath),
     playbackPath: clearPlayback ? null : (playbackPath ?? this.playbackPath),
+    scan: scan ?? this.scan,
+    scanChoice: scanChoice ?? this.scanChoice,
+    thermalStatus: thermalStatus ?? this.thermalStatus,
   );
 }
 
@@ -475,6 +524,27 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   /// Native anchor → observation id, so an anchor refinement refits.
   final _anchorToObs = <String, String>{};
+
+  // ---- "Place by hand" (ArManualPlaceController, manual_place_math.dart)
+  /// The locked hand placement. With no corner or board observations it
+  /// *is* the fit (see [_refit]); the first observation replaces it.
+  ManualPlacement? _manual;
+
+  /// The native anchor pinned under the hand placement's pivot, and where
+  /// it was: its `anchor` events move the model with the tracker's map.
+  String? _manualAnchorId;
+  Vec3? _manualAnchorAr;
+
+  /// True while the user is dragging the model by hand: the session must
+  /// not push its own (older) fit over the live preview.
+  var _manualPreview = false;
+
+  /// The preview was cancelled with nothing placed: the model is hidden by
+  /// opacity until the next real fit shows it again.
+  var _hiddenByManual = false;
+
+  /// The locked hand placement, if that is what the model sits on.
+  ManualPlacement? get manualPlacement => _manual;
   final _loadedTiles = <String>{};
   var _residencyBusy = false;
   Vec3? _residencyAtCamera;
@@ -523,13 +593,58 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   @override
   ArSessionState build() {
     ref.onDispose(_teardown);
-    ref.listen(arPrefsProvider.select((p) => p.sunlight), (_, _) => _onSunlightChanged());
+    ref.listen(arPrefsProvider.select((p) => p.sunlight), (_, _) {
+      _onSunlightChanged();
+      _syncScanOverlay();
+    });
     return const ArSessionState();
   }
 
   void _set(ArSessionState next) {
     if (_disposed) return;
     state = next;
+    _syncScanOverlay();
+  }
+
+  /// What the engine was last told about the room-scan overlay (on,
+  /// contrast); re-sent only when it changes.
+  (bool, bool)? _scanSent;
+
+  /// Keeps the engine's room-scan overlay in step with [ScanOverlayPolicy]:
+  /// called on every state change, sends only a change.
+  void _syncScanOverlay() {
+    final e = _engine;
+    if (e == null || state.phase != ArSessionPhase.running) return;
+    final want = (state.scanOverlayOn, ref.read(arPrefsProvider).sunlight);
+    if (want == _scanSent) return;
+    _scanSent = want;
+    unawaited(e.setScanOverlay(want.$1, contrast: want.$2).catchError((_) => false));
+  }
+
+  /// Menu → View → "Show room scan": flips what is showing now and keeps
+  /// that choice for the rest of the session.
+  void toggleRoomScan() => _set(state.copyWith(scanChoice: !state.scanOverlayOn));
+
+  /// Rings where [o] was just confirmed, green or amber by the engine's
+  /// LiDAR check of the sighting it came from (blue when there was none).
+  void _pulseFor(ArObservation o) {
+    final e = _engine;
+    if (e == null || state.demo) return;
+    double? residual;
+    Vec3? normal;
+    final m = state.lastMarker;
+    final c = state.lastCorner;
+    if (o.kind == 'marker' && m != null && m.centreAr.distanceTo(o.aAr) < 0.05) {
+      residual = m.surfaceResidualMm;
+      normal = m.normalAr;
+    } else if (o.kind == 'corner' && c != null && c.corner.posAr.distanceTo(o.aAr) < 0.05) {
+      residual = c.corner.surfaceResidualMm;
+    }
+    final tone = SurfaceCheck.tone(residual);
+    unawaited(e.pulseAt(o.aAr, normalAr: normal ?? const Vec3(0, 1, 0), tone: tone).catchError((_) => false));
+    if (tone == 'warn') {
+      toast('ar.verify.mismatch', args: [((residual!.abs()) / 10).round()], tone: ArToastTone.warning);
+    }
   }
 
   void toast(String key, {List<Object> args = const [], ArToastTone tone = ArToastTone.info}) {
@@ -542,6 +657,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   Future<void> start(ArSessionArgs args) async {
     final token = ++_startToken;
     await _stopEngine();
+    _scanSent = null;
     _anchorToObs.clear();
     _loadedTiles.clear();
     _lockedResidualM = null;
@@ -549,6 +665,9 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     _reanchor.reset();
     _needsRecheck = false;
     _floorAr = null;
+    _clearManual();
+    _manualPreview = false;
+    _hiddenByManual = false;
     _set(ArSessionState(
       phase: ArSessionPhase.checking,
       args: args,
@@ -739,6 +858,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
         distanceM: e.distanceM,
         viewAngleDeg: e.viewAngleDeg,
         qrEdgeMm: e.qrEdgeMm,
+        surfaceResidualMm: e.surfaceResidualMm,
       );
     } else if (e is CornerSeenEvent) {
       if (state.demo) return;
@@ -751,8 +871,12 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       // Only a refit that already placed the model moves it; the floor alone
       // never places anything.
       if (state.observations.isNotEmpty) _refit(state.observations, reason: _RefitReason.floor);
+    } else if (e is ScanProgressEvent) {
+      if (state.demo) return;
+      _set(state.copyWith(scan: ScanProgress.fromEvent(e)));
     } else if (e is ThermalEvent) {
       if (state.demo) return;
+      _set(state.copyWith(thermalStatus: e.status));
       // Overridden: only the OS's last-resort levels (emergency, shutdown)
       // still pause; Android throttles or kills apps there anyway.
       final pauseIt = state.heatOverride ? e.status >= 5 : e.isHot;
@@ -773,15 +897,32 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       // faults: while setup polls for a corner every 600 ms, each empty snap
       // makes the engine emit a throttled `corner-*` code, and "AR hiccup
       // (corner-no-surface)" in red would read as a failure mid-aim.
+      // The session itself could not run (camera refused, sensor or session
+      // failure): show the fallback screen with its next step, not a toast
+      // over a frozen camera. iOS reports these as events, after start.
+      if (!state.demo && _fatalCodes.contains(e.code)) {
+        _set(state.copyWith(
+          phase: e.code == 'camera-denied' || e.code == 'device-not-supported'
+              ? ArSessionPhase.unsupported
+              : ArSessionPhase.failed,
+          error: e.code == 'camera-denied' || e.code == 'device-not-supported' ? e.code : 'ar.error.generic',
+        ));
+        return;
+      }
       final coach = _coachKeyFor(e.code);
       if (coach != null) {
         _set(state.copyWith(coachCode: e.code, coachSeq: state.coachSeq + 1));
         toast(coach);
       } else {
-        toast('ar.toast.engine_error', args: [e.code], tone: ArToastTone.error);
+        // Recoverable hiccups (a tile to re-download, an anchor refused):
+        // plain words, never the engine's code.
+        toast('ar.toast.engine_error_plain', tone: ArToastTone.warning);
       }
     }
   }
+
+  /// Engine error codes that mean the AR session is not running at all.
+  static const _fatalCodes = {'camera-denied', 'camera-unavailable', 'session-failed', 'device-not-supported', 'renderer-failed'};
 
   static String? _coachKeyFor(String code) => switch (code) {
         'corner-no-surface' || 'corner-not-found' => 'ar.corner.coach',
@@ -804,6 +945,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     required double viewAngleDeg,
     String? anchorId,
     double? qrEdgeMm,
+    double? surfaceResidualMm,
   }) {
     _set(state.copyWith(
       lastMarker: ArMarkerSighting(
@@ -818,6 +960,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
         distanceM: distanceM,
         viewAngleDeg: viewAngleDeg,
         qrEdgeMm: qrEdgeMm,
+        surfaceResidualMm: surfaceResidualMm,
       ),
     ));
   }
@@ -902,6 +1045,16 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   /// The tracker refined a board's anchor: refit, and watch for drift.
   void _onAnchorUpdated(String anchorId, Vec3 posAr) {
+    final manual = _manual;
+    final at = _manualAnchorAr;
+    if (anchorId == _manualAnchorId && manual != null && at != null) {
+      // The tracker corrected its map (or relocalised): the hand-placed
+      // model moves with the anchor under its pivot.
+      _manual = manual.shifted(posAr - at);
+      _manualAnchorAr = posAr;
+      _refit(state.observations, reason: _RefitReason.anchor);
+      return;
+    }
     final obsId = _anchorToObs[anchorId];
     if (obsId == null) return;
     final obs = [
@@ -921,6 +1074,10 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       o,
     ];
     if (anchorId != null) _anchorToObs[anchorId] = o.id;
+    // A measured corner or board replaces a hand placement ("Refine with a
+    // corner"): the estimator's fit is true size and measured.
+    _clearManual();
+    _pulseFor(o);
     _reanchor.reset();
     _needsRecheck = false;
     _set(state.copyWith(walkedAtCheckM: walked, clearRecheck: true));
@@ -939,6 +1096,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   /// Starts over: every observation and nudge dropped ("Re-align").
   void resetAlignment() {
     _anchorToObs.clear();
+    _clearManual();
     _lockedResidualM = null;
     _reanchor.reset();
     _needsRecheck = false;
@@ -961,6 +1119,10 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       torchOn: state.torchOn,
       recordingPath: state.recordingPath,
       playbackPath: state.playbackPath,
+      heatOverride: state.heatOverride,
+      scan: state.scan,
+      scanChoice: state.scanChoice,
+      thermalStatus: state.thermalStatus,
     ));
   }
 
@@ -970,7 +1132,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     final floor = state.floor;
     final floorTileY = floor == null ? null : floor.floorDatumY + floor.floorFinishOffsetM;
     var fit = obs.isEmpty
-        ? AlignmentFit.none()
+        ? (_manual?.toFit() ?? AlignmentFit.none())
         : _estimator.fit(
             obs,
             nudgeAr: nudgeAr,
@@ -1014,11 +1176,118 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   Future<void> _pushTransform(AlignmentFit fit, {required bool ease}) async {
     final e = _engine;
-    if (e == null || !fit.isPlaced) return;
+    if (e == null || !fit.isPlaced || _manualPreview) return;
+    if (_hiddenByManual) {
+      // A cancelled hand placement hid the model; a real fit shows it again.
+      _hiddenByManual = false;
+      final l = _lastLayers;
+      unawaited(setLayers(
+        mep: l?.mep ?? true,
+        structure: l?.structure ?? true,
+        architecture: l?.architecture ?? true,
+        opacity: 1,
+        sectionY: l?.sectionY,
+      ));
+    }
     try {
       // Re-alignment eases in and never snaps (§4.3).
       await e.setModelTransform(fit.arFromTile, easeMs: ease ? 300 : 0);
     } catch (_) {}
+  }
+
+  // -------------------------------------------------------- place by hand
+
+  void _clearManual() {
+    _manual = null;
+    _manualAnchorId = null;
+    _manualAnchorAr = null;
+  }
+
+  /// The user started "Place by hand": from now until [endManualPreview] or
+  /// [applyManualPlacement], only [previewModelTransform] moves the model.
+  void beginManualPreview() {
+    _manualPreview = true;
+    _hiddenByManual = false;
+  }
+
+  bool get manualPreviewing => _manualPreview;
+
+  /// One live frame of the hand placement (the controller throttles these
+  /// to one in flight). Applied at once: easing would lag the finger.
+  Future<void> previewModelTransform(Mat4 arFromTile) async {
+    final e = _engine;
+    if (e == null || !_manualPreview) return;
+    try {
+      await e.setModelTransform(arFromTile, easeMs: 0);
+    } catch (_) {}
+  }
+
+  /// "Place by hand" was left without locking: the model goes back to the
+  /// session's own fit at full opacity, or hides when there is none.
+  Future<void> endManualPreview() async {
+    if (!_manualPreview) return;
+    _manualPreview = false;
+    final fit = state.fit;
+    final l = _lastLayers;
+    if (fit != null && fit.isPlaced) {
+      await _pushTransform(fit, ease: true);
+      await setLayers(
+        mep: l?.mep ?? true,
+        structure: l?.structure ?? true,
+        architecture: l?.architecture ?? true,
+        opacity: 1,
+        sectionY: l?.sectionY,
+      );
+    } else {
+      _hiddenByManual = true;
+      await setLayers(
+        mep: l?.mep ?? true,
+        structure: l?.structure ?? true,
+        architecture: l?.architecture ?? true,
+        opacity: 0,
+        sectionY: l?.sectionY,
+      );
+    }
+  }
+
+  /// "Lock placement": the hand pose becomes the session's fit
+  /// ([AlignmentQuality.manual], method `manual`, scale kept), replacing any
+  /// corner or board observations, and a native anchor is pinned under the
+  /// pivot so tracker corrections and relocalisation carry the model along
+  /// (the same mechanism committed corners use, [anchorObservation]). The
+  /// caller hands over to the workspace with [enterWorkspace].
+  Future<AlignmentFit> applyManualPlacement(ManualPlacement p) async {
+    _manualPreview = false;
+    _hiddenByManual = false;
+    _anchorToObs.clear();
+    _clearManual();
+    _manual = p;
+    _lockedResidualM = null;
+    _reanchor.reset();
+    _needsRecheck = false;
+    _set(state.copyWith(
+      observations: const [],
+      nudgeM: 0,
+      clearNudgeAxis: true,
+      clearRecheck: true,
+      walkedAtCheckM: state.walkedM,
+    ));
+    final fit = _refit(const [], reason: _RefitReason.observation);
+    final e = _engine;
+    if (e != null && !state.demo) {
+      final at = p.pose.pivotAr;
+      try {
+        final id = await e.anchorAt(at);
+        if (id != null && !_disposed && identical(_manual, p)) {
+          _manualAnchorId = id;
+          _manualAnchorAr = at;
+        }
+      } catch (_) {
+        // No anchor: the model still sits where it was put; it just won't
+        // follow map corrections (the badge stays amber either way).
+      }
+    }
+    return fit;
   }
 
   // ---------------------------------------------------------------- nudge

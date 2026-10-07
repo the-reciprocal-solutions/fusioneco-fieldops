@@ -5,6 +5,7 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../core/conversation/mention_parser.dart';
+import '../../../core/conversation/next_steps.dart';
 import '../../../domain/conversation.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
@@ -23,6 +24,7 @@ class ConversationComposer extends StatefulWidget {
     this.replyingTo,
     this.onCancelReply,
     this.onTypingChanged,
+    this.pickerMaxHeight = 240,
   });
 
   final bool canMentionAgents;
@@ -35,6 +37,11 @@ class ConversationComposer extends StatefulWidget {
   final ConvMessage? replyingTo;
   final VoidCallback? onCancelReply;
   final ValueChanged<bool>? onTypingChanged;
+
+  /// The @ list's height cap. The thread lowers it when the keyboard leaves
+  /// little room (an iPhone SE with the keyboard up has ~250 pt for the
+  /// whole thread), so the list never pushes the box off screen.
+  final double pickerMaxHeight;
 
   @override
   State<ConversationComposer> createState() => ConversationComposerState();
@@ -54,7 +61,18 @@ class ConversationComposerState extends State<ConversationComposer> {
   void initState() {
     super.initState();
     _controller.addListener(_onChanged);
+    // The hide-keyboard button follows the focus.
+    _focus.addListener(_onFocus);
   }
+
+  void _onFocus() {
+    if (mounted) setState(() {});
+  }
+
+  /// Hides the keyboard. iOS gives a multi-line box no "done" key, so the
+  /// composer has its own (owner, 2026-10-06: "when the keyboard is open
+  /// there is no way to close it").
+  void hideKeyboard() => _focus.unfocus();
 
   @override
   void dispose() {
@@ -62,6 +80,7 @@ class ConversationComposerState extends State<ConversationComposer> {
     _typingOff?.cancel();
     if (_typing) widget.onTypingChanged?.call(false);
     _controller.dispose();
+    _focus.removeListener(_onFocus);
     _focus.dispose();
     super.dispose();
   }
@@ -148,10 +167,14 @@ class ConversationComposerState extends State<ConversationComposer> {
             orchestratorRole: 'conv.flow_agent_role'.getString(context),
             fallbackPeople: widget.fallbackPeople,
           );
-    final asksAgent = mentionsAgent(text, agentHandles: {
-      for (final c in _fetched)
-        if (c.isAgent) c.handle,
-    });
+    // Replying under an agent's answer reaches it without typing @agent
+    // (server continuation.ts), so no "add @agent" nudge there.
+    final toAgent = replyReachesAgent(widget.replyingTo, canMentionAgents: widget.canMentionAgents);
+    final asksAgent = toAgent ||
+        mentionsAgent(text, agentHandles: {
+          for (final c in _fetched)
+            if (c.isAgent) c.handle,
+        });
     final wantsSchedule = looksLikeScheduleRequest(text);
 
     return Container(
@@ -169,8 +192,10 @@ class ConversationComposerState extends State<ConversationComposer> {
               candidates: candidates,
               agentsOff: !widget.canMentionAgents,
               onPick: _pick,
+              maxHeight: widget.pickerMaxHeight,
             ),
-          if (widget.replyingTo != null) _ReplyBanner(message: widget.replyingTo!, onCancel: widget.onCancelReply),
+          if (widget.replyingTo != null)
+            _ReplyBanner(message: widget.replyingTo!, toAgent: toAgent, onCancel: widget.onCancelReply),
           if (text.isEmpty && widget.canMentionAgents && q == null)
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -208,6 +233,20 @@ class ConversationComposerState extends State<ConversationComposer> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              if (_focus.hasFocus)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 4),
+                  child: IconButton(
+                    key: const ValueKey('conv-hide-keyboard'),
+                    tooltip: 'conv.hide_keyboard'.getString(context),
+                    style: IconButton.styleFrom(
+                      foregroundColor: FeColors.ink2,
+                      minimumSize: const Size(40, 46),
+                    ),
+                    onPressed: hideKeyboard,
+                    icon: const Icon(LucideIcons.keyboardOff, size: 20),
+                  ),
+                ),
               Expanded(
                 child: TextField(
                   controller: _controller,
@@ -256,17 +295,24 @@ class ConversationComposerState extends State<ConversationComposer> {
 
 /// The @ list. `@agent` first, then specialists, then people.
 class MentionPickerList extends StatelessWidget {
-  const MentionPickerList({super.key, required this.candidates, required this.onPick, this.agentsOff = false});
+  const MentionPickerList({
+    super.key,
+    required this.candidates,
+    required this.onPick,
+    this.agentsOff = false,
+    this.maxHeight = 240,
+  });
   final List<MentionCandidate> candidates;
   final ValueChanged<MentionCandidate> onPick;
   final bool agentsOff;
+  final double maxHeight;
 
   @override
   Widget build(BuildContext context) {
     // A Material, not a decorated Container: ListTile paints its ink on the
     // nearest Material, and a coloured box in between hides it (and asserts).
     return Container(
-      constraints: const BoxConstraints(maxHeight: 240),
+      constraints: BoxConstraints(maxHeight: maxHeight),
       margin: const EdgeInsets.only(bottom: 8),
       child: Material(
         color: FeColors.panel,
@@ -322,8 +368,11 @@ class MentionPickerList extends StatelessWidget {
 }
 
 class _ReplyBanner extends StatelessWidget {
-  const _ReplyBanner({required this.message, this.onCancel});
+  const _ReplyBanner({required this.message, this.toAgent = false, this.onCancel});
   final ConvMessage message;
+
+  /// The agent answers this reply (no @agent needed) — say so.
+  final bool toAgent;
   final VoidCallback? onCancel;
 
   @override
@@ -337,7 +386,7 @@ class _ReplyBanner extends StatelessWidget {
         const SizedBox(width: 6),
         Expanded(
           child: AppText.caption(
-            convTr(context, 'conv.replying_to', [message.author.name]),
+            convTr(context, toAgent ? 'conv.replying_to_agent' : 'conv.replying_to', [message.author.name]),
             color: FeColors.ink2,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

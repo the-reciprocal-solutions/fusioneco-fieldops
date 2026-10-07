@@ -129,6 +129,54 @@ Hooks added to shared files: [router.dart](../lib/app/router.dart) (`Routes.ar*`
 
 A headless Flutter plugin. Android uses Kotlin, SceneView 4.39, ARCore and ML Kit. iOS uses Swift, ARKit, Vision and Filament through Objective-C++. A shared C99 core does GLB and meshopt decoding, picking, corner fitting and the overlay GLB. The wire contract is [CHANNEL.md](../packages/fe_ar/CHANNEL.md); building and enabling are in the [README](../packages/fe_ar/README.md). It is **not** in the app's `pubspec.yaml`.
 
+### 2.6 Room scan, pulse rings and the LiDAR surface check (2026-10-06)
+
+Setup shows the room being measured: on iPhones and iPads with LiDAR the live scene mesh, tinted by surface type and painting in as ARKit finds it; on other iPhones an animated grid on the tracked planes; on Android SceneView's plane grid. A confirmed board or corner gets a pulse ring (iOS), green when the depth sensor agrees it sits on the real surface, amber when it doesn't. When the model is first placed it builds up from the floor while fading in (iOS).
+
+```mermaid
+flowchart LR
+  S["ArSessionController<br/>_syncScanOverlay on every state change"] -->|"ScanOverlayPolicy.show<br/>setup && !locked, user choice,<br/>not demo / paused / warm"| E["setScanOverlay(on, contrast)"]
+  E --> IOS["iOS FeArScanner<br/>ARMeshAnchor (LiDAR) or ARPlaneAnchor<br/>≤5 Hz, ≤6 anchors/tick, ≤120k faces"]
+  IOS --> R["FeArRenderer + fe_scan.filamat<br/>wireframe / grid, sweep, fade"]
+  E --> AND["Android: SceneView plane grid"]
+  IOS -->|"scan event ≤1 Hz"| P["ScanProgress<br/>coverage % (floor 4 m², walls 6 m²)"]
+  AND -->|"scan event ≤1 Hz"| P
+  P --> UI["Setup chip: Room scan 64% · 3 surfaces<br/>Depth sensor active (LiDAR)"]
+  M["marker / corner<br/>surfaceResidualMm (iOS LiDAR)"] --> T["SurfaceCheck.tone<br/>≤30 mm ok · else warn · none info"]
+  T -->|"addObservation"| PU["pulseAt (iOS rings)<br/>warn → re-snap hint"]
+```
+
+- Pure rules: [scan_overlay.dart](../lib/core/ar/scan_overlay.dart) (`ScanProgress`, `ScanOverlayPolicy`, `SurfaceCheck`), tested in `test/ar_scan_overlay_test.dart`.
+- Menu → View → **Show room scan** overrides the automatic choice for the rest of the session (`toggleRoomScan`).
+- Native: `packages/fe_ar/ios/Classes/FeArScan.swift`, `FeArRenderer.mm` (scan surfaces, rings), `FeArDepthProbe.surfaceResidual`, `materials/fe_scan.mat` (iOS-only, compiled with matc 1.72.1 like the others). Wire: CHANNEL.md `setScanOverlay`, `pulseAt`, `scan`, `surfaceResidualMm`.
+- The residual never changes the fit or σ; it only colours the ring and raises a hint.
+
+### 2.7 Place by hand (2026-10-06)
+
+An **additional** setup method next to boards and corners (the corner method is unchanged). Owner: "load the model and drag it to the corners and expand its size to fit the room". The model appears 1.5 m ahead of the user on the detected floor, at true size, see-through (opacity 0.55) with a Flutter-drawn outline and a centre puck; the user moves, turns and sizes it, then locks it.
+
+```mermaid
+flowchart LR
+  CH["Method chooser<br/>'Place by hand' (first when < 3 corners<br/>or 2 corner failures)"] --> MC["ArManualPlaceController<br/>(state/ar_manual_place_controller.dart)"]
+  G["Gestures on the camera<br/>drag · twist · pinch · 2-finger lift<br/>long-press fine · double-tap reset"] --> MC
+  MC -->|"pure maths"| M["manual_place_math.dart<br/>ManualGestures · ManualSnaps · UndoStack<br/>ModelFootprint · ManualPose"]
+  MC -->|"rays, planes, projections<br/>(ManualViewIo)"| E["ArEngine rayAt / planes / projectTile<br/>(Demo: PinholeCamera + director truth)"]
+  MC -->|"previewModelTransform<br/>(one in flight, ≤ 1 per frame)"| S["ArSessionController<br/>beginManualPreview"]
+  MC -->|"Lock placement"| L["applyManualPlacement<br/>fit = manual, method 'manual', scale kept<br/>anchorAt(pivot) → re-anchor on map corrections"]
+  L --> W["enterWorkspace<br/>amber 'Placed by hand' badge<br/>'Refine with a corner' banner"]
+  W -->|"Refine"| R["ArSetupController.reSnap()<br/>a measured corner replaces the hand fit"]
+```
+
+- **Gestures** (`ArManualPlaceOverlay`, one `GestureDetector`; Flutter restarts the scale gesture whenever a finger lands or lifts, so each finger count is its own start/update/end): one finger drags the model on its base plane — `rayAt` → `ManualGestures.floorHit` → delta, so it follows the finger; two fingers twist (soft snap within 4° of any quarter turn aligned to a detected wall, or to the load heading before any wall is seen) and pinch (50–200 %, **sticky at 100 %** within ±3 %); two fingers dragged straight up/down change the height (`TwoFingerClassifier` decides once per gesture); long-press toggles fine mode (×0.25); double-tap resets to the load pose. Undo/redo: 30 poses.
+- **Fit helpers:** *Wall* (`ManualSnaps.snapToWall`: the model face closest in heading/distance/overlap to a detected wall turns parallel and slides onto it), *Corner* (corner tool: drag a white handle; on release it magnets within 30 cm to a room corner — two detected walls crossing, or the engine's own `detectCornerAt` under the finger — and **pins**: later pinches, twists and stretches keep that corner fixed, so the model grows out from the room corner), *Nudge* (±1 cm relative to the view, ±1°, ±1 cm height), *Height* slider, *More* (fine mode, true size, start over, "Use last size", **Stretch to fit** off by default: per-axis 80–125 % on the model's X/Z). Readout: "Scale 112% · Rot 87° · Height +0.02 m" (Rot counts from the load heading).
+- **Truth about scale:** any size ≠ 100 % shows the amber "Not true size — measurements are approximate" badge with one-tap **True size**; true size is the default and the next visit only *offers* last time's size. The fit carries `scale/stretchX/stretchZ` (`AlignmentFit.isTrueSize`); the session badge reads "Placed by hand · 112% · not true size" (amber, never green), and the workspace's measure chip appends "approximate, model not true size".
+- **Lock:** `applyManualPlacement` replaces any observations with the hand pose as the fit (`AlignmentQuality.manual`, method `manual`), pins a native anchor under the pivot (`anchorAt`, the corner mechanism) and refits from its `anchor` events, so map corrections and relocalisation carry the model. The first corner or board observation afterwards replaces it (`_clearManual`). `AlignmentFit.arToTile` now uses the general inverse when the matrix isn't rigid (`Mat4.inverse`).
+- **Persistence:** in-session, the last pose (locked or left) is restored when the user re-enters Place by hand; across sessions only the size is saved (`ar_prefs` `manual:size:<floorId>`; a new AR session has a new world origin, so a saved position would be meaningless). "Remember my choice" stores `manual:method:<floorId>` and the floor then opens straight into it; route `/ar/session?method=manual` does the same.
+- **Native (CHANNEL.md revision 2):** `rayAt`, `planes`, scaled `setModelTransform` (applied on the next frame; the model root only), `pick` with the general inverse on Android, section plane `sectionY × s + ty` on both. Demo mode never calls them: `DemoManualIo` uses a pinhole camera inside the sample room and the room's walls through the director's hidden pose, so Snap to wall/corner find the true answer there too.
+- **Power:** projection polling 15 Hz (7.5 Hz from thermal "moderate"), planes 1 Hz (0.5 Hz hot), both stopped while paused or once locked.
+- **Tests:** `test/ar_manual_place_math_test.dart` (33), `test/ar_manual_place_controller_test.dart` (20, incl. the lock hand-off through the real session code), `test/ar_manual_place_widget_test.dart` (15: 360×780, 320×568, 915×412 × EN/AR × Sunlight, plus the chooser).
+- **Not verified:** any device. The feel of the gestures, ARKit/ARCore plane quality for Snap to wall/corner, the anchor re-anchoring, the frame-coalesced transform and the scaled section plane only show on a phone.
+
 ## 3. A session, end to end
 
 ```mermaid
@@ -184,6 +232,8 @@ AR is not sold to every client, so the doors into AR are **additions, never repl
 
 `arDoorAvailableProvider` / `arAnyBuildingProvider` ([ar_availability.dart](../lib/state/ar_availability.dart)) combine the two. Loading, errors and "no signal, nothing cached" count as unavailable — except a floor whose AR pack is already on the phone. `ShowInArButton` renders an empty box (margin included) when unavailable; pass spacing via its `margin`, never wrap it in padding.
 
+**Update 2026-10-06 — the dashboard card is on by default** (owner: "make AR active by default"; this supersedes switch 2 *for the card only*). `arCardModeProvider` decides: hidden only when the client explicitly set `isArView = false`; otherwise shown. With no published model for the technician's buildings it reads "No AR model for your buildings yet" and offers **Try the demo room** (turns Demo on, opens the sample board) and **Scan an AR board**. `ArRepository.anyArBuilding` now treats any non-network failure (a 404 from a server older than `/availability/buildings`, a 500) as "no models" instead of erroring, which used to hide the card. The Demo pref still defaults to off: a "no models" answer can be a transient server error, and an automatic Demo would hijack real AR once a model is published. The per-asset/per-order "Show in AR" doors are unchanged (still need a model for that floor) and never replace "View in 3D" / the model viewer. Tests: [ar_dashboard_card_test.dart](../test/ar_dashboard_card_test.dart).
+
 ## 5. Offline behaviour
 
 - **Reads** are pack-first. A board on a downloaded floor resolves with no signal. The manifest is re-validated with its ETag, and Dio treats `< 400` as success, so the repository checks `statusCode == 304` itself before parsing. A retired board keeps resolving locally until the next manifest fetch.
@@ -219,7 +269,7 @@ Everything below is additive. Existing C8 call forms still compile.
 - `ArEngine.setFeatureState(rgba, width, {buildId})` and `setTarget(ids, {buildId})`. Feature ids are dense **per build**, so an unscoped texture hid or tinted the other build's elements with the same id. The session's target arrow also unioned both builds' bounds. The workspace now sends **one texture per build**, and the Layers panel's MEP SHOW switches (pipes, ducts, trays, equipment) no longer apply to architecture or structure elements. `fe_ar` already accepted `buildId` (CHANNEL.md).
 - Extra optional params: `MarkerCode.fromScan(raw, {allowBare})`, `AlignmentEstimator.fit(obs, {manual, nudgeAr})`, `CornerMatcher({floorFinishOffsetM})`. Events take named constructor parameters.
 - Route params beyond C9 are listed in §4.
-- Engine error events with coaching codes (`corner-no-surface`, `corner-no-walls`, `corner-not-found`, `corner-no-floor`, `corner-not-tracking`, `marker-unstable`) show as coaching toasts. Any other code shows as "AR hiccup (code)".
+- Engine error events with coaching codes (`corner-no-surface`, `corner-no-walls`, `corner-not-found`, `corner-no-floor`, `corner-not-tracking`, `marker-unstable`) show as coaching toasts. Session-fatal codes (`camera-denied`, `device-not-supported` → the fallback screen; `camera-unavailable`, `session-failed`, `renderer-failed` → the failed screen with Retry) end the session view; iOS reports them as events after `startSession`. Any other code shows a plain "AR had a hiccup" warning, never the code (2026-10-06).
 - The resolve badge from the server is `MODEL_OLDER_THAN_LATEST_UPLOAD`, and the scan sheet reads it. The install-request push entity is `ar_install_request`, and both routers accept it.
 - `fe_ar` extensions that Dart doesn't use yet: `projectTile`, `installArCore`, `markerProgress` events (`startSession {progressEvents: true}`), and `recordTo`/`playbackFrom`.
 

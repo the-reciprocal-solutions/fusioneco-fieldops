@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,11 +12,12 @@ import 'package:record/record.dart';
 
 import '../../app/router.dart';
 import '../../core/capture/capture_services.dart';
-import '../../core/network/api_exception.dart';
+import '../../core/snag/snag_photo_quality.dart';
 import '../../core/snag/snag_rules.dart';
 import '../../data/snag_repository.dart';
 import '../../domain/ar_handoff.dart';
 import '../../domain/snag.dart';
+import '../../domain/snag_ai.dart';
 import '../../state/snag_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
@@ -27,6 +29,7 @@ import '../ar/widgets/ar_handoff_card.dart';
 import '../field_verification/camera_capture_screen.dart';
 import '../field_verification/photo_annotation_screen.dart';
 import 'snag_plan_screen.dart';
+import 'widgets/snag_ai_panel.dart';
 import 'widgets/snag_sheets.dart';
 import 'widgets/snag_visuals.dart';
 
@@ -83,9 +86,32 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
   final _spot = TextEditingController();
   final _responsible = TextEditingController();
   DateTime? _due;
-  SnagSuggestion? _suggestion;
-  var _assisting = false;
+  // AI assist (2026-10-06): runs on its own after the first photo, never
+  // blocks Save, and changes a field only when the technician taps Apply.
+  SnagAiResult? _ai;
+  var _aiRunning = false;
+  var _aiRun = 0;
+  final _aiApplied = <SnagAiField>{};
+
+  /// The photo AI assist looked at, and the defect highlights still kept on
+  /// it (a technician removes a wrong one with its ×). Saved on that photo
+  /// only while it is still the first photo.
+  CapturedPhoto? _aiPhoto;
+  var _regions = <SnagRegion>[];
   var _saving = false;
+
+  /// false once saved, so leaving after a save never asks.
+  var _dirty = true;
+
+  /// Something worth keeping was entered: leaving asks first instead of
+  /// silently throwing away photos a technician spent a minute on.
+  bool get _hasUnsaved =>
+      _dirty &&
+      (_photos.isNotEmpty ||
+          _voice != null ||
+          _title.text.trim().isNotEmpty ||
+          _description.text.trim().isNotEmpty ||
+          _spot.text.trim().isNotEmpty);
 
   final _voiceCapture = VoiceCapture();
   VoiceRecording? _voice;
@@ -113,7 +139,35 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
         );
       });
       unawaited(_attachArPhoto(ar));
+    } else {
+      // Camera first (docs §4: "a snag is a photo with a label"): Quick snag
+      // opens straight on the camera instead of an empty form and a tap.
+      // Cancelling the camera lands on the form as before.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _photos.isEmpty) unawaited(_takePhoto());
+      });
     }
+  }
+
+  Future<bool> _confirmDiscard() async {
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('snags.discard_title'.getString(context)),
+        content: Text('snags.discard_body'.getString(context)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text('snags.discard_keep'.getString(context)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text('snags.discard_leave'.getString(context), style: const TextStyle(color: FeColors.danger)),
+          ),
+        ],
+      ),
+    );
+    return leave ?? false;
   }
 
   Future<void> _attachArPhoto(ArHandoff ar) async {
@@ -121,6 +175,100 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
     if (photo == null || !mounted) return;
     if (_photos.any((p) => p.fileName == photo.fileName)) return;
     setState(() => _photos.insert(0, photo));
+    _autoAi();
+  }
+
+  /// First photo in → ask the assistant once, in the background.
+  void _autoAi() {
+    if (_ai == null && !_aiRunning && _photos.isNotEmpty) unawaited(_runAi());
+  }
+
+  Future<void> _runAi() async {
+    if (_photos.isEmpty) return;
+    final run = ++_aiRun;
+    setState(() => _aiRunning = true);
+    final repo = ref.read(snagRepositoryProvider);
+    final photo = _photos.first;
+    SnagPhotoPrep? prep;
+    try {
+      prep = await compute(prepareSnagPhotoForAi, photo.bytes);
+    } catch (_) {
+      prep = null;
+    }
+    final buildings = ref.read(snagBuildingsProvider).valueOrNull ?? const <SnagBuilding>[];
+    final result = prep == null
+        ? const SnagAiResult.unavailable()
+        : await repo.aiAssist(
+            aiJpeg: prep.jpeg,
+            deviceTips: prep.deviceTips,
+            brightness: prep.brightness,
+            sharpness: prep.sharpness,
+            context: _context,
+            hint: _description.text.trim().isEmpty ? null : _description.text.trim(),
+            buildingId: _buildingId,
+            floorId: _floor?.id ?? widget.floorId,
+            spaceId: _space?.id,
+            locationLabel: _label(buildings),
+            locationText: _spot.text.trim().isEmpty ? null : _spot.text.trim(),
+            assetName: widget.assetName,
+            currentTitle: _title.text.trim().isEmpty ? null : _title.text.trim(),
+            currentTrade: _aiApplied.contains(SnagAiField.trade) ? _trade : null,
+            currentPriority: _aiApplied.contains(SnagAiField.priority) ? _priority : null,
+            photoCount: _photos.length,
+          );
+    if (!mounted || run != _aiRun) return;
+    setState(() {
+      _aiRunning = false;
+      _ai = result;
+      _aiPhoto = photo;
+      _regions = List.of(result.regions);
+    });
+  }
+
+  /// Highlights to save with the first photo — only if it is the one the
+  /// assistant looked at (a photo added in front of it must not inherit them).
+  List<SnagRegion> get _keptRegions =>
+      _aiPhoto != null && _photos.isNotEmpty && identical(_photos.first, _aiPhoto) ? List.of(_regions) : const [];
+
+  void _applyAi(SnagAiField f) {
+    final r = _ai;
+    if (r == null) return;
+    String line(String key, String text) => '${key.getString(context)}: $text';
+    void append(String text) {
+      final now = _description.text.trim();
+      _description.text = now.isEmpty ? text : '$now\n$text';
+    }
+
+    setState(() {
+      switch (f) {
+        case SnagAiField.title:
+          _title.text = r.title!;
+        case SnagAiField.description:
+          final now = _description.text.trim();
+          _description.text = now.isEmpty ? r.description! : '${r.description!}\n$now';
+        case SnagAiField.trade:
+          _trade = r.trade!;
+        case SnagAiField.priority:
+          _priority = r.priority!;
+        case SnagAiField.issueType:
+          _issueType = r.issueType!;
+        case SnagAiField.cause:
+          append(line('snags.ai.cause_prefix', r.likelyCause!));
+        case SnagAiField.fix:
+          append(line('snags.ai.fix_prefix', r.recommendedFix!));
+        case SnagAiField.responsible:
+          _responsible.text = SnagVisuals.tradeLabel(context, r.responsibleTrade!);
+      }
+      _aiApplied.add(f);
+    });
+  }
+
+  void _applyAllAi() {
+    final r = _ai;
+    if (r == null) return;
+    for (final f in snagAiFieldsOf(r)) {
+      if (!_aiApplied.contains(f)) _applyAi(f);
+    }
   }
 
   @override
@@ -138,12 +286,18 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
     final photo = await Navigator.of(context).push<CapturedPhoto>(
       MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
     );
-    if (photo != null && mounted) setState(() => _photos.add(photo));
+    if (photo != null && mounted) {
+      setState(() => _photos.add(photo));
+      _autoAi();
+    }
   }
 
   Future<void> _pickPhoto() async {
     final photo = await PhotoCapture().pickFromGallery();
-    if (photo != null && mounted) setState(() => _photos.add(photo));
+    if (photo != null && mounted) {
+      setState(() => _photos.add(photo));
+      _autoAi();
+    }
   }
 
   Future<void> _annotate(int i) async {
@@ -152,7 +306,13 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
         builder: (_) => PhotoAnnotationScreen(photo: _photos[i]),
       ),
     );
-    if (marked != null && mounted) setState(() => _photos[i] = marked);
+    if (marked != null && mounted) {
+      setState(() {
+        // Mark-up keeps the photo's geometry, so its highlights still fit.
+        if (identical(_photos[i], _aiPhoto)) _aiPhoto = marked;
+        _photos[i] = marked;
+      });
+    }
   }
 
   Future<void> _pickRoom(SnagLocationTree tree) async {
@@ -210,38 +370,6 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
     }
   }
 
-  Future<void> _assist() async {
-    if (_photos.isEmpty || _assisting) return;
-    setState(() => _assisting = true);
-    final s = await ref
-        .read(snagRepositoryProvider)
-        .assist(
-          _photos.first,
-          voice: _voice,
-          hint: _title.text.trim().isEmpty ? null : _title.text.trim(),
-          context: _context,
-        );
-    if (!mounted) return;
-    setState(() {
-      _assisting = false;
-      _suggestion = s;
-      if (s == null) return;
-      if (s.trade != null) _trade = s.trade!;
-      if (s.priority != null) _priority = s.priority!;
-      if (s.issueType != null) _issueType = s.issueType!;
-      if (s.title != null && _title.text.trim().isEmpty) _title.text = s.title!;
-      if (s.description != null && _description.text.trim().isEmpty) {
-        _description.text = s.description!;
-      }
-    });
-    if (s == null) {
-      showTechPopup(
-        context,
-        message: 'snags.assist_unavailable'.getString(context),
-      );
-    }
-  }
-
   String? _label(List<SnagBuilding> buildings) {
     String? buildingName;
     for (final b in buildings) {
@@ -291,6 +419,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
       dueDate: _due,
       photos: List.of(_photos),
       voice: _voice,
+      photoRegions: _keptRegions,
     );
     try {
       final pool = await repo.local(buildingId: _buildingId);
@@ -311,6 +440,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
             actor,
             photos: _photos,
             duplicateReport: true,
+            firstPhotoRegions: _keptRegions,
           );
           if (!mounted) return;
           bumpSnags(ref);
@@ -320,19 +450,19 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
       }
       final r = await repo.raise(draft, actor);
       if (!mounted) return;
+      _dirty = false;
       bumpSnags(ref);
       showTechPopup(
         context,
         message: r.synced
             ? snagTr(context, 'snags.saved_ref', [r.snag.displayRef])
-            : 'snags.saved_on_device'.getString(context),
-        queued: !r.synced,
+            : 'snags.saved_sending'.getString(context),
       );
       context.pushReplacement(Routes.snagDetail(r.snag.id));
-    } on ApiFailure catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() => _saving = false);
-      showTechPopup(context, message: e.message, isError: true);
+      showTechPopup(context, message: 'snags.save_failed'.getString(context), isError: true);
     }
   }
 
@@ -351,9 +481,18 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
         );
       }
     }
-    final s = _suggestion;
+    final ai = _ai;
 
-    return Scaffold(
+    return PopScope(
+      canPop: !_hasUnsaved,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        if (await _confirmDiscard() && mounted) {
+          _dirty = false;
+          if (context.mounted) Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
       backgroundColor: FeColors.page,
       appBar: FeHeader(title: 'snags.raise_title'.getString(context)),
       body: ListView(
@@ -461,69 +600,64 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
             ),
           ),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _toggleVoice,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _recording
-                        ? FeColors.danger
-                        : FeColors.ink,
-                    minimumSize: const Size.fromHeight(44),
-                  ),
-                  icon: Icon(
-                    _recording ? LucideIcons.square : LucideIcons.mic,
-                    size: 16,
-                  ),
-                  label: Text(
-                    _recording
-                        ? 'snags.stop'.getString(context)
-                        : (_voice != null
-                              ? 'snags.voice_added'.getString(context)
-                              : 'snags.voice'.getString(context)),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton.tonalIcon(
-                  onPressed: _photos.isEmpty || _assisting ? null : _assist,
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(44),
-                  ),
-                  icon: _assisting
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(LucideIcons.sparkles, size: 16),
-                  label: Text('snags.suggest'.getString(context)),
-                ),
-              ),
-            ],
+          const SizedBox(height: 4),
+          SnagAiPanel(
+            running: _aiRunning,
+            result: ai,
+            applied: _aiApplied,
+            hasPhoto: _photos.isNotEmpty,
+            onRun: _runAi,
+            onApply: _applyAi,
+            onApplyAll: _applyAllAi,
+            onOpenDuplicate: (d) => context.push(Routes.snagDetail(d.id)),
+            photo: _aiPhoto != null && _photos.any((p) => identical(p, _aiPhoto)) ? _aiPhoto!.bytes : null,
+            regions: _regions,
+            onDeleteRegion: (i) => setState(() => _regions.removeAt(i)),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _toggleVoice,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _recording ? FeColors.danger : FeColors.ink,
+              minimumSize: const Size.fromHeight(44),
+            ),
+            icon: Icon(_recording ? LucideIcons.square : LucideIcons.mic, size: 16),
+            label: Text(
+              _recording
+                  ? 'snags.stop'.getString(context)
+                  : (_voice != null ? 'snags.voice_added'.getString(context) : 'snags.voice'.getString(context)),
+            ),
           ),
           if (_recording && _amplitude != null) ...[
             const SizedBox(height: 8),
             VoiceWaveform(amplitudeStream: _amplitude!, color: FeColors.danger),
           ],
-          if (s?.transcript != null) ...[
-            const SizedBox(height: 6),
-            AppText.bodySmall('“${s!.transcript}”'),
-          ],
           const SizedBox(height: 16),
-          _Label('snags.what'.getString(context)),
+          Row(
+            children: [
+              Expanded(child: _Label('snags.what'.getString(context))),
+              if (_aiApplied.contains(SnagAiField.trade) ||
+                  _aiApplied.contains(SnagAiField.priority) ||
+                  _aiApplied.contains(SnagAiField.issueType))
+                const Padding(padding: EdgeInsets.only(bottom: 6), child: SnagAiBadge()),
+            ],
+          ),
           TradeChipRail(
             value: _trade,
-            suggested: s?.trade,
-            onChanged: (t) => setState(() => _trade = t),
+            suggested: ai?.trade,
+            onChanged: (t) => setState(() {
+              _trade = t;
+              _aiApplied.remove(SnagAiField.trade);
+            }),
           ),
           const SizedBox(height: 10),
           SeveritySelector(
             value: _priority,
-            suggested: s?.priority,
-            onChanged: (p) => setState(() => _priority = p),
+            suggested: ai?.priority,
+            onChanged: (p) => setState(() {
+              _priority = p;
+              _aiApplied.remove(SnagAiField.priority);
+            }),
           ),
           const SizedBox(height: 10),
           Wrap(
@@ -533,7 +667,10 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
               for (final t in kSnagIssueTypes)
                 ChoiceChip(
                   selected: t == _issueType,
-                  onSelected: (_) => setState(() => _issueType = t),
+                  onSelected: (_) => setState(() {
+                    _issueType = t;
+                    _aiApplied.remove(SnagAiField.issueType);
+                  }),
                   showCheckmark: false,
                   label: Text(SnagVisuals.issueLabel(context, t)),
                   selectedColor: FeColors.ink,
@@ -548,7 +685,14 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
           TextField(
             controller: _title,
             textCapitalization: TextCapitalization.sentences,
-            decoration: _input('snags.title_hint'.getString(context)),
+            onChanged: (_) {
+              if (_aiApplied.remove(SnagAiField.title)) setState(() {});
+            },
+            decoration: _input('snags.title_hint'.getString(context)).copyWith(
+              suffixIcon: _aiApplied.contains(SnagAiField.title)
+                  ? const Padding(padding: EdgeInsets.all(10), child: SnagAiBadge())
+                  : null,
+            ),
           ),
           const SizedBox(height: 8),
           TextField(
@@ -557,6 +701,13 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
             maxLines: 5,
             textCapitalization: TextCapitalization.sentences,
             decoration: _input('snags.description_hint'.getString(context)),
+          ),
+          if (_aiApplied.contains(SnagAiField.description) ||
+              _aiApplied.contains(SnagAiField.cause) ||
+              _aiApplied.contains(SnagAiField.fix))
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Align(alignment: AlignmentDirectional.centerEnd, child: SnagAiBadge()),
           ),
           const SizedBox(height: 16),
           _Label('snags.where'.getString(context)),
@@ -732,6 +883,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

@@ -33,11 +33,15 @@ class PushService {
   PushService(this._ref);
 
   final Ref _ref;
-  final _messaging = FirebaseMessaging.instance;
+  // Lazy, because FirebaseMessaging.instance throws when no Firebase app
+  // exists (an iOS build without GoogleService-Info.plist, see main.dart).
+  // This object is built on every login and session restore
+  // (auth_controller.dart), so an eager field would break both.
+  late final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   bool _initialized = false;
 
   Future<void> init() async {
-    if (_initialized) return;
+    if (_initialized || Firebase.apps.isEmpty) return;
     _initialized = true;
 
     final settings = await _messaging.requestPermission();
@@ -45,7 +49,7 @@ class PushService {
 
     await LocalNotifications.init(onTap: _routeFromPayload);
 
-    final token = await _messaging.getToken();
+    final token = await _fcmToken();
     if (token != null) await _register(token);
     _messaging.onTokenRefresh.listen(_register);
 
@@ -65,6 +69,27 @@ class PushService {
     FirebaseMessaging.onMessageOpenedApp.listen((m) => _routeFromPayload(jsonEncode(m.data)));
     final initial = await _messaging.getInitialMessage();
     if (initial != null) _routeFromPayload(jsonEncode(initial.data));
+  }
+
+  /// The FCM token, or null when there isn't one yet. On iOS, `getToken()`
+  /// throws `apns-token-not-set` until APNs has handed the app its device
+  /// token (firebase_messaging_platform_interface `_APNSTokenCheck`), and that
+  /// can lag the permission prompt by a few seconds on a first launch. Offline
+  /// at launch it throws on both platforms. Either throw used to abort
+  /// [init] before any listener below was set up, so that process never
+  /// showed a foreground push or routed a tap. A null here is not fatal:
+  /// once FCM has a token, `onTokenRefresh` hands it to [_register].
+  Future<String?> _fcmToken() async {
+    try {
+      if (Platform.isIOS) {
+        for (var i = 0; i < 10 && await _messaging.getAPNSToken() == null; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
+      }
+      return await _messaging.getToken();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _register(String token) async {

@@ -30,7 +30,10 @@ abstract interface class ArEngine {
   Future<void> unloadTiles(List<String> hashes);
 
   /// The fitted model → AR-world transform. Native never computes it; it
-  /// only eases to it (never snaps).
+  /// only eases to it (never snaps). Since CHANNEL.md revision 2 it may carry
+  /// a scale ("Place by hand": uniform, or stretched along the model's X/Z):
+  /// such a matrix applies at once (no easing), and native picking and the
+  /// section plane account for it.
   Future<void> setModelTransform(Mat4 arFromTile, {int easeMs = 300});
 
   /// The feature-state texture (`feature_state.dart`): one RGBA texel per
@@ -89,6 +92,17 @@ abstract interface class ArEngine {
   /// trustworthy is under the point, or the engine lacks the extension.
   Future<ArDepthPoint?> depthPointAt(double x, double y);
 
+  /// World rays through view points in logical pixels (fe_ar extension
+  /// `rayAt`), one per point, null where the camera isn't known yet. "Place
+  /// by hand" drags the model along the floor with them. An engine without
+  /// the extension answers all nulls.
+  Future<List<ArRay?>> rayAt(List<(double, double)> points);
+
+  /// The tracked floor height and the tracked planes (fe_ar extension
+  /// `planes`): walls for "Snap to wall" and the room corners "Snap corner"
+  /// magnets to. [ArPlanes.empty] from an engine without the extension.
+  Future<ArPlanes> planes();
+
   /// Turns the torch on or off (fe_ar extension `setTorch`). True when the
   /// engine applied it; see [ArCapabilities.torch].
   Future<bool> setTorch(bool on);
@@ -96,6 +110,19 @@ abstract interface class ArEngine {
   /// Restarts the camera's autofocus sweep (fe_ar extension `refocus`;
   /// ARCore/ARKit have no focus-at-point). True when the engine did it.
   Future<bool> refocus();
+
+  /// The room-scan overlay (fe_ar extension `setScanOverlay`): on iPhones
+  /// and iPads with LiDAR the live scene mesh, tinted by surface type, painting
+  /// itself in as the room is discovered; elsewhere the tracked planes as an
+  /// animated grid. Native fades it in and out. [contrast] is Sunlight mode.
+  /// True when the engine can draw it; false from an engine without it.
+  Future<bool> setScanOverlay(bool on, {bool contrast = false});
+
+  /// Two expanding rings where a board or corner was just confirmed (fe_ar
+  /// extension `pulseAt`, iOS): [tone] `ok` (green: the depth check agreed),
+  /// `warn` (amber: it didn't) or `info` (blue: nothing to check against).
+  /// False when the engine has no rings.
+  Future<bool> pulseAt(Vec3 posAr, {Vec3? normalAr, String tone = 'info'});
 
   /// Turns the engine's depth sensing on or off (fe_ar extension
   /// `setDepth`). Depth is costly; only setup (corner snaps, wall taps)
@@ -130,6 +157,8 @@ class ArCapabilities {
     this.platform = 'unknown',
     this.reason,
     this.torch = false,
+    this.mesh = false,
+    this.scanOverlay = false,
   });
 
   const ArCapabilities.unsupported(String this.reason, {this.platform = 'unknown'})
@@ -137,7 +166,9 @@ class ArCapabilities {
         depth = false,
         lidar = false,
         recording = false,
-        torch = false;
+        torch = false,
+        mesh = false,
+        scanOverlay = false;
 
   /// The plugin isn't in this build or this platform has no engine.
   static const engineNotInstalled = 'engine-not-installed';
@@ -150,6 +181,8 @@ class ArCapabilities {
         platform: map['platform']?.toString() ?? 'unknown',
         reason: map['reason']?.toString(),
         torch: asBool(map['torch']) ?? false,
+        mesh: asBool(map['mesh']) ?? false,
+        scanOverlay: asBool(map['scanOverlay']) ?? false,
       );
 
   final bool supported;
@@ -160,6 +193,14 @@ class ArCapabilities {
   /// The back camera has a torch the engine can switch ([ArEngine.setTorch]).
   /// fe_ar extension key `torch`; false from an older plugin.
   final bool torch;
+
+  /// The LiDAR scene mesh runs here (fe_ar extension key `mesh`, iOS): the
+  /// room-scan overlay draws real surfaces, corner snaps use them.
+  final bool mesh;
+
+  /// The engine draws the room-scan overlay ([ArEngine.setScanOverlay];
+  /// extension key `scanOverlay`). False from an older plugin.
+  final bool scanOverlay;
 
   /// `android | ios | demo | unknown`.
   final String platform;
@@ -187,6 +228,8 @@ class ArCapabilities {
         'platform': platform,
         'reason': reason,
         'torch': torch,
+        'mesh': mesh,
+        'scanOverlay': scanOverlay,
       };
 }
 
@@ -230,6 +273,120 @@ class ArDepthPoint {
         'confidence': confidence,
         'method': method,
       };
+}
+
+/// A world ray through a view point ([ArEngine.rayAt]): where a finger on
+/// the screen points into the room. "Place by hand" intersects it with the
+/// floor plane in Dart (`manual_place_math.dart`), so the model follows the
+/// finger without a native hit-test per frame.
+class ArRay {
+  const ArRay({required this.originAr, required this.dirAr});
+
+  /// On the near plane, AR world.
+  final Vec3 originAr;
+
+  /// Unit direction, AR world.
+  final Vec3 dirAr;
+
+  static ArRay? fromMap(dynamic raw) {
+    if (raw is! Map) return null;
+    final o = Vec3.tryParse(raw['originAr']);
+    final d = Vec3.tryParse(raw['dirAr']);
+    if (o == null || d == null || d.length < 1e-9) return null;
+    return ArRay(originAr: o, dirAr: d.normalized);
+  }
+
+  Map<String, dynamic> toMap() => {'originAr': originAr.toList(), 'dirAr': dirAr.toList()};
+}
+
+/// One tracked plane ([ArEngine.planes]): a wall the phone has measured, or
+/// the floor. "Place by hand" snaps the model's walls and corners to them.
+class ArPlane {
+  const ArPlane({
+    required this.id,
+    required this.kind,
+    required this.centerAr,
+    required this.normalAr,
+    this.segment,
+    this.widthM = 0,
+    this.heightM = 0,
+  });
+
+  final String id;
+
+  /// `wall | floor | ceiling | other`.
+  final String kind;
+  final Vec3 centerAr;
+
+  /// Unit normal; for a wall it is horizontal and faces the camera (into
+  /// the room the user stands in).
+  final Vec3 normalAr;
+
+  /// Walls: the plane's horizontal extent on the floor plane, two (x, z)
+  /// ends. Null for floors (and an old engine).
+  final (Vec2, Vec2)? segment;
+  final double widthM;
+  final double heightM;
+
+  bool get isWall => kind == 'wall';
+
+  static ArPlane? fromMap(dynamic raw) {
+    if (raw is! Map) return null;
+    final c = Vec3.tryParse(raw['centerAr']);
+    final n = Vec3.tryParse(raw['normalAr']);
+    if (c == null || n == null || n.length < 1e-6) return null;
+    (Vec2, Vec2)? seg;
+    final s = raw['segment'];
+    if (s is List && s.length >= 2) {
+      final a = Vec2.tryParse(s[0]);
+      final b = Vec2.tryParse(s[1]);
+      if (a != null && b != null) seg = (a, b);
+    }
+    return ArPlane(
+      id: raw['id']?.toString() ?? '',
+      kind: raw['kind']?.toString() ?? 'other',
+      centerAr: c,
+      normalAr: n.normalized,
+      segment: seg,
+      widthM: asDouble(raw['widthM']) ?? 0,
+      heightM: asDouble(raw['heightM']) ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'kind': kind,
+        'centerAr': centerAr.toList(),
+        'normalAr': normalAr.toList(),
+        if (segment != null) 'segment': [segment!.$1.toList(), segment!.$2.toList()],
+        'widthM': widthM,
+        'heightM': heightM,
+      };
+}
+
+/// What [ArEngine.planes] answers: the tracked floor height (the same plane
+/// the `floor` event reports) and the tracked planes.
+class ArPlanes {
+  const ArPlanes({this.floorY, this.planes = const []});
+
+  static const empty = ArPlanes();
+
+  final double? floorY;
+  final List<ArPlane> planes;
+
+  List<ArPlane> get walls => [for (final p in planes) if (p.isWall) p];
+
+  static ArPlanes fromMap(dynamic raw) {
+    if (raw is! Map) return empty;
+    final list = raw['planes'];
+    return ArPlanes(
+      floorY: asDouble(raw['floorY']),
+      planes: [
+        if (list is List)
+          for (final p in list) ?ArPlane.fromMap(p),
+      ],
+    );
+  }
 }
 
 class TileRef {
@@ -447,6 +604,7 @@ sealed class ArEvent {
           distanceM: asDouble(raw['distanceM']) ?? 0,
           viewAngleDeg: asDouble(raw['viewAngleDeg']) ?? 0,
           qrEdgeMm: asDouble(raw['qrEdgeMm']),
+          surfaceResidualMm: asDouble(raw['surfaceResidualMm']),
         );
       case 'corner':
         final corner = CornerSeenEvent.tryParse(raw);
@@ -458,6 +616,16 @@ sealed class ArEvent {
         return AnchorUpdatedEvent(anchorId: id, posAr: pos);
       case 'thermal':
         return ThermalEvent(level: raw['level']?.toString() ?? 'none', status: asInt(raw['status']) ?? 0);
+      case 'scan':
+        return ScanProgressEvent(
+          source: raw['source']?.toString() ?? 'planes',
+          walls: asInt(raw['walls']) ?? 0,
+          floors: asInt(raw['floors']) ?? 0,
+          floorM2: asDouble(raw['floorM2']) ?? 0,
+          wallM2: asDouble(raw['wallM2']) ?? 0,
+          ceilingM2: asDouble(raw['ceilingM2']) ?? 0,
+          otherM2: asDouble(raw['otherM2']) ?? 0,
+        );
       case 'floor':
         final y = asDouble(raw['yAr']);
         if (y == null) return bad('yAr');
@@ -516,6 +684,7 @@ final class MarkerSeenEvent extends ArEvent {
     required this.distanceM,
     required this.viewAngleDeg,
     this.qrEdgeMm,
+    this.surfaceResidualMm,
   });
 
   final String rawPayload;
@@ -535,6 +704,11 @@ final class MarkerSeenEvent extends ArEvent {
   /// null without a depth sensor.
   final double? qrEdgeMm;
 
+  /// The LiDAR check (fe_ar extension, iOS): how far the wall the depth
+  /// sensor sees is behind (+) or in front of (−) the locked centre, in mm.
+  /// Null without LiDAR depth.
+  final double? surfaceResidualMm;
+
   @override
   String get type => 'marker';
 
@@ -550,6 +724,7 @@ final class MarkerSeenEvent extends ArEvent {
         'distanceM': distanceM,
         'viewAngleDeg': viewAngleDeg,
         'qrEdgeMm': qrEdgeMm,
+        'surfaceResidualMm': surfaceResidualMm,
       };
 }
 
@@ -563,6 +738,7 @@ final class CornerSeenEvent extends ArEvent {
     required this.angleDeg,
     required this.kind,
     required this.method,
+    this.surfaceResidualMm,
   });
 
   final Vec3 posAr;
@@ -577,6 +753,10 @@ final class CornerSeenEvent extends ArEvent {
   /// fitted it from wall taps (`wall_fit.dart`).
   final String method;
 
+  /// The LiDAR check of the corner line against scene depth (fe_ar
+  /// extension, iOS), mm; null without LiDAR depth.
+  final double? surfaceResidualMm;
+
   static CornerSeenEvent? tryParse(dynamic raw) {
     if (raw is! Map) return null;
     final pos = Vec3.tryParse(raw['posAr']);
@@ -590,6 +770,7 @@ final class CornerSeenEvent extends ArEvent {
       angleDeg: asDouble(raw['angleDeg']) ?? 90,
       kind: raw['kind']?.toString() ?? 'inside',
       method: raw['method']?.toString() ?? 'planes',
+      surfaceResidualMm: asDouble(raw['surfaceResidualMm']),
     );
   }
 
@@ -605,6 +786,7 @@ final class CornerSeenEvent extends ArEvent {
         'angleDeg': angleDeg,
         'kind': kind,
         'method': method,
+        'surfaceResidualMm': ?surfaceResidualMm,
       };
 }
 
@@ -695,6 +877,45 @@ final class TargetScreenEvent extends ArEvent {
 
   @override
   Map<String, dynamic> toMap() => {'type': type, 'x': x, 'y': y, 'onScreen': onScreen};
+}
+
+/// What the room scan has found (fe_ar extension, at most 1 Hz while the
+/// scan overlay is on): tracked floors and walls, and the measured area by
+/// surface type. `source` is `mesh` (LiDAR) or `planes`.
+/// `lib/core/ar/scan_overlay.dart` turns it into the setup's scan progress.
+final class ScanProgressEvent extends ArEvent {
+  const ScanProgressEvent({
+    this.source = 'planes',
+    this.walls = 0,
+    this.floors = 0,
+    this.floorM2 = 0,
+    this.wallM2 = 0,
+    this.ceilingM2 = 0,
+    this.otherM2 = 0,
+  });
+
+  final String source;
+  final int walls;
+  final int floors;
+  final double floorM2;
+  final double wallM2;
+  final double ceilingM2;
+  final double otherM2;
+
+  @override
+  String get type => 'scan';
+
+  @override
+  Map<String, dynamic> toMap() => {
+        'type': type,
+        'source': source,
+        'walls': walls,
+        'floors': floors,
+        'floorM2': floorM2,
+        'wallM2': wallM2,
+        'ceilingM2': ceilingM2,
+        'otherM2': otherM2,
+      };
 }
 
 final class ArErrorEvent extends ArEvent {

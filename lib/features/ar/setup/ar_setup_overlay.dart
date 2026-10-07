@@ -8,12 +8,12 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router.dart';
 import '../../../core/ar/alignment_estimator.dart';
 import '../../../core/ar/corner_matcher.dart';
-import '../../../core/ar/marker_code.dart';
 import '../../../core/ar/vec.dart';
 import '../../../core/ar/wall_fit.dart';
 import '../../../state/ar_prefs_controller.dart';
 import '../../../state/ar_session_controller.dart';
 import '../../../state/ar_setup_controller.dart';
+import '../../../state/providers.dart' show arPackStoreProvider;
 import '../../../theme/fe_ar_colors.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
@@ -21,11 +21,11 @@ import '../ar_ui.dart';
 import '../widgets/ar_chrome.dart';
 import '../widgets/ar_mini_plan.dart';
 import '../widgets/ar_status.dart';
-import '../widgets/ar_sunlight.dart';
 import '../widgets/ar_visuals.dart';
 import '../workspace/ar_workspace.dart' show arRefocus;
 import 'ar_method_chooser.dart';
 import 'ar_register_board_card.dart';
+import 'ar_setup_coach.dart';
 
 /// Everything drawn over the camera while the model is being placed
 /// (canvas row 6 + TabMethod/TabSnap/TabRegister and their phone twins).
@@ -78,11 +78,43 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
 
   ArSetupController get _ctrl => ref.read(arSetupProvider.notifier);
 
+  /// The same corner problem again buzzes instead of a second toast.
+  var _problemSeq = 0;
+
+  /// The three-step guide was considered for this session.
+  var _guideChecked = false;
+
+  /// Before the first corner: the three-step guide ("Stand inside the room
+  /// you opened · Scan slowly · Point at a corner on the plan"), unless
+  /// "Don't show again" was ticked. Waits for the first-time tips
+  /// ([ArCoachOverlay]) so the two never stack.
+  void _maybeShowGuide(ArSetupState setup, bool tipsSeen) {
+    if (_guideChecked || !tipsSeen) return;
+    if (setup.step != ArSetupStep.start && setup.step != ArSetupStep.cornerA) return;
+    _guideChecked = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      String? hidden;
+      try {
+        hidden = await ref.read(arPackStoreProvider).getArPref(kSetupGuidePref);
+      } catch (_) {
+        hidden = null;
+      }
+      if (!mounted || hidden == '1') return;
+      await showArSetupGuide(context, highlight: 0, offerDontShow: true);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final setup = ref.watch(arSetupProvider);
     final s = ref.watch(arSessionProvider);
     final tablet = widget.tablet;
+    final prefs = ref.watch(arPrefsProvider);
+    _maybeShowGuide(setup, prefs.loaded && prefs.coachSeen);
+    if (setup.problemSeq != _problemSeq) {
+      _problemSeq = setup.problemSeq;
+      if (setup.cornerProblem != null) ArHaptics.warn();
+    }
 
     final showReady = !_readyAck &&
         s.args?.focusCode != null &&
@@ -285,22 +317,88 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
     return (toScreen(d.faceAAr), toScreen(d.faceBAr));
   }
 
-  Widget _plan(ArSetupState setup, ArSessionState s) {
+  /// The corner-picking plan. Pins are numbered by their place in
+  /// `setup.ranked` — the same "#n" the chip and the start card use. It
+  /// frames the picked corner and its few neighbours (a room, not 18 m of a
+  /// floor), hides element tags, and pinch-zooms; the button opens it full
+  /// screen (first iPhone run 2026-10-06: unreadable at 140 px).
+  Widget _plan(ArSetupState setup, ArSessionState s, {bool full = false, bool tags = false}) {
     final floor = s.floor;
     final ranked = setup.ranked;
-    final focus = setup.chosenA?.posTile.xz;
+    final selected = setup.step == ArSetupStep.cornerB ? setup.suggestedB : setup.chosenA;
+    final focus = selected?.posTile.xz;
+    final picking = setup.step == ArSetupStep.start || setup.step == ArSetupStep.cornerA;
     return ArMiniPlan(
       plan: s.plan,
-      corners: ranked.take(12).toList(),
-      selectedCornerId: setup.step == ArSetupStep.cornerB ? setup.suggestedB?.id : setup.chosenA?.id,
+      corners: ranked.take(40).toList(),
+      selectedCornerId: selected?.id,
+      matchShape: setup.cornerProblem == ArCornerProblem.otherShapeNearby ? setup.problemShape : null,
       gridLines: s.gridVisible ? (floor?.gridLines ?? const []) : const [],
       markers: floor?.activeMarkers ?? const [],
       camera: s.cameraTile,
       heading: s.forwardTileXz,
       target: s.target?.centre,
       focus: s.plan == null ? null : focus,
-      focusRadiusM: 9,
-      onTapCorner: setup.step == ArSetupStep.start || setup.step == ArSetupStep.cornerA ? _ctrl.chooseCornerA : null,
+      focusRadiusM: focus == null ? 9 : ArMiniPlan.fitRadius(focus, ranked, maxM: full ? 14 : 9),
+      showEquipmentNames: tags,
+      zoomable: true,
+      onExpand: full ? null : () => _openFullPlan(),
+      expandTooltip: 'ar.corner.plan_full'.getString(context),
+      onTapCorner: picking
+          ? (c) {
+              _ctrl.chooseCornerA(c);
+              if (full) Navigator.of(context).maybePop();
+            }
+          : null,
+    );
+  }
+
+  /// The plan full screen: room to zoom, and element tags on request.
+  Future<void> _openFullPlan() async {
+    var tags = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog.fullscreen(
+        backgroundColor: FeColors.panel,
+        child: SafeArea(
+          child: StatefulBuilder(
+            builder: (context, setLocal) => Consumer(
+              builder: (context, ref, _) {
+                final setup = ref.watch(arSetupProvider);
+                final s = ref.watch(arSessionProvider);
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(child: AppText.titleMedium('ar.corner.plan_title'.getString(context), weight: FontWeight.w800)),
+                          IconButton(
+                            tooltip: 'ar.common.close'.getString(context),
+                            icon: const Icon(ArIcons.close),
+                            onPressed: () => Navigator.of(dialogContext).pop(),
+                          ),
+                        ],
+                      ),
+                      AppText.bodySmall('ar.corner.tap_other'.getString(context), color: FeColors.ink2),
+                      const SizedBox(height: 8),
+                      Expanded(child: _plan(setup, s, full: true, tags: tags)),
+                      const SizedBox(height: 8),
+                      SwitchListTile.adaptive(
+                        contentPadding: EdgeInsets.zero,
+                        value: tags,
+                        onChanged: (v) => setLocal(() => tags = v),
+                        title: AppText.bodyMedium('ar.corner.plan_tags'.getString(context)),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -343,6 +441,11 @@ class _ArSetupOverlayState extends ConsumerState<ArSetupOverlay> {
 
 // ------------------------------------------------------------------ chips
 
+/// The top of the camera during setup: ONE status area — the coach strip
+/// ([ArSetupCoachStrip]: instruction, target, snap, scan %, tracking) —
+/// plus the debug record/replay chips. It replaced a stack of up to four
+/// chips and a toast that covered the corner being aimed at (owner's
+/// screenshot, 2026-10-06).
 class _TopChips extends ConsumerWidget {
   const _TopChips({required this.setup, required this.session});
 
@@ -351,77 +454,32 @@ class _TopChips extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final chips = <Widget>[];
-    switch (setup.step) {
-      case ArSetupStep.cornerA:
-        final a = setup.chosenA;
-        final n = a == null ? 1 : setup.ranked.indexOf(a) + 1;
-        chips.add(ArGlassChip(text: arTr(context, 'ar.corner.chip_a', [n, a?.label ?? ''])));
-        if (setup.snapped != null) chips.add(_snappedChip(context, setup.snapped!));
-      case ArSetupStep.cornerB:
-        if (setup.matchedB != null) {
-          chips.add(ArStatusBadge(
-            tone: ArBadgeTone.locked,
-            text: arTr(context, 'ar.corner.matched', [setup.matchedB!.label, _shape(context, setup.matchedB!.kind, setup.matchedB!.angleDeg)]),
-          ));
-        } else if (setup.snapped != null) {
-          chips.add(_snappedChip(context, setup.snapped!));
-        }
-      case ArSetupStep.boardLock:
-        final code = setup.lockingCode;
-        final label = code == null ? '' : (session.floor?.markerByCode(code)?.label ?? MarkerCode.display(code));
-        chips.add(ArGlassChip(text: arTr(context, 'ar.lock.locking_onto', [label])));
-      case ArSetupStep.boardScan:
-        chips.add(ArGlassChip(text: 'ar.board.point_at'.getString(context), icon: ArIcons.board));
-      case ArSetupStep.wallTaps:
-        chips.add(ArGlassChip(
-          text: arTr(context, 'ar.walls.chip', [setup.wallIndex + 1, setup.currentTaps.length]),
-          icon: ArIcons.crosshair,
-        ));
-      case ArSetupStep.baseline:
-        chips.add(ArGlassChip(text: 'ar.baseline.chip'.getString(context), icon: ArIcons.crosshair));
-      default:
-        break;
-    }
-    // Debug builds only (docs/ar-recording-playback.md).
-    if (session.recordingPath != null) {
-      chips.add(ArGlassChip(
-        text: 'ar.debug.recording'.getString(context),
-        icon: ArIcons.capture,
-        iconColor: FeColors.danger,
-        strong: true,
-        onTap: () => ref.read(arSessionProvider.notifier).debugStopRecording(),
-      ));
-    }
-    if (session.playbackPath != null) {
-      chips.add(ArGlassChip(
-        text: arTr(context, 'ar.debug.replaying', [session.playbackPath!.split('/').last]),
-        icon: ArIcons.resume,
-        onTap: () => ref.read(arSessionProvider.notifier).debugReplay(null),
-      ));
-    }
-    if (session.tracking == 'limited' || session.tracking == 'initializing') {
-      chips.add(ArGlassChip(
-        text: session.tracking == 'initializing'
-            ? 'ar.tracking.initializing'.getString(context)
-            : 'ar.tracking.limited'.getString(context),
-        icon: ArIcons.info,
-        strong: true,
-      ));
-    }
+    final chips = <Widget>[
+      if (setup.otherFloorCode == null) const ArSetupCoachStrip(),
+      // Debug builds only (docs/ar-recording-playback.md).
+      if (session.recordingPath != null)
+        ArGlassChip(
+          text: 'ar.debug.recording'.getString(context),
+          icon: ArIcons.capture,
+          iconColor: FeColors.danger,
+          strong: true,
+          onTap: () => ref.read(arSessionProvider.notifier).debugStopRecording(),
+        ),
+      if (session.playbackPath != null)
+        ArGlassChip(
+          text: arTr(context, 'ar.debug.replaying', [session.playbackPath!.split('/').last]),
+          icon: ArIcons.resume,
+          onTap: () => ref.read(arSessionProvider.notifier).debugReplay(null),
+        ),
+    ];
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final c in chips) Padding(padding: const EdgeInsets.only(bottom: 8), child: Center(child: c)),
+        for (final c in chips) Padding(padding: const EdgeInsets.only(bottom: 8), child: c is ArGlassChip ? Center(child: c) : c),
       ],
     );
   }
-
-  Widget _snappedChip(BuildContext context, DetectedCorner d) => ArStatusBadge(
-    // A floor tap is a rough corner: say so in amber, not a calm green.
-    tone: d.method == 'floorTap' ? ArBadgeTone.placed : ArBadgeTone.locked,
-    text: arTr(context, 'ar.corner.snapped_via', [_shape(context, d.kind, d.angleDeg), _method(context, d.method)]),
-  );
 }
 
 /// How a corner was found, for the snapped chip: "walls" (tracked planes),
@@ -673,7 +731,7 @@ class _StartCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final ctrl = ref.read(arSetupProvider.notifier);
     final a = setup.chosenA;
-    final n = a == null ? 1 : setup.ranked.indexOf(a) + 1;
+    final n = setup.pinOf(a) ?? 1;
     final contextLine = _contextLine(context, session);
     final hasBoards = (session.floor?.activeMarkers.length ?? 0) > 0;
     return ArCard(
@@ -756,6 +814,7 @@ class _CornerACard extends ConsumerWidget {
     final ctrl = ref.read(arSetupProvider.notifier);
     final a = setup.chosenA;
     final snapped = setup.snapped;
+    final problem = setup.cornerProblem;
     final lidarHidden = snapped != null && snapped.method == 'lidar';
     return ArCard(
       child: Column(
@@ -774,11 +833,23 @@ class _CornerACard extends ConsumerWidget {
             const SizedBox(height: 4),
             AppText.caption('ar.corner.tap_other'.getString(context), color: FeColors.ink2),
           ],
+          if (problem != null) ...[
+            const SizedBox(height: 10),
+            _CornerProblemBox(setup: setup, session: session),
+          ],
           const SizedBox(height: 10),
           AppText.bodyMedium(
             a == null ? 'ar.corner.aim'.getString(context) : arTr(context, 'ar.corner.aim_at', [a.label]),
             color: FeColors.ink2,
           ),
+          if (a != null) ...[
+            const SizedBox(height: 4),
+            AppText.bodySmall(
+              (a.kind == 'inside' ? 'ar.corner.target_inside' : 'ar.corner.target_outside').getString(context),
+              color: FeColors.ink2,
+              weight: FontWeight.w600,
+            ),
+          ],
           if (session.gridVisible && (session.floor?.gridLines.isNotEmpty ?? false)) ...[
             const SizedBox(height: 6),
             AppText.bodySmall('ar.corner.grid_hint'.getString(context), color: FeColors.ink2),
@@ -816,6 +887,50 @@ class _CornerACard extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Why corner A didn't place the model, in plain words, with the way out:
+/// tap a corner of the right shape on the plan (shown outlined), or this
+/// may be the wrong floor/model — pick another, or try the demo room.
+class _CornerProblemBox extends ConsumerWidget {
+  const _CornerProblemBox({required this.setup, required this.session});
+  final ArSetupState setup;
+  final ArSessionState session;
+
+  static String textKey(ArCornerProblem p, String? shape) {
+    final inside = shape == 'inside';
+    return switch (p) {
+      ArCornerProblem.otherShapeNearby => inside ? 'ar.corner.problem_inside_nearby' : 'ar.corner.problem_outside_nearby',
+      ArCornerProblem.noneOfShape => inside ? 'ar.corner.problem_inside_none' : 'ar.corner.problem_outside_none',
+      ArCornerProblem.notPlaced => 'ar.corner.problem_not_placed',
+    };
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final problem = setup.cornerProblem!;
+    final ctrl = ref.read(arSetupProvider.notifier);
+    final wrongModel = problem != ArCornerProblem.notPlaced;
+    return Column(
+      key: const ValueKey('ar-corner-problem'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ArHintRow(text: textKey(problem, setup.problemShape).getString(context), icon: ArIcons.warning),
+        if (wrongModel) ...[
+          const SizedBox(height: 8),
+          ArSecondaryButton(
+            label: 'ar.corner.pick_floor'.getString(context),
+            icon: ArIcons.changeFloor,
+            onPressed: () => context.pushReplacement(Routes.arModels(buildingId: session.floor?.buildingId)),
+          ),
+        ],
+        if (problem == ArCornerProblem.noneOfShape && !session.demo) ...[
+          const SizedBox(height: 8),
+          ArSecondaryButton(label: 'ar.corner.try_demo'.getString(context), icon: ArIcons.demo, onPressed: ctrl.tryDemoRoom),
+        ],
+      ],
     );
   }
 }

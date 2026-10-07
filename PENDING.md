@@ -5,6 +5,7 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 **The 2026-09-25 audit findings stay in [docs/improvements.md](docs/improvements.md)** with their own `#` numbers. Don't copy them here; mark them done there when fixed. This file holds everything else: session leftovers, deferred work, things not verified.
 
 - **Add** an item before ending any turn that leaves work owed. Take the number from "Next number" below and bump it. Never reuse a number.
+- **Number clash after a pull:** the committed number wins. Move your uncommitted item to "Next number", note the old number in its Found line, and rename its references after grepping both sides (LEARNINGS → Platform, 2026-10-06).
 - **Close** an item by moving it to Closed as one line: date, how it was resolved, and its LEARNINGS entry.
 - **Status:** `not started` · `partial` · `blocked` · `needs verification` (built, but `flutter analyze`/`flutter test` on Flutter ≥ 3.44 or a device run not done)
 - **Priority:** P1 loses field work or shows the technician something false · P2 real feature gap · P3 cleanup
@@ -22,9 +23,57 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-025**
+Next number: **P-031**
 
 ## Open
+
+### P-030 · AR first-placement fixes, setup coach and "Place by hand" (2026-10-06): no iPhone run yet
+- **Status:** needs verification · **Priority:** P1 · **Area:** AR setup
+- **Found:** 2026-10-06 (owner: "That corner didn't place the model" on every try; asked for full overlay instructions and a drag/rotate/pinch placement mode)
+- **Done so far:** corner shape fallback over the whole floor, per-method angle tolerance, plain mismatch card (pick another floor/model, demo room), consistent numbering, decluttered mini plan; one-status coach strip + 3-step guide + "?"; Place by hand (drag, twist, pinch 50–200 %, height, fine mode, wall/corner snap, nudge, undo, true-size badge, lock → workspace "manual", refine with a corner), CHANNEL.md rev 2 (`rayAt`, `planes`, scale in `setModelTransform`) on iOS + Android. 1085 app tests pass (1 pre-existing `qr_payload_test`); Swift typecheck, ObjC++ syntax check, Kotlin compile pass. Server 7be4cc2 puts the Demo Bedroom model on its own floor in Fusion Eco Data Center (listed first).
+- **Left:** deploy server 7be4cc2 + run Demo Data "AR demo model" on dev; on the iPhone in the bedroom: Data Center ▸ Demo Bedroom ▸ corner placement succeeds first try; Place by hand gestures/feel, wall/corner snaps on ARKit planes, re-anchor after tracking loss, scaled section plane, coach arrow + pinch plan, Sunlight; Android pulse rings/reveal still owed (P-027).
+
+### P-029 · 2026-10-06 owner round (12 items): built and tested off-device, not run on an iPhone
+- **Status:** needs verification · **Priority:** P1 · **Area:** conversations, snags, shell/sync, session, AR, field verification, scanner, inspections
+- **Found:** 2026-10-06 (owner's 12-point list after the TestFlight build)
+- **Done so far:** reply-to-agent continuation + Next-actions chips; snag AI defect boxes, walk-mode bottom sheet, snag 503 state removed (server relaxes `c2o_findings` at boot); safe-area sync banner + "Waiting to send" sheet with per-item reasons; global tap-outside keyboard dismiss; refresh-token sessions (+ Keychain re-login fallback); AR card on by default with demo; Verify in 3D ready-handshake fix + error states; Scans page with 500/90-day history; inspection submit states (server gate exemption). App: analyze 0 errors, 976 tests pass (1 pre-existing `qr_payload_test`, P-003). Server 44c4082: 2460 vitest, tsc 0.
+- **Left:** deploy server 44c4082 to dev (then run `npm run seed:ar-demo` / Demo Data "AR demo model"); on an iPhone (incl. SE + Arabic): banner position + sheet, keyboard dismiss in chat/forms, no password prompt after 1 h and after a day, AR card + demo room, Verify in 3D open/select/Verify/Flag + lock-and-return, Scans page, snag walk sheet + boxes, reply without @ gets an answer, inspection submit after a stale check-in. Owner decision: keep or drop the Keychain password fallback. `scan_history` is kept on sign-out (per user). Web office screen doesn't draw snag boxes yet.
+- **Server pointers:** `docs/kb/pending/2026-10-06-{reply-continuation-live-check,snag-boot-step-and-highlights-unverified,technician-refresh-deploy,inspection-submit-gate-deploy-and-device-check}.md`
+
+### P-028 · iOS: first TestFlight build (`com.fusionapps.fieldops`, team `82QNNH4KJZ`), never run on a device
+- **Status:** partial · **Priority:** P2 · **Area:** iOS build and release (`ios/`, `packages/fe_ar/ios`, `lib/core/push`)
+- **Found:** 2026-10-05 (first Xcode build on the `a2251` Mac: 100 fe_ar link errors). Written locally as P-025; renumbered 2026-10-06 on pulling `ddd2a80`, which had already committed P-025…P-027.
+- **Done so far:** iOS now mirrors Android: icon (same artwork), name, usage strings, cleartext, navy splash with the mascot, the ting sound, foreground push banners and taps (notification-center delegate), and APNs-safe token fetch. fe_ar is a static framework, which fixes the Filament link errors. Bundle id and team agree in all three Runner configurations; the Appfile default and ios-testflight.md follow. See docs/build-release-and-platform.md §6 and LEARNINGS (AR, Push, Platform; 2026-10-05).
+- **Left:**
+  - `ios/Runner/GoogleService-Info.plist` from a Firebase **iOS** app registered as `com.fusionapps.fieldops` (project `fusion-eco-technician`). Until then builds only warn and the app runs with **no push**: don't hand such a build to testers as final. Also upload the APNs `.p8` key under Cloud Messaging.
+  - App Store Connect app record for `com.fusionapps.fieldops`, then archive (`flutter build ipa` with both hosts, or Xcode → Product → Archive) and upload. Record the build in VERSIONING.md.
+  - Device run: launch, splash, login, foreground push banner with the ting, background push, tap routing, camera / OCR / QR, the SQLCipher DB opening (ios-testflight.md §9 item 2), AR on an ARKit device.
+  - Server (repo not on the `a2251` Mac): the APNs alert copy should carry `aps.sound = "notification_ting.wav"` so background pushes ting too.
+  - Background sync on iOS (BGTaskScheduler); until then the queue drains only while the app is open.
+  - Duplicate GoogleDataTransport classes at launch (CocoaPods via ML Kit plus SwiftPM via Firebase; ios-testflight.md §9 item 1). Move all plugins to one dependency manager, then re-check OCR and push.
+- **Why deferred:** needs the user's Firebase and App Store Connect access, and a device.
+- **Where:** docs/ios-testflight.md, `ios/Runner/*`, `packages/fe_ar/ios/fe_ar.podspec`, `lib/core/push/push_service.dart`
+- **Next step:** drop the real plist into `ios/Runner/`, then archive.
+
+### P-027 · iPhone AR fixes + LiDAR room scan/surface check (2026-10-06): needs a real iPhone/iPad
+- **Status:** needs verification · **Priority:** P1 · **Area:** AR (iOS, Android)
+- **Found:** 2026-10-06 (owner: AR not working on real iPhone; asked for LiDAR mesh animations)
+- **Done so far:** thermal mapping, session-failure handling, torch, pose parity; LiDAR `surfaceResidualMm` checks for boards/corners (green/amber/blue rings); room-scan mesh (`FeArScan.swift`, `fe_scan.mat`), plane grid on non-LiDAR, model reveal (iOS). 340 AR tests pass; Swift typecheck + ObjC++ syntax check; Kotlin compiles; C core 131 + tag 91.
+- **Left:** the device list in `docs/ios-testflight.md` §9 (camera feed upright, permission prompt, mesh FPS, rings/reveal, residual sizes, 10-min thermal, iPad layout); Android pulse rings + model reveal; Android never requests camera permission in Dart (`Permission.camera`). The original iPhone symptom was never seen — get a screenshot/log from the next TestFlight build.
+- **Next step:** trigger the iOS TestFlight workflow, run the §9 list.
+
+### P-026 · Snag sync fix + AI assist (2026-10-06): no device or live-server run yet
+- **Status:** needs verification · **Priority:** P1 · **Area:** snags / offline sync
+- **Found:** 2026-10-06 (owner: snags "saved locally" never persist on iPhone, slow load; asked for AI assist)
+- **Done so far:** outbox-first snag writes, 5xx keep rule, replay follow-ups, iOS path re-root, cache-first lists + server `view=list`/`updatedSince` delta pulls, AI assist panel (`POST /api/snags/ai/assist`, self-hosted engine, 12 s deadline, on-phone dark/blur tips). analyze clean; 91 snag tests pass; server 51 vitest; one live model call returned grounded JSON. LEARNINGS 2026-10-06.
+- **Left:** iPhone + Android walk-through (docs/snag-assistant.md §9.5 + AI panel); confirm `findings:promote` is applied on dev/prod (else snags wait with "not switched on for your site"); tune brightness/sharpness thresholds on real plant-room photos; duplicate query and list delta against a real DB.
+- **Next step:** TestFlight build → raise 3 snags online, 2 in airplane mode, reconnect, check web.
+
+### P-025 · Conversation fixes (2026-10-06): technician @agent, reminders, keyboard, agent activity — not run live
+- **Status:** needs verification · **Priority:** P1 · **Area:** conversations
+- **Found:** 2026-10-06 (owner: keyboard can't close, @agent does nothing, reminders don't work)
+- **Done so far:** root cause on server (`runAsStarter.ts` role), reminder posts into thread, app activity bubble/steps, hide-keyboard; 25 new tests + 66 existing pass; server tsc 0 + 174 vitest. LEARNINGS 2026-10-06.
+- **Left:** deploy the server fix; iPhone check (keyboard on SE, socket stages live, reminder line + push); Arabic layout; widget test of the full `ConversationView`. Server pointer: `docs/kb/pending/2026-10-06-stuck-queued-agent-runs.md`.
 
 ### P-024 · Conversations, @agent and schedules in the app: device + live server tests
 - **Status:** built, tested offline · **Priority:** P2 · **Area:** conversations / schedules
@@ -100,7 +149,7 @@ Next number: **P-025**
 ### P-014 · [HIGH · Phase 0] No CI: `flutter analyze` + `flutter test` on every push
 - **Status:** not started · **Priority:** P1 · **Area:** tooling
 - **Found:** 2026-09-27 (no `.github/workflows`, `codemagic.yaml` or other CI config)
-- **Done so far:** real runs happen by hand on the slim Flutter 3.47.5 SDK in the session scratchpad (LEARNINGS → Platform, 2026-09-26).
+- **Done so far:** real runs happen by hand on the slim Flutter 3.47.5 SDK in the session scratchpad (LEARNINGS → Platform, 2026-09-26), or, since 2026-10-05, on the `a2251` Mac's own Flutter 3.47.6.
 - **Left:**
   - A pipeline pinned to Flutter 3.47.5: `flutter pub get --enforce-lockfile`, `flutter analyze`, `flutter test`.
   - First fix or quarantine the three failures on HEAD and the ~10-minute hang (P-003).
@@ -147,7 +196,7 @@ Next number: **P-025**
 - **Left:** `flutter pub get --enforce-lockfile`, `flutter analyze`, `flutter test test/ar_*_test.dart` on ≥ 3.44 (the `ChannelArEngine` group has never run); v9 → v10 migration on a device with a populated DB; Demo mode walked at runtime on a phone (360 px) and a tablet (≥ 900 px), in EN and AR (RTL rails); `LiveArGateway` → `ArRepository` against a server (ETag/304, tile bytes, auth on the raw Dio client, queued replays).
 - **Why deferred:** no Flutter ≥ 3.44, device or emulator on this Mac this session; downloads were not allowed.
 - **Where:** [docs/ar-implementation.md](docs/ar-implementation.md)
-- **Next step:** bootstrap the slim 3.47.5 SDK (LEARNINGS → Platform) and run the three commands; fix what flutter_lints 6 reports.
+- **Next step:** run the three commands on Flutter ≥ 3.44 (the `a2251` Mac's PATH SDK is 3.47.6 since 2026-10-05; elsewhere bootstrap the slim SDK, LEARNINGS → Platform); fix what flutter_lints 6 reports.
 
 ### P-005 · `packages/fe_ar` native plugin: slice 0 (build it on devices)
 - **Status:** in progress · **Priority:** P2 · **Area:** AR native (`packages/fe_ar`)

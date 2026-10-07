@@ -17,10 +17,24 @@ enum FlushOutcome {
   retryLater,
 }
 
+/// Entity types whose queued writes are never given up on for a server-side
+/// failure (5xx, or an upload that came back without a URL). Snag creates
+/// carry the only copy of a defect's photos: the default "5 attempts, then
+/// the conflict log" burns through in about 100 s on the 20 s poll, so a
+/// short server outage — or a server still answering
+/// `503 SNAG_ENGINE_NOT_ENABLED` — used to strand every snag of a walk as
+/// "on this phone" for good (2026-10-06, iPhone report). A 4xx is still a
+/// real refusal and still drops. A constant rather than a registration so
+/// the Android background engine, which builds its own [SyncClient], applies
+/// the same rule. Must match `SnagRepository.entityType`/`surveyEntityType`
+/// (test/snag_outbox_test.dart checks).
+const kKeepOnServerErrorEntityTypes = <String>{'Snag', 'SnagSurvey'};
+
 FlushOutcome classifyFlushFailure({
   required int status,
   required int attemptsSoFar,
   required int maxAttempts,
+  bool keepOnServerError = false,
 }) {
   // 428 — the location gate (see `middleware/auth.ts`): fixed by a check-in.
   // 401 — the session expired: fixed by signing in again. FR-4.4 makes this
@@ -29,12 +43,30 @@ FlushOutcome classifyFlushFailure({
   // 4xx would silently move a whole shift's checks into "could not be saved".
   if (status == 428 || status == 401) return FlushOutcome.stopRun;
 
+  if (status >= 400 && status < 500) return FlushOutcome.drop;
+  // 5xx, or 0 = no HTTP status at all (an upload answered without a URL).
+  if (keepOnServerError) return FlushOutcome.retryLater;
   final attempts = attemptsSoFar + 1;
-  if (attempts >= maxAttempts || (status >= 400 && status < 500)) {
-    return FlushOutcome.drop;
-  }
+  if (attempts >= maxAttempts) return FlushOutcome.drop;
   return FlushOutcome.retryLater;
 }
+
+/// What a queued write's failed replay looked like, handed to the
+/// repository that owns it (see `SyncClient.onReplayFailed`) so it can show
+/// the technician *why* something has not gone yet — in plain words, never
+/// the server's raw message.
+class ReplayFailure {
+  const ReplayFailure({required this.status, required this.outcome, this.code});
+
+  /// HTTP status; 0 when the server never gave one (an upload without a URL).
+  final int status;
+
+  /// The server's machine code (`{code: "SNAG_ENGINE_NOT_ENABLED"}`), if any.
+  final String? code;
+  final FlushOutcome outcome;
+}
+
+typedef ReplayFailureHook = Future<void> Function(String entityId, ReplayFailure failure);
 
 /// FR-4.4 — a short-lived "I'm uploading" marker in `sync_meta`, so the app
 /// and a background WorkManager run (a separate Flutter engine on Android)

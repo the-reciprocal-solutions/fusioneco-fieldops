@@ -100,7 +100,9 @@ class _TechnicianShellState extends ConsumerState<TechnicianShell>
         ],
       ),
     );
-    await ref.read(authControllerProvider.notifier).logout();
+    // Already signed out by AuthController when the server refused the
+    // renewal; this only makes sure, without another server call.
+    await ref.read(authControllerProvider.notifier).logout(revoke: false);
     if (mounted) context.go(Routes.login);
   }
 
@@ -117,12 +119,12 @@ class _TechnicianShellState extends ConsumerState<TechnicianShell>
 
     return Scaffold(
       backgroundColor: FeColors.page,
-      body: Column(
-        children: [
-          const OfflineBanner(),
-          const SyncConflictPanel(),
-          Expanded(child: widget.navigationShell),
-        ],
+      // The shell owns the status-bar inset (iPhone notch / Dynamic Island)
+      // so the banner is never drawn under the clock, and the branch
+      // screens' own SafeArea doesn't add a second gap below it.
+      body: TopChromeLayout(
+        top: const [OfflineBanner(), SyncConflictPanel()],
+        body: widget.navigationShell,
       ),
       bottomNavigationBar: _BottomNav(
         currentIndex: widget.navigationShell.currentIndex,

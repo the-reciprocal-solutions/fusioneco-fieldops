@@ -7,6 +7,11 @@
 //   OUT_DIR=<where screenshots go> \
 //   node tool/bim_viewer/e2e.mjs
 //
+// BROWSER=webkit runs it in Playwright's WebKit — the closest thing to the
+// iPhone's WKWebView on a Mac (`node <playwright>/cli.js install webkit`
+// once). PW_CHANNEL=chrome uses the installed Google Chrome instead of
+// Playwright's own Chromium build.
+//
 // A TILES_DIR comes from the server pipeline (buildTilesFromIfc) on any IFC:
 // manifest.json = { datumY, tiles: [{hash, layer, buildId, bboxMin, bboxMax}] },
 // plan.json = the storey's FloorPlanPart, features.json = [{featureId, layer}].
@@ -24,7 +29,8 @@ const APP = resolve(here, '../../assets/bim_viewer');
 const TILES_DIR = process.env.TILES_DIR;
 const OUT_DIR = process.env.OUT_DIR || join(here, '.e2e-out');
 const require = createRequire(import.meta.url);
-const { chromium } = require(resolve(process.env.PLAYWRIGHT || 'playwright'));
+const pw = require(resolve(process.env.PLAYWRIGHT || 'playwright'));
+const BROWSER = process.env.BROWSER || 'chromium';
 if (!TILES_DIR) throw new Error('Set TILES_DIR');
 mkdirSync(OUT_DIR, { recursive: true });
 
@@ -33,6 +39,8 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.glb': 'model/g
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   const parts = url.pathname.split('/').filter(Boolean);
+  // Desktop browsers ask for a favicon; the app's WebView doesn't. Not a page error.
+  if (url.pathname === '/favicon.ico') return res.writeHead(204).end();
   if (parts[0] !== TOKEN) return res.writeHead(404).end();
   let file = null;
   if (parts[1] === 'app') file = join(APP, ...parts.slice(2));
@@ -60,7 +68,13 @@ const check = (ok, what) => {
   if (!ok) failures.push(what);
 };
 
-const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const browser =
+  BROWSER === 'webkit'
+    ? await pw.webkit.launch()
+    : await pw.chromium.launch({
+        channel: process.env.PW_CHANNEL || undefined,
+        args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+      });
 const page = await browser.newPage({ viewport: { width: 412, height: 780 }, deviceScaleFactor: 2, hasTouch: false });
 const consoleErrors = [];
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
@@ -152,6 +166,9 @@ if (picked) {
   // (same pixel twice would measure zero); sweep small offsets around it.
   let second = null;
   for (const [ox, oy] of [[12, 12], [-12, -12], [16, 0], [0, 16], [-16, 0], [12, -12]]) {
+    // waitFor returns the first match in the event log: drop the earlier
+    // measure events, or it would keep finding the one-point event.
+    await clearEvents();
     await page.mouse.click(412 * pfx + ox, 780 * pfy + oy);
     let ev = null;
     try {
@@ -165,6 +182,7 @@ if (picked) {
     }
     if (!ev || ev.points.length !== 1) {
       // re-arm the first point before the next offset attempt
+      await clearEvents();
       await page.mouse.click(412 * pfx, 780 * pfy);
       try {
         await waitFor((e) => e.type === 'measure', 're-arm first point', 3000);
@@ -179,6 +197,7 @@ if (picked) {
     check(Array.isArray(d.measure) && d.measure.length === 2, 'debug().measure holds both tapped points');
   }
 
+  await clearEvents();
   await run('clearMeasure', {});
   const cleared = await waitFor((e) => e.type === 'measure', 'measure cleared', 5000);
   check(Array.isArray(cleared.points) && cleared.points.length === 0 && cleared.distanceM === null, 'clearMeasure empties the measurement');

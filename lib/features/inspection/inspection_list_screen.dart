@@ -10,6 +10,7 @@ import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/tech_header.dart';
+import 'inspection_send_flag.dart';
 
 class InspectionListScreen extends ConsumerWidget {
   const InspectionListScreen({super.key});
@@ -166,6 +167,10 @@ class _InspectionCard extends StatelessWidget {
                         fontWeight: FontWeight.w800,
                         color: FeColors.ink,
                       ),
+                    ),
+                    InspectionSendFlag(
+                      assignmentId: inspection.id,
+                      serverStatus: inspection.status,
                     ),
                   ],
                 ),

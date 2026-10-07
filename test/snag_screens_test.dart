@@ -93,6 +93,7 @@ List<Override> _overrides() => [
   snagActorProvider.overrideWithValue(const SnagActor(id: 'me', name: 'Me')),
   snagBuildingIdProvider.overrideWith(_FixedBuilding.new),
   snagSyncProvider.overrideWith(_IdleSync.new),
+  snagQueueFlushingProvider.overrideWithValue(false),
   snagBuildingsProvider.overrideWith((ref) async => const [SnagBuilding(id: 'b1', name: 'Tower A')]),
   snagsProvider.overrideWith((ref, buildingId) async => _snags),
   snagSurveysProvider.overrideWith((ref, buildingId) async => [_survey]),

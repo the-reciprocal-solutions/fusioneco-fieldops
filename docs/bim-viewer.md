@@ -119,7 +119,28 @@ It is locked down:
 - A tile is served only if its hash was registered, and a hash is never turned into a path.
 - It closes with the screen.
 
-Cleartext to 127.0.0.1 is already allowed on both platforms (`usesCleartextTraffic`, `NSAllowsArbitraryLoads`).
+Cleartext to 127.0.0.1 is already allowed on both platforms (`usesCleartextTraffic`, `NSAllowsArbitraryLoads`; ATS also exempts IP addresses).
+
+### 4.3 iOS: what broke and the guards (2026-10-06)
+
+The owner's iPhone showed a "broken page" where none of the actions worked. Causes and fixes:
+
+| Cause | Effect on the phone | Fix |
+|---|---|---|
+| The WebView was configured with a cascade (`WebViewController()..addJavaScriptChannel(...)`), futures dropped, then `loadRequest`. On WKWebView `addJavaScriptChannel` awaits `getUserContentController` before adding the document-start script `window.FeViewer = webkit.messageHandlers.FeViewer`, so the page could load without it | viewer.js posted `ready` into nothing: endless spinner, `engineReady` never true, every command (layers, reset, select, fly-to) held back | Every setup call is awaited before the load ([webview_bim_view_engine.dart](../lib/features/bim_viewer/webview_bim_view_engine.dart)); viewer.js falls back to `webkit.messageHandlers.FeViewer`; on `onPageFinished` the app runs a `hello` handshake that re-defines the channel and makes the page repeat `ready`. Verified in Playwright WebKit with the wrapper missing: HEAD's viewer.js delivered nothing, the new one delivers `ready` |
+| A page that still never answers | Spinner forever | 20 s watchdog → `NOT_READY` (fatal) → plan-only with a "3D isn't available… Try 3D again" banner; Retry builds a fresh engine (WebView + server) and the controller re-sends the floor |
+| iOS kills the WebView's web-content process (memory, long background) | Blank 3D pane | `webContentProcessTerminated` → `RELOADING` + reload (twice at most, then `CONTEXT_LOST`); the controller forgets what it sent and re-pushes the floor on the new `ready` |
+| iOS reclaims a suspended app's listening socket | No tile loads after the phone was locked | The server closes on `paused` and re-binds the **same port** on `resumed` (`ViewerAssetServer.suspend/start`); if the port is gone, the page reloads on the new one |
+| A floor with no published model (most dev floors): manifest has no tiles, plan is empty | Empty grey canvas over an empty plan | `BimViewerState.noModel` → "No 3D model for this floor yet" + Retry. A plan with walls still draws massing |
+| Floor load errors showed one wifi-off icon for everything | Misleading | Plain words per cause (`bimLoadErrorCopy`): Needs signal once, No 3D model yet, not on your sites, not found, couldn't open + Retry |
+| Toolbar: four labelled layout segments + camera switch overflowed on a phone | Clipped labels | Icons with tooltips below 520 px |
+| (TwinScreen, the xeokit "View in 3D") WKWebView reports `-999` (a load we replaced) and `102` (a link we handed to the browser) as main-frame errors | The working twin was replaced by WebKit's raw error text | `classifyWebViewError` ([web_view_errors.dart](../lib/core/bim_viewer/web_view_errors.dart)) ignores both, reloads on a killed process, and shows plain words + Retry otherwise |
+
+The selection card now carries the verification actions: **Open asset**, **Verify** (`Routes.verifyAsset`, floor attached) and **Flag** (`Routes.snagNew` on the asset).
+
+Server note: dev.api.eco answers on `/api/bim/ar/*` (401 without a token, so the router is deployed). A server without the `architecture_solid` layer (or a DB without the enum, P-030 server side) costs only the shaded walls: `fetchViewerManifest` treats 400 as "none" and any other failure returns no solid tiles, so walls come from the plan.
+
+Rerun in WebKit: `BROWSER=webkit PLAYWRIGHT=../fusion-eco-client/node_modules/playwright TILES_DIR=<dir> node tool/bim_viewer/e2e.mjs` (2026-10-06: 29/29 in WebKit and in Chrome on the Villa ground floor, 60 tiles).
 
 ## 5. The 2D plan
 

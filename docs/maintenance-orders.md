@@ -174,7 +174,7 @@ Writes through `syncRequest` return `SyncedWrite(synced:false)` and show the sin
 | Root cause | `POST /{rcaPath}/{id}/rca` | `Root cause` | none |
 | Downtime | `PATCH /api/fm/downtime/{downtimePath}/{id}` | `Downtime` | none |
 | Close | `POST /{completePath}/{id}/time-tracking` | `Close work order` (and so on: `Close ${label.toLowerCase()}`) | none |
-| Inspection submit | `POST /api/fm/inspections/technician/{id}/submit` `{data}` | `Inspection submission` | none; `entityType: 'inspection'` |
+| Inspection submit | `POST /api/fm/inspections/technician/{id}/submit` `{data}` | `Inspection submission` | `queueOnServerError: true`; a 428/401 answer is re-queued with `queueRequest`; `entityType: 'inspection'`; answers kept in `sync_meta` (`inspection.submit.<id>`) until the server has them (§8) |
 
 **Cached reads (`syncGet`, 24 h TTL)**: the orders list, order detail, asset documents, the inspections list and detail, and `/api/sync/manifest` plus every URL it lists.
 
@@ -239,10 +239,30 @@ Other shape quirks:
   - `supervisorApproval` is deliberately not modelled.
 - **Media fields**:
   - `photo` and `signature` fields upload immediately and store `{values:[{url, uploadStatus:'uploaded', takenAt, geo?}]}`.
-  - A failed upload stores `{uploadStatus:'pending', pendingId}` with the bytes held **only in memory**, retryable during this screen session only ([inspection_form_screen.dart:253-285](../lib/features/inspection/inspection_form_screen.dart#L253)).
-  - `file` fields are *not* uploaded. They store raw, uncompressed `data:` URLs inside `responseData` ([inspection_form_screen.dart:337-355](../lib/features/inspection/inspection_form_screen.dart#L337)).
+  - A failed upload stores `{uploadStatus:'pending', pendingId}` with the bytes held **only in memory**, retryable during this screen session only. It says "Not uploaded yet, tap retry" (no longer the "saved offline" line), and Submit is blocked while any item is pending (2026-10-06).
+  - `file` fields are *not* uploaded. They store `data:` URLs inside `responseData`, downscaled like photo fields (1600 px, JPEG 80) since 2026-10-06: raw iPhone originals made multi-MB submit bodies.
   - A `button` component is never rendered; its label becomes the submit label. `columns` is treated as unsupported.
-- **Submit**: `syncRequest` with the whole `responseData`, so it queues offline. The detail and list are refreshed afterwards.
+- **Submit** (reworked 2026-10-06 after the iPhone report "inspections are not getting submitted"; root cause: the server's 428 location gate covered this POST, and the form showed "Failed to submit… try again" for it): [inspection_repository.dart](../lib/data/inspection_repository.dart) keeps the answers in `sync_meta` first, then sends. Outcomes:
+  - 2xx → "Inspection submitted"; kept answers cleared; detail and list refreshed.
+  - no signal, 5xx, 428 (check-in needed) or 401 (sign in again) → queued; dialog "Waiting to send" with the plain reason. The queue sends it once that clears (`CheckInController.checkIn()` resumes the flush).
+  - any other 4xx → stays on the form, banner "Not sent" with a plain reason (400 lists the missing fields from `missingFields`); never the server's raw text.
+  - A queued submit refused on replay is recorded by the `onReplayFailed('inspection')` hook ([inspection_controller.dart](../lib/state/inspection_controller.dart)) and shows "Not sent" on the card and form, with the kept answers restored into the form for Retry.
+  - State: [inspection_send_state.dart](../lib/core/inspection/inspection_send_state.dart) (`sending / waiting / waitingCheckIn / waitingSignIn / retrying / notSent`), list flag [inspection_send_flag.dart](../lib/features/inspection/inspection_send_flag.dart). Tests: `test/inspection_submit_test.dart` (contract against the server route table, its gate exemption and the web portal call; queue behaviour per status).
+  - The server exempts this POST from the location gate since 2026-10-06 (`middleware/auth.ts`); the 428 path stays for servers without that.
+
+```mermaid
+flowchart TD
+  S[Submit tap] --> K[keep answers in sync_meta]
+  K --> R{server answer}
+  R -->|2xx| OK[Inspection submitted - clear kept answers]
+  R -->|no signal / 5xx| Q[queued: Waiting to send]
+  R -->|428 / 401| Q2[queueRequest: Waiting to send - check in / sign in]
+  R -->|other 4xx| N[Not sent + plain reason, stay on form]
+  Q --> F[flushQueue]
+  Q2 --> F
+  F -->|2xx| OK
+  F -->|4xx on replay| N2[Not sent on card + form, answers restored, Retry]
+```
 
 **Conditional logic** ([conditional_logic.dart](../lib/core/inspection/conditional_logic.dart)) is a port of the web's `FormRenderer.tsx`:
 - Rules are `{enabled, conditions[0], actions[0]}`. Only index 0 of each array is evaluated ([inspection.dart:191-195](../lib/domain/inspection.dart#L191)).

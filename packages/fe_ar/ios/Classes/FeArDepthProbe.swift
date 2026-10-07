@@ -122,6 +122,63 @@ final class FeArDepthProbe {
         return Self.result(pos, normal, min(max(confidence, 0), 1), method, pts.count, camPos)
     }
 
+    // MARK: LiDAR verification
+
+    /// How far the real surface is from `world` along the camera's line of
+    /// sight, in metres, as this frame's LiDAR depth measures it: positive =
+    /// the surface is behind the point, negative = in front of it. Nil
+    /// without scene depth (no LiDAR, or depth switched off), when the point
+    /// is behind the camera, off the image, outside 0.2-5 m, or has fewer
+    /// than 5 medium/high-confidence pixels in the 5x5 window around it.
+    ///
+    /// `nearest` reads the window's nearest confident pixel instead of its
+    /// median: for an outside corner or a column edge the window straddles
+    /// the edge and the far wall behind it, and the edge is the near side.
+    ///
+    /// The check the setup uses to say a board or a corner snap "sits on a
+    /// real surface" (CHANNEL.md `surfaceResidualMm`); it reads the same
+    /// depth the snap came from only in the lidar cases, and then from a
+    /// later frame, so it is an independent second look.
+    static func surfaceResidual(frame: ARFrame, world: SIMD3<Float>, nearest: Bool = false) -> Float? {
+        guard let data = frame.smoothedSceneDepth ?? frame.sceneDepth else { return nil }
+        let cam = frame.camera
+        let c4 = cam.transform.inverse * SIMD4<Float>(world.x, world.y, world.z, 1)
+        let expected = -c4.z
+        guard expected > 0.2, expected < 5 else { return nil }
+        let k = cam.intrinsics
+        let res = cam.imageResolution
+        // camera space -> captured-image pixels (sensor orientation, as the
+        // intrinsics), then to the depth map's pixels
+        let u = k.columns.2.x + k.columns.0.x * c4.x / expected
+        let v = k.columns.2.y - k.columns.1.y * c4.y / expected
+        let depth = data.depthMap
+        let conf = data.confidenceMap
+        CVPixelBufferLockBaseAddress(depth, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depth, .readOnly) }
+        if let c = conf { CVPixelBufferLockBaseAddress(c, .readOnly) }
+        defer { if let c = conf { CVPixelBufferUnlockBaseAddress(c, .readOnly) } }
+        guard let base = CVPixelBufferGetBaseAddress(depth) else { return nil }
+        let w = CVPixelBufferGetWidth(depth), h = CVPixelBufferGetHeight(depth)
+        let row = CVPixelBufferGetBytesPerRow(depth) / MemoryLayout<Float32>.size
+        let z = base.assumingMemoryBound(to: Float32.self)
+        let confBase = conf.flatMap { CVPixelBufferGetBaseAddress($0) }?.assumingMemoryBound(to: UInt8.self)
+        let confRow = conf.map { CVPixelBufferGetBytesPerRow($0) } ?? 0
+        let du = Int(u * Float(w) / Float(res.width)), dv = Int(v * Float(h) / Float(res.height))
+        guard du >= 0, dv >= 0, du < w, dv < h else { return nil }
+        var ds: [Float] = []
+        for y in max(0, dv - 2)...min(h - 1, dv + 2) {
+            for x in max(0, du - 2)...min(w - 1, du + 2) {
+                if let cb = confBase, cb[y * confRow + x] < UInt8(ARConfidenceLevel.medium.rawValue) { continue }
+                let d = z[y * row + x]
+                if d.isFinite, d > 0.1, d < 6 { ds.append(d) }
+            }
+        }
+        guard ds.count >= 5 else { return nil }
+        ds.sort()
+        let measured = nearest ? ds[0] : ds[ds.count / 2]
+        return measured - expected
+    }
+
     static func result(_ pos: SIMD3<Float>, _ normal: SIMD3<Float>?, _ confidence: Float, _ method: String,
                        _ samples: Int, _ camPos: SIMD3<Float>) -> [String: Any] {
         [

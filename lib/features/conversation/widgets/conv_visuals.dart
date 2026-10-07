@@ -11,6 +11,13 @@ String convTr(BuildContext context, String key, [List<Object> args = const []]) 
   return args.isEmpty ? text : context.formatString(text, args.map((a) => '$a').toList());
 }
 
+/// A failure line from `plainPostFailure`: an i18n key (`conv.err_*`) or the
+/// server's own plain words.
+String failureText(BuildContext context, String? raw) {
+  final r = raw ?? '';
+  return r.startsWith('conv.err_') ? r.getString(context) : r;
+}
+
 /// Round avatar. People: initials on a soft grey. AI teammates: a violet
 /// ring and a sparkle, so an agent can never be mistaken for a person.
 class ConvAvatar extends StatelessWidget {

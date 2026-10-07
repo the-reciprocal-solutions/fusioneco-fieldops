@@ -4,8 +4,8 @@ How FieldOps gets from this repo to iPhones and iPads through TestFlight, with n
 
 | | |
 |---|---|
-| Bundle id | `com.thefusionapps.fusioneco.technician` (Android is `com.fusionapps.fieldops`; they don't have to match) |
-| Version | `CFBundleShortVersionString` = the name in `pubspec.yaml` (`1.0.1`); `CFBundleVersion` = the CI run number, or TestFlight's latest + 1 if higher |
+| Bundle id | `com.fusionapps.fieldops`, the same as Android's applicationId (switched in Xcode on 2026-10-05; `com.thefusionapps.fusioneco.technician` is retired on both platforms, see RELEASE_INFO.md). Team `82QNNH4KJZ` is set in the Xcode project |
+| Version | `CFBundleShortVersionString` = the name in `pubspec.yaml` (`1.1.0`); `CFBundleVersion` = the CI run number, or TestFlight's latest + 1 if higher |
 | Minimum iOS | **15.5** (Google ML Kit text recognition requires it) |
 | Devices | iPhone and iPad. AR needs an ARKit device; LiDAR models get the best corner snaps. AR is optional, the app installs everywhere |
 | Workflow | [.github/workflows/ios-testflight.yml](../.github/workflows/ios-testflight.yml) |
@@ -38,7 +38,7 @@ You need the Account Holder or an Admin for steps 2.1, 2.3 and 2.4.
 
 1. [developer.apple.com/account](https://developer.apple.com/account) → **Certificates, Identifiers & Profiles** → **Identifiers** → **+**.
 2. **App IDs** → **App** → Continue.
-3. Description `FusionEco FieldOps`; **Explicit** Bundle ID `com.thefusionapps.fusioneco.technician`.
+3. Description `FusionEco FieldOps`; **Explicit** Bundle ID `com.fusionapps.fieldops`.
 4. Capabilities: tick **Push Notifications**. Nothing else is needed (no ARKit capability exists; the camera is a usage string, not a capability).
 5. Register.
 
@@ -82,10 +82,10 @@ Keep **one** valid Apple Distribution certificate on the team if you can: when t
 
 ## 3. Firebase (push) for iOS
 
-`lib/main.dart` calls `Firebase.initializeApp()` with no options, so the app **needs** `ios/Runner/GoogleService-Info.plist` for this bundle id; the Xcode project already lists it as a bundle resource, so the build fails without it.
+`lib/main.dart` calls `Firebase.initializeApp()` with no options, so push **needs** `ios/Runner/GoogleService-Info.plist` for this bundle id. Since 2026-10-05 a local build without it doesn't fail. The "Copy GoogleService-Info.plist (if present)" build phase only warns, and the app starts with push off (LEARNINGS → Platform, 2026-10-05). The CI lane still refuses to build without it.
 
 1. [Firebase console](https://console.firebase.google.com) → project **fusion-eco-technician** → Project settings → **Add app** → **iOS**.
-2. Bundle ID `com.thefusionapps.fusioneco.technician`, nickname `FieldOps iOS` → Register → **download `GoogleService-Info.plist`**. Skip the SDK steps.
+2. Bundle ID `com.fusionapps.fieldops`, nickname `FieldOps iOS` → Register → **download `GoogleService-Info.plist`**. Skip the SDK steps.
 3. Either **commit it** to `ios/Runner/GoogleService-Info.plist` (like `android/app/google-services.json`, it isn't a secret: the key is restricted to the app), or put it in the secret `GOOGLE_SERVICE_INFO_PLIST_BASE64` (`base64 -i GoogleService-Info.plist | pbcopy`). The lane refuses a plist whose `BUNDLE_ID` is a different app.
 4. Push delivery: developer account → **Keys** → **+** → tick **Apple Push Notifications service (APNs)** → download the `.p8`, note its Key ID. Firebase → Project settings → **Cloud Messaging** → Apple app configuration → **APNs Authentication Key** → upload it with the Key ID and Team ID. Without this the app runs but receives no pushes.
 
@@ -114,7 +114,7 @@ The committed defaults in `lib/app/env.dart` are a developer's LAN IP, so both h
 ## 5. Run it
 
 - **Manual:** Actions → **iOS TestFlight** → **Run workflow** (branch `main`). Optional input: a minimum build number.
-- **Tag:** `git tag ios-v1.0.1-4 && git push origin ios-v1.0.1-4` (any tag starting `ios-v`).
+- **Tag:** `git tag ios-v1.1.0-5 && git push origin ios-v1.1.0-5` (any tag starting `ios-v`).
 
 Expect 25-45 min on the first run (the Filament pod is ~32 MB, ML Kit and SQLCipher add more; pods are cached afterwards). The job ends when the upload is accepted; it doesn't wait for Apple's processing.
 
@@ -143,6 +143,8 @@ Expect 25-45 min on the first run (the Filament pod is ~32 MB, ML Kit and SQLCip
 | `requires a development team` on a `…-fe_ar_assets` / other bundle target | the Podfile's `post_install` disables signing for resource bundles; make sure the committed `ios/Podfile` is used |
 | `Specs satisfying the google_mlkit_… dependency were found, but they required a higher minimum deployment target` | `platform :ios` in the Podfile went below 15.5 |
 | `None of your spec sources contain a spec satisfying Filament (= 1.72.1)` | fe_ar's podspec must say 1.72.0: 1.72.1 was never published to CocoaPods (same material version 72) |
+| ~100 × `Undefined symbol: filament::…` / `utils::EntityManager::get()` / `_UBERARCHIVE_PACKAGE` in target `fe_ar` | fe_ar was built as a dynamic framework (`use_frameworks!`), and CocoaPods links Filament's static xcframeworks only into the app. Keep `s.static_framework = true` in fe_ar.podspec, then `pod install` (LEARNINGS → AR, 2026-10-05) |
+| `Cannot find 'FeAr…' in scope` in an fe_ar Swift file (local Xcode build), e.g. `FeArScanner` after a pull | a new file under `packages/fe_ar/ios/Classes` or `Assets` isn't in `ios/Pods/Pods.xcodeproj` until `pod install` runs, and `flutter run` doesn't re-run it for that. Run `cd ios && pod install`; a missing `.filamat` only fails at runtime (LEARNINGS → AR, 2026-10-06). CI is safe: even after restoring cached `ios/Pods`, the Fastfile runs `pod install` on every build (`Fastfile:105`), which rewrites the Pods project |
 | `The bundle version must be higher than the previously uploaded version` | pass a higher `build_number` input; normally the lane already takes TestFlight's latest + 1 |
 | `ITMS-90683: Missing purpose string` | a plugin references a privacy API without an `NS…UsageDescription`; add the key to `ios/Runner/Info.plist` |
 | `This bundle is invalid. The SDK … is not supported` / `ITMS-90725` | the runner's newest Xcode is older than Apple's minimum: change `runs-on` to a newer macOS image |
@@ -151,18 +153,21 @@ Expect 25-45 min on the first run (the Filament pod is ~32 MB, ML Kit and SQLCip
 
 ## 9. First CI build: what to check
 
-Nothing iOS has ever been compiled; this Mac has no Xcode. These were checked only as far as possible offline (2026-09-27):
+**2026-10-05:** the `a2251` Mac (Xcode 26.5, Flutter 3.47.6) builds the app. `flutter build ios --simulator --debug` succeeds, and the build reaches the login screen in an iOS 26.3 simulator, without a Firebase plist. Getting there took fe_ar as a static framework (§8) and the optional-plist build phase (§3). The archive from Xcode compiles fe_ar for arm64. Not yet: a device run, a signed archive with the real plist, a TestFlight upload (PENDING P-028).
+
+Before that, on a Mac without Xcode, these were checked only as far as possible offline (2026-09-27):
 
 - `ruby -c` on the Fastfile, Podfile and fe_ar podspec; `fastlane lanes` parses the Fastfile; `pod spec lint --quick` passes the fe_ar podspec; `plutil -lint` on Info.plist, the entitlements and the Xcode project; the Xcode project opens in the `xcodeproj` gem with the new resource and settings.
 - fe_ar Swift type-checks with `swiftc -typecheck` against the **Mac Catalyst** SDK (ARKit, UIKit, Vision, Metal) with Flutter stubbed; `FeArRenderer.mm` syntax-checks against the **Filament 1.72.0 pod's own headers**. Real iOS SDK differences can still surface.
 
 Watch for:
 
-1. **Mixed SwiftPM + CocoaPods.** Most plugins build through Swift Package Manager; fe_ar, google_mlkit_text_recognition, sqflite_sqlcipher and flutter_secure_storage through CocoaPods.
+1. **Mixed SwiftPM + CocoaPods.** Most plugins build through Swift Package Manager; fe_ar, google_mlkit_text_recognition, sqflite_sqlcipher and flutter_secure_storage through CocoaPods. **Seen 2026-10-05:** at launch the ObjC runtime logs `Class GDTCOR… is implemented in both …/GoogleDataTransport.framework and …/Runner.debug.dylib`. GoogleDataTransport arrives twice, through CocoaPods (ML Kit) and through SwiftPM (Firebase). It isn't a build error, but duplicate classes can misbehave at runtime. The fix is one dependency manager for all plugins, for example `enable-swift-package-manager: false` under `flutter: config:` in pubspec.yaml so Firebase also comes from CocoaPods. Then check OCR and push on a device (PENDING P-028).
 2. **SQLCipher vs system SQLite.** `sqflite` (system SQLite, via SwiftPM) and `sqflite_sqlcipher` (SQLCipher pod) are both in the app. If the system library wins at link time, the encrypted DB fails to open ("file is not a database"). Check the first launch on a device; if it fails, the known fix is to drop the plain `sqflite` dependency or force SQLCipher's link order.
-3. **Push on iOS is not finished in Dart.** `LocalNotifications.init` passes Android settings only (docs/build-release-and-platform.md §6); on iOS `flutter_local_notifications` may reject that, so foreground notifications may not show. Data-only FCM messages also aren't delivered to a killed iOS app. Login and everything else don't depend on it.
+3. **Push on iOS (updated 2026-10-05).** `LocalNotifications` has Darwin settings and the ting sound. `AppDelegate` sets the notification-center delegate, so foreground banners show and taps route. `PushService` waits for the APNs token before `getToken()` (LEARNINGS → Push, 2026-10-05). Two things are still open. Data-only FCM messages aren't delivered to a killed iOS app. The OS-drawn alert copy uses the server's `aps.sound` (unchecked). Login and everything else don't depend on push.
 4. **Background sync is Android-only** (`BackgroundSync._supported`); on iOS the queue drains while the app is open. No `BGTaskScheduler` ids were added.
 5. **Orientation.** iPhone lists portrait plus both landscapes, because the AR camera screen rotates to landscape at runtime (`SystemChrome.setPreferredOrientations`) and iOS only honours orientations listed in Info.plist; the rest of the app asks for portrait. iPad lists all four (App Store rule for multitasking apps), and iPadOS ignores the portrait request in Split View.
 6. **Export compliance.** `ITSAppUsesNonExemptEncryption = false` skips the question per build. The app encrypts its local DB with SQLCipher (AES) for its own data; confirm with whoever owns compliance that this falls under the exemption, or change the key and answer the questionnaire.
 7. **Board AprilTags (method `tag`)** on iOS: the tag search runs on Vision's queue over the captured image's luma plane (420f plane 0) with the QR corners Vision returned. Confirm Vision's corners and the tag corners land in the same unrotated buffer pixels (a wrong orientation shows as no tags ever matching), and that a lock reports `method: tag` with a spread under 10 mm. The vendored AprilTag licence (BSD-2-Clause, `packages/fe_ar/src/third_party/apriltag/LICENSE.md`) must appear in the app's acknowledgements.
 8. **fe_ar on a device**: see `packages/fe_ar/README.md` slice 0 and PENDING.
+9. **AR on iPhone (2026-10-06 review, nothing ran on a device):** on first open the camera permission alert pauses and resumes the session; check the feed shows (not black) and is upright in portrait and both landscapes; "Don't Allow" must land on the camera screen with **Open Settings**, not a frozen view. On a LiDAR iPhone/iPad: the room-scan mesh paints in tinted (walls cyan, floor green), the chip reads "Depth sensor active · room scan N%", the overlay fades after the model locks, the model builds up from the floor, and confirmed corners/boards pulse green (amber + hint when the depth check is > 3 cm off). On a non-LiDAR iPhone: the plane grid instead. Watch the thermal state in a 10-minute session (`serious` now only warns; `critical` pauses), and the frame rate with the mesh on (uploads are capped at 5 Hz).

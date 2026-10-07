@@ -6,6 +6,7 @@ import '../../domain/ar_models.dart';
 import 'ar_engine.dart';
 import 'corner_matcher.dart';
 import 'ghost_spot.dart';
+import 'manual_place_math.dart' show PinholeCamera;
 import 'marker_code.dart';
 import 'vec.dart';
 
@@ -767,6 +768,66 @@ class FakeArEngine implements ArEngine {
     return depthPoints.removeAt(0);
   }
 
+  /// The view the fake's `rayAt` pretends to look through (logical px).
+  /// Its camera is [cameraTile] through the scenario's truth, tilted 30°
+  /// down so a ray through the middle of the view meets the floor.
+  ({double width, double height}) viewSize = (width: 390, height: 844);
+
+  /// What [planes] answers. Null (the default) = the scenario's Plant Room B
+  /// walls, as a phone would have measured them (through the truth); tests
+  /// set their own.
+  ArPlanes? fakePlanes;
+
+  PinholeCamera _rayCamera() {
+    final pose = _cameraPose();
+    final eye = pose.translation;
+    final fwd = pose.transformDir(const Vec3(0, 0, -1));
+    final level = Vec3(fwd.x, 0, fwd.z).normalized;
+    final target = eye + level + const Vec3(0, -0.58, 0); // ~30° down
+    return PinholeCamera.lookingAt(eye, target, width: viewSize.width, height: viewSize.height);
+  }
+
+  @override
+  Future<List<ArRay?>> rayAt(List<(double, double)> points) async {
+    commands.add('rayAt');
+    if (!_running || _elapsedMs < 1200) return [for (final _ in points) null]; // not tracking yet
+    final cam = _rayCamera();
+    return [for (final (x, y) in points) cam.ray(x, y)];
+  }
+
+  @override
+  Future<ArPlanes> planes() async {
+    commands.add('planes');
+    final own = fakePlanes;
+    if (own != null) return own;
+    if (!_running || _elapsedMs < 1200) return ArPlanes.empty;
+    final t = _truth();
+    // Plant Room B, 12 × 8 m: its four walls seen from inside.
+    const room = [Vec2(0, 0), Vec2(12, 0), Vec2(12, 8), Vec2(0, 8)];
+    const centre = Vec2(6, 4);
+    final walls = <ArPlane>[];
+    for (var i = 0; i < room.length; i++) {
+      final a = room[i], b = room[(i + 1) % room.length];
+      final dir = (b - a).normalized;
+      var n = Vec2(-dir.y, dir.x);
+      if ((centre - (a + b) * 0.5).dot(n) < 0) n = -n;
+      final mid = (a + b) * 0.5;
+      final c = t.transformPoint(Vec3(mid.x, 1.2, mid.y));
+      final nAr = t.transformDir(Vec3(n.x, 0, n.y));
+      final pa = t.transformPoint(Vec3(a.x, 0, a.y)), pb = t.transformPoint(Vec3(b.x, 0, b.y));
+      walls.add(ArPlane(
+        id: 'fake-wall-$i',
+        kind: 'wall',
+        centerAr: c,
+        normalAr: nAr,
+        segment: (pa.xz, pb.xz),
+        widthM: a.distanceTo(b),
+        heightM: 2.4,
+      ));
+    }
+    return ArPlanes(floorY: t.transformPoint(Vec3.zero).y, planes: walls);
+  }
+
   @override
   Future<bool> setDepth(bool on) async {
     commands.add('setDepth');
@@ -777,6 +838,26 @@ class FakeArEngine implements ArEngine {
   Future<bool> refocus() async {
     commands.add('refocus');
     return true;
+  }
+
+  /// The room-scan overlay as last asked ([setScanOverlay]).
+  bool scanOverlay = false;
+
+  /// Every [pulseAt], in order: (position, tone).
+  final List<(Vec3, String)> pulses = [];
+
+  @override
+  Future<bool> setScanOverlay(bool on, {bool contrast = false}) async {
+    commands.add('setScanOverlay');
+    scanOverlay = on;
+    return _capabilities.scanOverlay;
+  }
+
+  @override
+  Future<bool> pulseAt(Vec3 posAr, {Vec3? normalAr, String tone = 'info'}) async {
+    commands.add('pulseAt');
+    pulses.add((posAr, tone));
+    return _capabilities.scanOverlay;
   }
 
   @override

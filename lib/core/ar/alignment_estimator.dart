@@ -253,6 +253,9 @@ class AlignmentFit {
     this.nudgeM = 0,
     this.verticalErrorsM = const {},
     this.floorAnchored = false,
+    this.scale = 1,
+    this.stretchX = 1,
+    this.stretchZ = 1,
   });
 
   factory AlignmentFit.none() => AlignmentFit(
@@ -307,6 +310,22 @@ class AlignmentFit {
   /// The height came from the tracked floor, not from the observations.
   final bool floorAnchored;
 
+  /// "Place by hand" only (`manual_place_math.dart`): the uniform size the
+  /// user pinched to, and the optional per-axis "Stretch to fit" factors on
+  /// top of it (model X and Z). 1 everywhere else: a measured fit is always
+  /// true size. [arFromTile] already contains them.
+  final double scale;
+  final double stretchX;
+  final double stretchZ;
+
+  /// False when the model is drawn bigger or smaller than it really is:
+  /// anything measured against it is approximate ("Not true size").
+  bool get isTrueSize =>
+      (scale - 1).abs() < 0.005 && (stretchX - 1).abs() < 0.005 && (stretchZ - 1).abs() < 0.005;
+
+  /// Placed by hand (`method == 'manual'`), not measured from corners or boards.
+  bool get isHandPlaced => method == 'manual';
+
   double get yawDeg => radToDeg(yawRad);
   double get maxResidualMm => maxResidualM * 1000;
 
@@ -317,10 +336,13 @@ class AlignmentFit {
 
   /// AR world point → model. Used to save a board at the pose the fit gives
   /// it ("leave a board") and to place pins the user taps.
-  Vec3 arToTile(Vec3 p) => arFromTile.invertRigid().transformPoint(p);
+  /// A hand placement at a non-100 % size is not rigid, so this takes the
+  /// general inverse then ([Mat4.inverse]); every other fit stays on the
+  /// exact rigid one.
+  Vec3 arToTile(Vec3 p) => arFromTile.inverse().transformPoint(p);
 
   Vec3 dirTileToAr(Vec3 d) => arFromTile.transformDir(d);
-  Vec3 dirArToTile(Vec3 d) => arFromTile.invertRigid().transformDir(d);
+  Vec3 dirArToTile(Vec3 d) => arFromTile.inverse().transformDir(d);
 
   /// The runtime drift check marks a fit [AlignmentQuality.drifting] without
   /// refitting; the next observation's refit clears it.
@@ -338,6 +360,9 @@ class AlignmentFit {
         nudgeM: nudgeM,
         verticalErrorsM: verticalErrorsM,
         floorAnchored: floorAnchored,
+        scale: scale,
+        stretchX: stretchX,
+        stretchZ: stretchZ,
       );
 
   @override

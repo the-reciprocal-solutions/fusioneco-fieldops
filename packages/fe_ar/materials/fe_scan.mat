@@ -1,0 +1,101 @@
+// fe_scan: the room-scan overlay drawn during AR setup (iOS only; Android
+// shows SceneView's own plane grid instead). Three uses, picked by `mode`:
+//
+//  0  LiDAR scene mesh (ARMeshAnchor): unshared triangles whose uv0 holds
+//     the barycentric corner (1,0) (0,1) (0,0), so the fragment draws a thin
+//     glowing wireframe over a faint fill. Vertex colour = the face's
+//     classification tint (wall, floor, ceiling, door, window, ...), already
+//     linear.
+//  1  tracked planes (ARPlaneAnchor, devices without LiDAR): a world-space
+//     25 cm grid on the plane, lines on the two axes the plane spans.
+//  2  pulse ring: an annulus (uv0.x = 0 inner edge .. 1 outer edge) that
+//     expands and fades where a board or corner was just confirmed; `tint`
+//     is green when the depth check agreed, amber when it didn't.
+//
+// Surfaces "paint in" when ARKit first reports them (bornTime), a soft band
+// sweeps outward from the camera every couple of seconds, and the whole
+// overlay fades with overlayAlpha (native animates it: off after the model
+// locks). `contrast` is Sunlight mode: stronger fill and white lines.
+//
+// Blending transparent, premultiplied; no depth test or write, so the scan
+// never hides the model and never needs depth from the camera image.
+//
+// Compile: matc --api all --platform mobile -o fe_scan.filamat fe_scan.mat
+// (tool/compile_materials.sh; same matc version as the runtime).
+material {
+    name : fe_scan,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : false,
+    doubleSided : true,
+    requires : [
+        color,
+        uv0
+    ],
+    flipUV : false,
+    parameters : [
+        { type : float, name : mode },
+        { type : float, name : time },
+        { type : float, name : bornTime },
+        { type : float, name : overlayAlpha },
+        { type : float3, name : sweepOrigin },
+        { type : float, name : contrast },
+        { type : float4, name : tint },
+        { type : float, name : progress }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        float mode = materialParams.mode;
+
+        if (mode > 1.5) {
+            // pulse ring: a soft band across the annulus, fading as it grows
+            float r = getUV0().x;
+            float band = smoothstep(0.0, 0.35, r) * (1.0 - smoothstep(0.65, 1.0, r));
+            float a = materialParams.tint.a * band * (1.0 - materialParams.progress);
+            float3 c = mix(materialParams.tint.rgb, float3(1.0), 0.25 * band);
+            material.baseColor = float4(c * a, a);
+            return;
+        }
+
+        float3 p = getUserWorldPosition();
+        float wire;
+        if (mode < 0.5) {
+            // mesh: distance to the nearest triangle edge, in pixels
+            float2 b = getUV0();
+            float e = min(min(b.x, b.y), 1.0 - b.x - b.y);
+            float w = max(fwidth(e), 1e-4);
+            wire = 1.0 - smoothstep(0.0, 1.5 * w, e);
+        } else {
+            // planes: grid lines on the two axes the surface spans
+            float3 n = normalize(cross(dFdx(p), dFdy(p)));
+            float3 g = p * 4.0;
+            float3 d = abs(fract(g - 0.5) - 0.5) / max(fwidth(g), float3(1e-4));
+            float3 on = 1.0 - min(d, float3(1.0));
+            float3 span = 1.0 - abs(n);
+            wire = max(max(on.x * span.x, on.y * span.y), on.z * span.z);
+        }
+
+        float age = materialParams.time - materialParams.bornTime;
+        float reveal = smoothstep(0.0, 0.8, age);
+        float fresh = 1.0 - smoothstep(0.0, 1.6, age);
+
+        // a band travelling out from the camera, 0 to 4 m every ~2.2 s
+        float front = fract(materialParams.time * 0.45) * 4.0;
+        float dist = distance(p, materialParams.sweepOrigin);
+        float sweep = exp(-((dist - front) * 5.0) * ((dist - front) * 5.0));
+
+        float sun = materialParams.contrast;
+        float fill = mix(0.10, 0.18, sun);
+        float lines = mix(0.55, 0.85, sun);
+        float alpha = fill + lines * wire + 0.40 * sweep * (0.35 + wire) + 0.35 * fresh * wire;
+        alpha = clamp(alpha, 0.0, 1.0) * reveal * materialParams.overlayAlpha;
+
+        float3 c = getColor().rgb;
+        c = mix(c, float3(1.0), clamp(0.35 * sweep + 0.25 * fresh + 0.5 * sun * wire, 0.0, 1.0));
+        material.baseColor = float4(c * alpha, alpha);
+    }
+}

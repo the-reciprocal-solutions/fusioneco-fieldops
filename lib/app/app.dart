@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/locale_controller.dart';
 import '../theme/app_theme.dart';
 import '../widgets/location_checkin_gate.dart';
+import '../widgets/keyboard_dismiss.dart';
 import 'locale_config.dart';
 import 'router.dart';
 
@@ -64,6 +65,11 @@ class _TechnicianAppState extends ConsumerState<TechnicianApp> {
       // [LocaleController] most recently set — see locale_controller.dart.
       locale: AppLocales.localeFor(languageCode),
       routerConfig: ref.watch(routerProvider),
+      // Dragging any list closes the keyboard (forms, checklists, chat);
+      // tapping blank space closes it too — KeyboardDismissOnTapOutside.
+      scrollBehavior: const MaterialScrollBehavior().copyWith(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      ),
       // Belt-and-suspenders: MaterialApp/WidgetsApp derives Directionality
       // from the resolved locale automatically once GlobalWidgetsLocalizations
       // is in localizationsDelegates (it is, via the package) and `locale` is
@@ -72,7 +78,9 @@ class _TechnicianAppState extends ConsumerState<TechnicianApp> {
       // unconfirmed default.
       builder: (context, child) => Directionality(
         textDirection: textDirection,
-        child: LocationCheckInGate(child: child ?? const SizedBox.shrink()),
+        child: KeyboardDismissOnTapOutside(
+          child: LocationCheckInGate(child: child ?? const SizedBox.shrink()),
+        ),
       ),
     );
   }

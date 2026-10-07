@@ -30,6 +30,10 @@ const kKeptOnSignOut = <String>{
   'conflicts', // refused writes the technician has not seen yet
   'verification_drafts', // C2O capture drafts not yet submitted
   'tag_issue_reports', // local log of tag reports raised offline
+  // The scanner's history (2026-10-06). Kept so a 24 h session expiry
+  // doesn't wipe a shift's scans; every row carries its user id and is only
+  // ever read back for that user, so the next person signing in sees none.
+  'scan_history',
 };
 
 /// Server copies, cleared on sign-out. Rows the server does not have yet

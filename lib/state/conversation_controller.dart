@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/conversation/agent_activity.dart';
 import '../core/conversation/conversation_outbox.dart';
+import '../core/conversation/mention_parser.dart';
 import '../core/conversation/thread_layout.dart';
 import '../core/network/api_exception.dart';
 import '../domain/user_schedule.dart';
@@ -70,6 +72,8 @@ class ConversationState {
     this.loadingOlder = false,
     this.following = false,
     this.muted = false,
+    this.trails = const {},
+    this.lastAgentReplyId,
   });
 
   final ConversationThread? thread;
@@ -96,7 +100,17 @@ class ConversationState {
   final bool following;
   final bool muted;
 
-  List<ConvSession> get liveSessions => sessions.where((s) => s.isLive).toList();
+  /// Per session id: the real stages this phone saw, oldest first
+  /// (`agent_activity.dart`). Drives the step list under "working".
+  final Map<String, List<String>> trails;
+
+  /// The newest agent reply that arrived while this thread was open — the
+  /// view tints it briefly so the answer is easy to spot.
+  final String? lastAgentReplyId;
+
+  /// Working now — live and not stuck (a session queued for 30+ min is a lost
+  /// run, not work in progress; see [kStaleSessionAfter]).
+  List<ConvSession> get liveSessions => visibleLiveSessions(sessions, DateTime.now());
 
   ConversationState copyWith({
     ConversationThread? thread,
@@ -112,6 +126,8 @@ class ConversationState {
     bool? loadingOlder,
     bool? following,
     bool? muted,
+    Map<String, List<String>>? trails,
+    String? lastAgentReplyId,
   }) => ConversationState(
     thread: thread ?? this.thread,
     messages: messages ?? this.messages,
@@ -125,6 +141,8 @@ class ConversationState {
     loadingOlder: loadingOlder ?? this.loadingOlder,
     following: following ?? this.following,
     muted: muted ?? this.muted,
+    trails: trails ?? this.trails,
+    lastAgentReplyId: lastAgentReplyId ?? this.lastAgentReplyId,
   );
 }
 
@@ -139,6 +157,12 @@ class ConversationController extends AutoDisposeFamilyNotifier<ConversationState
   bool _dividerSet = false;
   int _queuedCount = 0;
 
+  /// The record UUID once the thread has loaded (state is gone in onDispose).
+  String? _lastUuid;
+
+  /// Poll fast until then: an agent was just asked (see [kAgentFollowUpWindow]).
+  DateTime? _fastUntil;
+
   ConversationRepository get _repo => ref.read(conversationRepositoryProvider);
 
   @override
@@ -149,6 +173,9 @@ class ConversationController extends AutoDisposeFamilyNotifier<ConversationState
       _poll?.cancel();
       _sub?.cancel();
       _socket?.leaveConversation(arg.entity.wire, arg.id);
+      // The server's room is keyed by UUID; leaving by a reference left the socket in it.
+      final uuid = _lastUuid;
+      if (uuid != null && uuid != arg.id) _socket?.leaveConversation(arg.entity.wire, uuid);
     });
 
     try {
@@ -196,12 +223,28 @@ class ConversationController extends AutoDisposeFamilyNotifier<ConversationState
       final kept = firstNew == null
           ? const <ConvMessage>[]
           : _server.where((m) => m.createdAt.isBefore(firstNew) && !t.messages.any((n) => n.id == m.id)).toList();
+      if (t.entityId.isNotEmpty) _lastUuid = t.entityId;
+      final hadIds = {for (final m in _server) m.id};
+      final firstLoad = state.thread == null;
       _server = [...kept, ...t.messages];
       _outbox.dropEchoed(_server);
       final setDivider = !_dividerSet && !r.fromCache;
       if (setDivider) _dividerSet = true;
+      var trails = state.trails;
+      for (final s in t.sessions) {
+        if (s.isLive) trails = recordSession(trails, s);
+      }
+      String? newAgentReply;
+      if (!firstLoad) {
+        for (final m in t.messages) {
+          if (m.isAgent && !hadIds.contains(m.id)) newAgentReply = m.id;
+        }
+      }
       final base = state.copyWith(
         thread: t,
+        trails: trails,
+        lastAgentReplyId: newAgentReply,
+        notes: _withEndedNotes(state.sessions, t.sessions, _server),
         sessions: t.sessions,
         loading: false,
         clearError: true,
@@ -282,7 +325,16 @@ class ConversationController extends AutoDisposeFamilyNotifier<ConversationState
       for (final s in result.invoked) {
         if (!sessions.any((x) => x.id == s.id)) sessions.add(s);
       }
+      // An @agent post makes the server write more lines into the thread
+      // before (routing line, Schedule card, clarifying question, offline
+      // reply) and after it answers. Fetch them now and keep polling fast for
+      // a while: before 2026-10-06 the phone waited for a socket push that a
+      // phone often never gets, or for the 30 s poll — "no movement".
+      final askedAgent = result.invoked.isNotEmpty ||
+          mentionsAgent(result.message.body.isEmpty ? (_outbox.byClientId(clientId)?.body ?? '') : result.message.body);
+      if (askedAgent) _fastUntil = DateTime.now().add(kAgentFollowUpWindow);
       _emit(base: state.copyWith(sessions: sessions, notes: result.notes));
+      if (askedAgent) unawaited(_load());
     } else {
       _emit();
       // It may have been parked: pick the queue count up.
@@ -352,14 +404,37 @@ class ConversationController extends AutoDisposeFamilyNotifier<ConversationState
     }
   }
 
-  void typing(bool on) => _socket?.sendTyping(arg.entity.wire, arg.id, typing: on);
+  /// The room is keyed by the record UUID (`conv:<entity>:<uuid>`), and the
+  /// server re-broadcasts typing only to the room named in the payload — a
+  /// reference (`SN-00001`) here would never reach anyone.
+  String get _roomId {
+    final uuid = state.thread?.entityId;
+    return uuid != null && uuid.isNotEmpty ? uuid : arg.id;
+  }
+
+  void typing(bool on) => _socket?.sendTyping(arg.entity.wire, _roomId, typing: on);
+
+  /// The thread's notes plus a plain "couldn't finish" line for each session
+  /// that just ended badly with no agent reply to show for it.
+  List<MentionNote> _withEndedNotes(List<ConvSession> before, List<ConvSession> after, List<ConvMessage> messages) {
+    final ended = endedWithoutReply(before, after, messages);
+    if (ended.isEmpty) return state.notes;
+    return [
+      ...state.notes,
+      for (final s in ended)
+        if (!state.notes.any((n) => n.mention == 'session:${s.id}'))
+          MentionNote(code: kAgentEndedNoteCode, text: s.agentName, mention: 'session:${s.id}'),
+    ];
+  }
 
   // ── live ──
 
   void _schedulePoll() {
     if (_disposed) return;
+    final until = _fastUntil;
     final fast = state.liveSessions.isNotEmpty ||
-        state.messages.any((m) => m.outgoing == OutgoingState.sending);
+        state.messages.any((m) => m.outgoing == OutgoingState.sending) ||
+        (until != null && DateTime.now().isBefore(until));
     if (_poll != null && fast == _pollFast) return;
     _poll?.cancel();
     _pollFast = fast;
@@ -375,10 +450,11 @@ class ConversationController extends AutoDisposeFamilyNotifier<ConversationState
         if (raw is! Map) return;
         var m = ConvMessage.fromJson(Map<String, dynamic>.from(raw));
         if (isMine(m, _myIds)) m = m.copyWith(mine: true);
+        final isNew = e.name == 'message.created' && !_server.any((x) => x.id == m.id);
         _server = upsertMessage(_server, m);
         _outbox.dropEchoed([m]);
         final typing = {...state.typing}..remove(m.author.id);
-        _emit(base: state.copyWith(typing: typing));
+        _emit(base: state.copyWith(typing: typing, lastAgentReplyId: isNew && m.isAgent ? m.id : null));
       case 'typing':
         final who = e.data['who'];
         if (who is! Map) return;
@@ -393,25 +469,40 @@ class ConversationController extends AutoDisposeFamilyNotifier<ConversationState
           typing.remove(author.id);
         }
         var sessions = state.sessions;
+        var trails = state.trails;
         if (author.isAgent && stage != null && stage.isNotEmpty) {
-          sessions = [
-            for (final s in sessions)
-              s.isLive && s.agentId == author.id ? s.copyWith(status: SessionStatus.working, stage: stage) : s,
-          ];
+          final target = sessionForTyping(sessions, author.id);
+          if (target != null) {
+            sessions = [
+              for (final s in sessions)
+                s.id == target.id ? s.copyWith(status: SessionStatus.working, stage: stage) : s,
+            ];
+            trails = {...trails, target.id: appendStep(trails[target.id] ?? const [], stage)};
+          }
         }
-        _emit(base: state.copyWith(typing: typing, sessions: sessions));
+        _emit(base: state.copyWith(typing: typing, sessions: sessions, trails: trails));
       case 'session.started':
       case 'session.updated':
       case 'session.finished':
         final s = ConvSession.fromJson(e.data);
         if (s.id.isEmpty) return;
         final sessions = [...state.sessions.where((x) => x.id != s.id), s];
-        _emit(base: state.copyWith(sessions: sessions));
+        _emit(
+          base: state.copyWith(
+            sessions: sessions,
+            trails: recordSession(state.trails, s),
+            notes: _withEndedNotes(state.sessions, sessions, _server),
+          ),
+        );
         // The reply may have been posted by a process with no socket.
         if (e.name == 'session.finished') unawaited(_load());
     }
   }
 }
+
+/// A [MentionNote] made on this phone: [MentionNote.text] is the agent's
+/// name and the view words it (`conv.agent_ended`).
+const kAgentEndedNoteCode = 'local_agent_ended';
 
 final conversationControllerProvider =
     NotifierProvider.autoDispose.family<ConversationController, ConversationState, ConvKey>(

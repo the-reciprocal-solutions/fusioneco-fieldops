@@ -218,6 +218,7 @@ abstract final class ArIcons {
   static const drill = LucideIcons.drill;
   static const xray = LucideIcons.glasses;
   static const crosshair = LucideIcons.crosshair;
+  static const roomScan = LucideIcons.radar;
   static const legend = LucideIcons.palette;
   static const showAll = LucideIcons.eye;
   static const hidden = LucideIcons.eyeOff;

@@ -5,6 +5,7 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/ar/reanchor_rule.dart' show ReanchorReason;
+import '../../../state/ar_manual_place_controller.dart' show arManualPlaceProvider;
 import '../../../state/ar_permissions.dart';
 import '../../../state/ar_prefs_controller.dart';
 import '../../../state/ar_session_controller.dart';
@@ -16,6 +17,7 @@ import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
 import '../../../widgets/tech_popup.dart';
 import '../ar_ui.dart';
+import '../setup/manual/ar_manual_place_overlay.dart' show ArManualRefineBanner;
 import '../widgets/ar_chrome.dart';
 import '../widgets/ar_demo_scene.dart';
 import '../widgets/ar_mini_plan.dart';
@@ -159,6 +161,16 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
             left: widget.landscape ? 96 : 12,
             right: widget.landscape ? 96 : 68,
             child: Center(child: _RecheckBanner(prompt: s.recheck!, onRecheck: _reSnap)),
+          )
+        else if ((s.fit?.isHandPlaced ?? false) && !ref.watch(arManualPlaceProvider.select((m) => m.refineDismissed)))
+          // Placed by hand: offer to make it measured with one corner.
+          Positioned(
+            top: widget.tablet
+                ? 128
+                : (widget.landscape ? phoneTop + 118 : _phoneBelowLegend(context, s) + (ws.measuring ? 56 : 4)),
+            left: widget.landscape ? 96 : 12,
+            right: widget.landscape ? 96 : 68,
+            child: const Center(child: ArManualRefineBanner()),
           ),
         if (ws.lassoBusy || ws.picking)
           const Positioned(
@@ -595,9 +607,12 @@ class _ArWorkspaceState extends ConsumerState<ArWorkspace> {
 
   Widget _measureChip(BuildContext context, ArSessionState s, ArWorkspaceState ws) {
     final uncertainty = math.max(0.01, s.fit?.maxResidualM ?? 0.01);
-    final text = ws.measureM != null
+    var text = ws.measureM != null
         ? arTr(context, 'ar.measure.result', [arMetres(context, ws.measureM!), arCentimetres(context, uncertainty, plusMinus: true)])
         : (ws.measureFrom == null ? 'ar.measure.first'.getString(context) : 'ar.measure.second'.getString(context));
+    // A hand placement at another size: what is measured against the real
+    // room through the overlay is approximate (manual_place_math.dart).
+    if (ws.measureM != null && !(s.fit?.isTrueSize ?? true)) text = arTr(context, 'ar.measure.result_approx', [text]);
     return Positioned(
       top: widget.tablet ? (s.features.isEmpty ? 80 : 128) : _phoneBelowLegend(context, s) + 4,
       left: 0,

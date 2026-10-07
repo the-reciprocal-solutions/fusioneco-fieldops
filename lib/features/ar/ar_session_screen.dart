@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/ar/alignment_estimator.dart';
 import '../../state/ar_engine_bridge.dart';
 import '../../state/ar_install_controller.dart';
+import '../../state/ar_manual_place_controller.dart';
 import '../../state/ar_prefs_controller.dart';
 import '../../state/ar_session_controller.dart';
 import '../../state/ar_setup_controller.dart';
@@ -19,6 +20,7 @@ import 'ar_coach_overlay.dart';
 import 'ar_ui.dart';
 import 'install/ar_install_check_overlay.dart';
 import 'setup/ar_setup_overlay.dart';
+import 'setup/manual/ar_manual_place_overlay.dart';
 import 'widgets/ar_chrome.dart';
 import 'widgets/ar_demo_scene.dart';
 import 'widgets/ar_status.dart';
@@ -87,6 +89,9 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
       install.begin(code);
       install.startScan();
     }
+    // `method=manual` ("Place by hand") isn't an ArPlaceMethod the setup
+    // ladder knows: the manual controller starts itself once the floor is in.
+    if (widget.method == 'manual') ref.read(arManualPlaceProvider.notifier).requestStart();
     await ref.read(arSessionProvider.notifier).start(_args);
   }
 
@@ -124,6 +129,12 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
     ref.listen<int>(arSetupProvider.select((s) => s.lockSeq), (prev, next) {
       if (next != prev) ArHaptics.lock();
     });
+    ref.listen<int>(arManualPlaceProvider.select((s) => s.snapSeq), (prev, next) {
+      if (next != prev) ArHaptics.snap();
+    });
+    ref.listen<int>(arManualPlaceProvider.select((s) => s.lockSeq), (prev, next) {
+      if (next != prev) ArHaptics.lock();
+    });
     ref.listen<AlignmentQuality>(arSessionProvider.select((s) => s.quality), (prev, next) {
       if (next == AlignmentQuality.locked && prev != AlignmentQuality.locked) ArHaptics.success();
       if (next == AlignmentQuality.siteMismatch && prev != AlignmentQuality.siteMismatch) ArHaptics.warn();
@@ -143,6 +154,8 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
     // Keep the setup and workspace controllers alive with the screen.
     final step = ref.watch(arSetupProvider.select((x) => x.step));
     ref.watch(arWorkspaceProvider.select((x) => x.mode));
+    // "Place by hand" replaces the setup overlay while it runs.
+    final manual = ref.watch(arManualPlaceProvider.select((x) => x.active));
     if (widget.installCode != null) ref.watch(arInstallProvider.select((x) => x.phase));
 
     if (widget.floorId.isEmpty) {
@@ -198,7 +211,11 @@ class _ArSessionScreenState extends ConsumerState<ArSessionScreen> with WidgetsB
                 if (running && widget.installCode != null)
                   Positioned.fill(child: ArInstallCheckOverlay(tablet: tablet, topInset: topInset))
                 else if (running && s.stage == ArSessionStage.setup)
-                  Positioned.fill(child: ArSetupOverlay(tablet: tablet, topInset: topInset)),
+                  Positioned.fill(
+                    child: manual
+                        ? ArManualPlaceOverlay(tablet: tablet, topInset: topInset, landscape: layout == ArLayout.landscapePhone)
+                        : ArSetupOverlay(tablet: tablet, topInset: topInset),
+                  ),
                 if (working)
                   Positioned.fill(
                     child: ArWorkspace(

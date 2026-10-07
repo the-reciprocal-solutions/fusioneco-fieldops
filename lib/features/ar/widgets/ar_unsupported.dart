@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../../app/router.dart';
 import '../../../state/ar_prefs_controller.dart';
@@ -83,6 +84,15 @@ class ArUnsupportedView extends ConsumerWidget {
                 const SizedBox(height: 8),
                 AppText.bodyMedium(bodyKey.getString(context), color: FeColors.ink2, align: TextAlign.center),
                 const SizedBox(height: 22),
+                // Camera refused: the switch lives in the phone's Settings.
+                if (errorKey == null && (reason == 'camera-denied' || reason == 'camera')) ...[
+                  ArPrimaryButton(
+                    label: 'ar.fallback.open_settings'.getString(context),
+                    icon: ArIcons.capture,
+                    onPressed: () => openAppSettings(),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 if (onRetry != null) ...[
                   ArPrimaryButton(label: 'ar.common.retry'.getString(context), icon: ArIcons.sync, onPressed: onRetry),
                   const SizedBox(height: 10),

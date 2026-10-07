@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../core/conversation/mention_parser.dart';
+import '../../../core/conversation/next_steps.dart';
 import '../../../domain/conversation.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
@@ -32,6 +33,7 @@ class MessageTile extends StatelessWidget {
     this.onFollowUp,
     this.acceptedFollowUps = const {},
     this.onAnswer,
+    this.onNextStep,
   });
 
   final ConvMessage message;
@@ -56,6 +58,9 @@ class MessageTile extends StatelessWidget {
 
   /// Answer the Flow Agent's clarifying question (reply with @agent).
   final VoidCallback? onAnswer;
+
+  /// A one-tap next step under an agent reply — opens a screen (never writes).
+  final ValueChanged<ConvNextStep>? onNextStep;
 
   @override
   Widget build(BuildContext context) {
@@ -129,6 +134,29 @@ class MessageTile extends StatelessWidget {
                         label: Text('conv.answer'.getString(context)),
                       ),
                     ),
+                  if (agent && m.nextSteps.isNotEmpty && !m.isDeleted && onNextStep != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final s in m.nextSteps)
+                            ActionChip(
+                              key: ValueKey('next-step-${s.id}'),
+                              avatar: Icon(_nextStepIcon(s.action), size: 14, color: FeColors.primary),
+                              label: Text(
+                                nextStepLabelKey(s.action).getString(context),
+                                style: const TextStyle(fontSize: 12, color: FeColors.primary, fontWeight: FontWeight.w700),
+                              ),
+                              backgroundColor: FeColors.panel,
+                              side: const BorderSide(color: FeColors.line),
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => onNextStep!(s),
+                            ),
+                        ],
+                      ),
+                    ),
                   if (m.followUps.isNotEmpty && !m.isDeleted)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
@@ -175,6 +203,12 @@ class MessageTile extends StatelessWidget {
     );
   }
 }
+
+IconData _nextStepIcon(ConvNextStepAction a) => switch (a) {
+  ConvNextStepAction.raiseSnag => LucideIcons.flag,
+  ConvNextStepAction.openAsset => LucideIcons.box,
+  ConvNextStepAction.openPermits => LucideIcons.shieldCheck,
+};
 
 class _Header extends StatelessWidget {
   const _Header({required this.message});
@@ -538,7 +572,7 @@ class _OutgoingLine extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               AppText.caption(
-                convTr(context, 'conv.failed', [message.failure ?? '']),
+                convTr(context, 'conv.failed', [failureText(context, message.failure)]),
                 color: FeColors.danger,
                 weight: FontWeight.w700,
               ),

@@ -32,6 +32,7 @@ import '../features/permits/permits_hub_screen.dart';
 import '../features/profile/profile_screen.dart';
 import '../features/routes/route_detail_screen.dart';
 import '../features/routes/route_list_screen.dart';
+import '../features/scanner/scan_history_screen.dart';
 import '../features/scanner/scanner_screen.dart';
 import '../features/schedules/my_schedules_screen.dart';
 import '../features/shell/technician_shell.dart';
@@ -62,6 +63,13 @@ abstract final class Routes {
   static const c2oSearch = '/c2o-search';
   static const c2oRoutes = '/c2o-routes';
   static const syncCenter = '/sync';
+
+  /// Every scan, kept on the phone (the scanner's history). [sessionSince]
+  /// lists that scanner session's scans first.
+  static String scans({DateTime? sessionSince}) => Uri(
+    path: '/scans',
+    queryParameters: sessionSince == null ? null : {'since': '${sessionSince.millisecondsSinceEpoch}'},
+  ).toString();
 
   /// FR-5.2/5.3 — the room-grouped list + progress for one downloaded route.
   static String routeDetail(RouteScope scope, String id) => '/c2o-routes/${scope.name}/$id';
@@ -415,6 +423,16 @@ final routerProvider = Provider<GoRouter>((ref) {
           return ScannerScreen(
             activeRouteScope: routeScope,
             activeRouteId: routeId,
+          );
+        },
+      ),
+      GoRoute(
+        path: '/scans',
+        parentNavigatorKey: _rootKey,
+        builder: (context, state) {
+          final since = int.tryParse(state.uri.queryParameters['since'] ?? '');
+          return ScanHistoryScreen(
+            sessionSince: since == null ? null : DateTime.fromMillisecondsSinceEpoch(since),
           );
         },
       ),

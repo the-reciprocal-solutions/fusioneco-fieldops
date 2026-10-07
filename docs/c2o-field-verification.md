@@ -92,6 +92,27 @@ Every scan goes through `ScannerScreen._handleRaw` ([scanner_screen.dart:124](..
 
 The HMAC token is never computed on the device. A cached row's `scanToken` is the exact value the server returned, from `resolveScan` (single scan) or from the pack's per-asset `scanToken`. Comparison is plain string equality ([c2o_asset_resolver.dart:6-10](../lib/core/c2o/c2o_asset_resolver.dart#L6), [:72](../lib/core/c2o/c2o_asset_resolver.dart#L72)).
 
+## Scans page (scan history)
+
+Added 2026-10-06 after the owner's iPhone report: the scanner's session strip only had room for about two scans and could not be opened, and nothing survived leaving the scanner. Now every scan is written to the phone as it happens and listed in full on `/scans` (`Routes.scans`).
+
+```mermaid
+flowchart LR
+  Scan["ScannerScreen._handleRaw<br/>board · permit · C2O tag · label · link · text"] -->|"_remember (fire and forget)"| Hist["ScanHistory<br/>lib/core/scanner/scan_history.dart"]
+  Hist --> DB[("OfflineDb scan_history<br/>per user, newest first")]
+  Strip["Session strip (tap)"] --> Page["ScanHistoryScreen /scans?since=<br/>This session · Today · Yesterday · date"]
+  Hdr["Scanner header: All scans"] --> Page
+  Page --> DB
+  Page -->|"waiting tags: retry on open,<br/>pull to refresh, tap"| Res["C2oAssetResolver.resolve(raw)"]
+  Page -->|tap| Go["asset · board · permit · work order · web page · browser · copy"]
+```
+
+- **Row:** what was scanned (kind + code, the asset name when resolved), where (the asset's location walk), when, and its status: Found, Found offline, Waiting (needs signal once; the C2O "not in your downloaded route" case), Problem (tag mismatch / not in the register, with the plain reason), Opened (boards, permits, links). Off-route scans say so.
+- **Search** over code, name, place and the raw value; **filters** All / Waiting for signal / Problems / Assets / Boards, permits & other; **Clear history** asks first.
+- **Storage:** table `scan_history` (id, user_id, at, kind, status, json), created on first use with `IF NOT EXISTS` (no schema version bump). Pruned on every write: older than 90 days, then this user's newest 500 kept (`ScanHistoryPolicy`). Kept on sign-out (`kKeptOnSignOut`) because a 24 h session expiry must not wipe a shift; every read filters on the signed-in user id.
+- **Never blocks scanning:** recording is fire-and-forget and swallows store errors.
+- **Permit QR tokens** are stored (inside the encrypted DB) so the row can reopen the permit; only the first 8 characters are shown.
+
 ## Offline behaviour by step
 
 | Step | Where the data comes from | Works with no signal? |

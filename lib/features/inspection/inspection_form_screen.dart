@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -11,10 +12,12 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/capture/capture_services.dart';
 import '../../core/inspection/conditional_logic.dart';
+import '../../core/inspection/inspection_send_state.dart';
 import '../../core/network/api_exception.dart';
-import '../../core/offline/sync_client.dart' show kOfflineQueuedMessage;
+import '../../data/inspection_repository.dart';
 import '../../domain/inspection.dart';
 import '../../state/inspection_controller.dart';
+import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
@@ -95,6 +98,9 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
 
   bool _seeded = false;
   bool _submitting = false;
+
+  /// The server's answer to the last Submit tap, shown in the banner.
+  InspectionRefused? _refusal;
   bool _fetchingLocation = false;
   final _uploadingKeys = <String>{};
 
@@ -104,6 +110,33 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
   Timer? _tickTimer;
 
   static const _supervisorUploadKey = '_supervisor';
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_restoreKeptAnswers());
+  }
+
+  /// A submit the server does not have yet (waiting in the queue, or
+  /// refused) keeps its answers on the phone. Reopening the form shows those
+  /// answers rather than the server's older copy, so a technician who left
+  /// after "Waiting to send" never has to fill it in again.
+  Future<void> _restoreKeptAnswers() async {
+    final repo = ref.read(inspectionRepositoryProvider);
+    final draft = await repo.readDraft(widget.assignmentId);
+    if (draft == null || !mounted) return;
+    final queue = await ref.read(pendingMutationsProvider.future);
+    final queued = queuedSubmitId(queue, widget.assignmentId) != null;
+    if (!queued && draft.issue?.dropped != true) return;
+    if (!mounted) return;
+    setState(() {
+      _answers.addAll(draft.answers);
+      for (final entry in draft.answers.entries) {
+        final c = _textControllers[entry.key];
+        if (c != null && entry.value is String) c.text = entry.value as String;
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -118,7 +151,10 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
   void _seedFrom(InspectionAssignmentDetail detail) {
     if (_seeded) return;
     _seeded = true;
-    _answers.addAll(detail.responseData);
+    // putIfAbsent: kept answers restored by [_restoreKeptAnswers] win.
+    for (final entry in detail.responseData.entries) {
+      _answers.putIfAbsent(entry.key, () => entry.value);
+    }
     for (final field in detail.schema.components) {
       final existing = _answers[field.key];
       if (existing is String &&
@@ -279,7 +315,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text(kOfflineQueuedMessage)),
+          SnackBar(content: Text('inspection.media_not_uploaded'.getString(context))),
         );
       }
     }
@@ -337,9 +373,14 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
   // ── `file` field (raw, uncompressed, base64 data-URLs — no upload) ──────
 
   Future<void> _captureFile(InspectionField field, {required bool fromCamera}) async {
+    // Downscaled like a photo field (1600 px, JPEG 80) since 2026-10-06. The
+    // raw original rode inline as a base64 data URL inside the submit body:
+    // an iPhone camera original is 3–8 MB (×1.33 as base64), so a few of
+    // them made a submit that crawled over mobile data, timed out, or hit
+    // the server's 30 MB body limit (413).
     final photo = fromCamera
-        ? await _photoCapture.takeRawPhoto()
-        : await _photoCapture.pickRawFromGallery();
+        ? await _photoCapture.takeJobPhoto()
+        : await _photoCapture.pickFromGallery();
     if (photo == null) return;
 
     setState(() {
@@ -490,7 +531,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text(kOfflineQueuedMessage)),
+          SnackBar(content: Text('inspection.media_not_uploaded'.getString(context))),
         );
       }
     } finally {
@@ -650,26 +691,72 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
       return;
     }
 
+    // A photo/signature that failed to upload is only in this screen's
+    // memory; submitting now would send `{uploadStatus:'pending'}` with no
+    // file and lose it for good.
+    if (_hasPendingMedia()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('inspection.media_pending_block'.getString(context))),
+      );
+      return;
+    }
+
     if (schema.details.timerEnabled) {
       _answers['_timerSessions'] = _timerSessions;
       _answers['_totalDurationMs'] = _elapsed.inMilliseconds;
     }
 
-    setState(() => _submitting = true);
-    final outcome = await notifier.submit(_answers);
+    setState(() {
+      _submitting = true;
+      _refusal = null;
+    });
+    final outcome = await notifier.submit(Map<String, dynamic>.from(_answers));
     if (!mounted) return;
     setState(() => _submitting = false);
 
-    if (outcome == null) {
-      _showResult(queued: false);
-    } else if (outcome == kOfflineQueuedMessage) {
-      _showResult(queued: true);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(outcome)));
+    switch (outcome) {
+      case InspectionSubmitted():
+        _showResult(queued: null);
+      case InspectionQueued(:final status):
+        _showResult(queued: status);
+      case InspectionRefused():
+        setState(() => _refusal = outcome);
+        _scrollController.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
     }
   }
 
-  void _showResult({required bool queued}) {
+  bool _hasPendingMedia() {
+    for (final value in _answers.values) {
+      if (value is Map && value['values'] is List) {
+        for (final item in value['values'] as List) {
+          if (item is Map && item['uploadStatus'] == 'pending') return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Retry from the banner: nudge the queue when the submit is queued, or
+  /// send the kept answers again when the server refused them.
+  Future<void> _retrySend(InspectionSchema schema, InspectionSendStatus status) async {
+    if (status.state.isQueued) {
+      final queue = await ref.read(pendingMutationsProvider.future);
+      final id = queuedSubmitId(queue, widget.assignmentId);
+      await ref.read(syncClientProvider).flushQueue(stopAfterId: id);
+      ref.read(inspectionSendTickProvider.notifier).state++;
+      return;
+    }
+    await _submit(schema);
+  }
+
+  String _refusalText(BuildContext context, InspectionRefused refusal) {
+    final reason = refusal.reasonKey.getString(context);
+    if (refusal.missing.isEmpty) return reason;
+    return '$reason ${refusal.missing.join(', ')}';
+  }
+
+  /// [queued] null: the server has it. Otherwise it is waiting in the queue.
+  void _showResult({required InspectionSendStatus? queued}) {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -679,19 +766,24 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
         title: Row(
           children: [
             Icon(
-              queued ? LucideIcons.cloudUpload : LucideIcons.circleCheck,
-              color: queued ? FeColors.warning : FeColors.success,
+              queued != null ? LucideIcons.cloudUpload : LucideIcons.circleCheck,
+              color: queued != null ? FeColors.warning : FeColors.success,
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(queued ? 'Saved — Will Sync' : 'Inspection Submitted'),
+              child: Text(
+                queued != null
+                    ? 'inspection.send.waiting'.getString(dialogContext)
+                    : 'inspection.send.submitted'.getString(dialogContext),
+              ),
             ),
           ],
         ),
         content: Text(
-          queued
-              ? "You're offline. Your response is saved on this device and will send automatically once you're back online."
-              : 'Your response has been recorded.',
+          queued != null
+              ? '${'inspection.send.kept_on_phone'.getString(dialogContext)} '
+                    '${(queued.reasonKey ?? 'inspection.send.waiting_hint').getString(dialogContext)}'
+              : 'inspection.send.submitted_body'.getString(dialogContext),
         ),
         actions: [
           ElevatedButton(
@@ -699,7 +791,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
               Navigator.of(dialogContext).pop();
               context.pop();
             },
-            child: const Text('Back to Inspections'),
+            child: Text('inspection.send.back'.getString(dialogContext)),
           ),
         ],
       ),
@@ -724,7 +816,11 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
             child: TechEmptyState(
               icon: LucideIcons.circleAlert,
               title: 'Unable to open this inspection',
-              subtitle: error is ApiFailure ? error.message : '$error',
+              subtitle: switch (error) {
+                NetworkFailure() => 'inspection.open_offline'.getString(context),
+                HttpFailure(status: 410) => error.message,
+                _ => 'inspection.open_failed'.getString(context),
+              },
               iconColor: FeColors.danger,
             ),
           ),
@@ -778,6 +874,14 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                _SendBanner(
+                  assignmentId: widget.assignmentId,
+                  serverStatus: detail.status,
+                  refusal: _refusal,
+                  refusalText: _refusal == null ? null : _refusalText(context, _refusal!),
+                  busy: _submitting,
+                  onRetry: (status) => _retrySend(schema, status),
+                ),
                 if (readOnly)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),
@@ -817,13 +921,23 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
                     child: _submitting
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              valueColor: AlwaysStoppedAnimation(Colors.white),
-                            ),
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  valueColor: AlwaysStoppedAnimation(Colors.white),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                'inspection.send.submitting'.getString(context),
+                                style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            ],
                           )
                         : Text(
                             _isTimerRunning
@@ -1585,6 +1699,85 @@ class _SignatureBlock extends StatelessWidget {
       onPressed: () => actions.onCaptureSignature(field),
       icon: const Icon(LucideIcons.penLine, size: 16),
       label: const Text('Add Signature'),
+    );
+  }
+}
+
+/// Where this inspection's last submit is, with a plain reason and Retry:
+/// "Waiting to send — check in your location…", "Not sent — …". Hidden when
+/// there is nothing to say.
+class _SendBanner extends ConsumerWidget {
+  const _SendBanner({
+    required this.assignmentId,
+    required this.serverStatus,
+    required this.refusal,
+    required this.refusalText,
+    required this.busy,
+    required this.onRetry,
+  });
+
+  final String assignmentId;
+  final String serverStatus;
+  final InspectionRefused? refusal;
+  final String? refusalText;
+  final bool busy;
+  final void Function(InspectionSendStatus status) onRetry;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // A refusal from the tap just made says exactly what the server said
+    // (with the missing fields); otherwise show the kept submit's state.
+    final InspectionSendStatus? status = refusal != null
+        ? InspectionSendStatus(InspectionSendState.notSent, reasonKey: refusal!.reasonKey)
+        : ref
+              .watch(inspectionSendStatusProvider((id: assignmentId, serverStatus: serverStatus)))
+              .valueOrNull;
+    if (status == null) return const SizedBox.shrink();
+
+    final notSent = status.state == InspectionSendState.notSent;
+    final sending = status.state == InspectionSendState.sending;
+    final color = notSent ? FeColors.danger : FeColors.warning;
+    final reason = refusalText ?? status.reasonKey?.getString(context);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TechCard(
+        tint: notSent ? FeColors.dangerSoft : null,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              notSent ? LucideIcons.circleAlert : LucideIcons.cloudUpload,
+              size: 18,
+              color: color,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppText.bodySmall(
+                    status.labelKey.getString(context),
+                    weight: FontWeight.w700,
+                    color: color,
+                  ),
+                  if (reason != null) ...[
+                    const SizedBox(height: 2),
+                    AppText.bodySmall(reason, color: FeColors.ink2),
+                  ],
+                ],
+              ),
+            ),
+            if (!sending && refusal == null) ...[
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: busy ? null : () => onRetry(status),
+                child: Text('inspection.send.retry'.getString(context)),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

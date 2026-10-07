@@ -22,6 +22,18 @@ Pod::Spec.new do |s|
   s.swift_version    = '5.9'
   s.requires_arc     = true
 
+  # Static, although the app's Podfile says `use_frameworks!` (dynamic).
+  # Filament ships static libraries inside xcframeworks, and CocoaPods puts
+  # their -l flags only on the app's link line (Pods-Runner), never on a
+  # dependent pod's. A dynamic fe_ar.framework therefore failed its own link
+  # step with ~100 "Undefined symbol: filament::… / utils::EntityManager /
+  # _UBERARCHIVE_PACKAGE" errors (first Xcode build, 2026-10-05). A static
+  # framework has no link step of its own: the app links fe_ar and Filament
+  # together, once. Resource lookup is unaffected. bundleForClass: and
+  # Bundle(for:) then return the main bundle, and [CP] Copy Pods Resources
+  # puts fe_ar_assets.bundle there.
+  s.static_framework = true
+
   # Classes/*_shim.c pull in ../src: fe_ar_core.c, fe_tag.c (board
   # AprilTags + planar PnP) and fe_apriltag_unity.c (the vendored AprilTag 3
   # detector, src/third_party/apriltag, BSD-2-Clause: its LICENSE.md must be

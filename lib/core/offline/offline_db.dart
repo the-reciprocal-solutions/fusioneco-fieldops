@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 // FR-4.1/NFR-1 — SQLCipher build of sqflite, same API surface, so this is
 // the only file in the app that needs to know the store is encrypted.
@@ -8,6 +9,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../c2o/route_pack.dart' show RouteScope;
 import 'flush_policy.dart' show SyncLease;
+import 'left_on_device.dart';
 import '../scanner/scan_history.dart' show ScanHistoryStore, ScanRecord;
 import 'sign_out_wipe.dart';
 
@@ -763,124 +765,141 @@ class OfflineDb
     await _db.delete('scan_history', where: 'user_id = ?', whereArgs: [userId]);
   }
 
+  /// The schema version [open] creates or upgrades to.
+  static const schemaVersion = 10;
+
   static Future<OfflineDb> open({required String passphrase}) async {
     final dir = await getDatabasesPath();
     final db = await openDatabase(
       p.join(dir, _fileName),
       password: passphrase,
-      version: 10,
-      onCreate: (db, _) async {
-        await db.execute('''
-          CREATE TABLE pending_mutations (
-            client_mutation_id TEXT PRIMARY KEY,
-            method TEXT NOT NULL,
-            url TEXT NOT NULL,
-            body TEXT,
-            label TEXT,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            attachments_json TEXT,
-            entity_type TEXT,
-            entity_id TEXT
-          )
-        ''');
-        await db.execute(
-          'CREATE INDEX idx_pending_created_at ON pending_mutations (created_at)',
-        );
-        await db.execute(
-          'CREATE INDEX idx_pending_entity ON pending_mutations (entity_type, entity_id)',
-        );
-        await db.execute('''
-          CREATE TABLE cached_entities (
-            url TEXT PRIMARY KEY,
-            body TEXT NOT NULL,
-            cached_at INTEGER NOT NULL,
-            ttl_ms INTEGER NOT NULL
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE sync_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT
-          )
-        ''');
-        await db.execute('''
-          CREATE TABLE conflicts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            label TEXT,
-            url TEXT,
-            reason TEXT,
-            at INTEGER NOT NULL,
-            dropped INTEGER NOT NULL DEFAULT 1
-          )
-        ''');
-        await db.execute(_createC2oAssetsSql);
-        await db.execute(
-          'CREATE INDEX idx_c2o_assets_reference ON c2o_assets (asset_reference_id)',
-        );
-        await db.execute(_createTagIssueReportsSql);
-        await db.execute(_createDraftsSql);
-        await db.execute(_createRoutePacksSql);
-        await _createSnagTables(db);
-        await _createArTables(db);
-      },
-      // v1 → v2: which order a queued write belongs to, for the Sync Center
-      // list. Existing rows just come back with both columns null — they
-      // still show up in the list, minus the order grouping.
-      // v2 → v3: the c2o field-verification asset cache (FR-1.1).
-      // v3 → v4: local tag-missing/unreadable reports (FR-1.7).
-      // v4 → v5: FR-3 capture-form drafts (FR-4.2).
-      // v5 → v6: multi-attachment queue rows, one upload per photo (FR-4.7).
-      // v6 → v7: index the Sync Center's per-entity grouping (FR-4.9 — also
-      // the first migration exercised live against a populated queue).
-      // v7 → v8: downloaded route packs (FR-5.1/SR-1).
-      // v8 → v9: Snag Assistant local store (snags, snag_surveys).
-      // v9 → v10: AR floor packs (ar_manifests, ar_tiles, ar_features,
-      // ar_markers, ar_corners, ar_grid_lines, ar_progress, ar_prefs).
-      // New tables only, so every existing row reads back unchanged.
-      onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) {
-          await db.execute(
-            'ALTER TABLE pending_mutations ADD COLUMN entity_type TEXT',
-          );
-          await db.execute(
-            'ALTER TABLE pending_mutations ADD COLUMN entity_id TEXT',
-          );
-        }
-        if (oldVersion < 3) {
-          await db.execute(_createC2oAssetsSql);
-          await db.execute(
-            'CREATE INDEX idx_c2o_assets_reference ON c2o_assets (asset_reference_id)',
-          );
-        }
-        if (oldVersion < 4) {
-          await db.execute(_createTagIssueReportsSql);
-        }
-        if (oldVersion < 5) {
-          await db.execute(_createDraftsSql);
-        }
-        if (oldVersion < 6) {
-          await db.execute(
-            'ALTER TABLE pending_mutations ADD COLUMN attachments_json TEXT',
-          );
-        }
-        if (oldVersion < 7) {
-          await db.execute(
-            'CREATE INDEX idx_pending_entity ON pending_mutations (entity_type, entity_id)',
-          );
-        }
-        if (oldVersion < 8) {
-          await db.execute(_createRoutePacksSql);
-        }
-        if (oldVersion < 9) {
-          await _createSnagTables(db);
-        }
-        if (oldVersion < 10) {
-          await _createArTables(db);
-        }
-      },
+      version: schemaVersion,
+      onCreate: (db, _) => createSchema(db),
+      onUpgrade: upgradeSchema,
     );
     return OfflineDb._(db);
+  }
+
+  /// FR-4.9 — wraps an already-open database, so the migration test can run
+  /// [upgradeSchema] on a plain SQLite file and read it back through the
+  /// same queries the app uses.
+  @visibleForTesting
+  factory OfflineDb.wrap(Database db) => OfflineDb._(db);
+
+  /// A fresh install: every table at [schemaVersion].
+  static Future<void> createSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE pending_mutations (
+        client_mutation_id TEXT PRIMARY KEY,
+        method TEXT NOT NULL,
+        url TEXT NOT NULL,
+        body TEXT,
+        label TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        attachments_json TEXT,
+        entity_type TEXT,
+        entity_id TEXT
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX idx_pending_created_at ON pending_mutations (created_at)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_pending_entity ON pending_mutations (entity_type, entity_id)',
+    );
+    await db.execute('''
+      CREATE TABLE cached_entities (
+        url TEXT PRIMARY KEY,
+        body TEXT NOT NULL,
+        cached_at INTEGER NOT NULL,
+        ttl_ms INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE sync_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE conflicts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT,
+        url TEXT,
+        reason TEXT,
+        at INTEGER NOT NULL,
+        dropped INTEGER NOT NULL DEFAULT 1
+      )
+    ''');
+    await db.execute(_createC2oAssetsSql);
+    await db.execute(
+      'CREATE INDEX idx_c2o_assets_reference ON c2o_assets (asset_reference_id)',
+    );
+    await db.execute(_createTagIssueReportsSql);
+    await db.execute(_createDraftsSql);
+    await db.execute(_createRoutePacksSql);
+    await _createSnagTables(db);
+    await _createArTables(db);
+  }
+
+  /// v1 → v2: which order a queued write belongs to, for the Sync Center
+  /// list. Existing rows just come back with both columns null — they
+  /// still show up in the list, minus the order grouping.
+  /// v2 → v3: the c2o field-verification asset cache (FR-1.1).
+  /// v3 → v4: local tag-missing/unreadable reports (FR-1.7).
+  /// v4 → v5: FR-3 capture-form drafts (FR-4.2).
+  /// v5 → v6: multi-attachment queue rows, one upload per photo (FR-4.7).
+  /// v6 → v7: index the Sync Center's per-entity grouping (FR-4.9 — also
+  /// the first migration exercised live against a populated queue).
+  /// v7 → v8: downloaded route packs (FR-5.1/SR-1).
+  /// v8 → v9: Snag Assistant local store (snags, snag_surveys).
+  /// v9 → v10: AR floor packs (ar_manifests, ar_tiles, ar_features,
+  /// ar_markers, ar_corners, ar_grid_lines, ar_progress, ar_prefs).
+  /// New tables only, so every existing row reads back unchanged.
+  static Future<void> upgradeSchema(Database db, int oldVersion, int newVersion) async {
+    // Each step runs once, only when this upgrade crosses its version —
+    // bounded by [newVersion] too, so a test can stop at any version.
+    bool step(int v) => oldVersion < v && newVersion >= v;
+    if (step(2)) {
+      await db.execute(
+        'ALTER TABLE pending_mutations ADD COLUMN entity_type TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE pending_mutations ADD COLUMN entity_id TEXT',
+      );
+    }
+    if (step(3)) {
+      await db.execute(_createC2oAssetsSql);
+      await db.execute(
+        'CREATE INDEX idx_c2o_assets_reference ON c2o_assets (asset_reference_id)',
+      );
+    }
+    if (step(4)) {
+      await db.execute(_createTagIssueReportsSql);
+    }
+    if (step(5)) {
+      await db.execute(_createDraftsSql);
+    }
+    if (step(6)) {
+      await db.execute(
+        'ALTER TABLE pending_mutations ADD COLUMN attachments_json TEXT',
+      );
+    }
+    if (step(7)) {
+      await db.execute(
+        'CREATE INDEX idx_pending_entity ON pending_mutations (entity_type, entity_id)',
+      );
+    }
+    if (step(8)) {
+      await db.execute(_createRoutePacksSql);
+    }
+    if (step(9)) {
+      await _createSnagTables(db);
+    }
+    if (step(10)) {
+      await _createArTables(db);
+    }
   }
 
   static const _createC2oAssetsSql = '''
@@ -1769,6 +1788,59 @@ class OfflineDb
       'value': value,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
+
+  /// FR-4.10 — everything still only on this phone: the queue, unfinished
+  /// capture drafts, and the local-only rows the sign-out wipe keeps.
+  Future<LeftOnDevice> leftOnDevice() async {
+    var unsentLocal = 0;
+    for (final sql in unsentLocalCountQueries()) {
+      unsentLocal += Sqflite.firstIntValue(await _db.rawQuery(sql)) ?? 0;
+    }
+    return LeftOnDevice(
+      queued: await countMutations(),
+      drafts: await _draftSummaries(),
+      unsentLocal: unsentLocal,
+    );
+  }
+
+  /// Whether this SQLite build has the JSON functions; null until tried.
+  static bool? _hasJson;
+
+  /// The listing fields only. This re-runs on every queue tick (twice per
+  /// item while a sync runs), and a draft's payload carries its photos as
+  /// base64 — several MB each — so decoding whole payloads here stalled the
+  /// UI. SQLite reads just these fields; if a build lacks the JSON functions
+  /// it falls back to decoding, once detected.
+  Future<List<DraftSummary>> _draftSummaries() async {
+    if (_hasJson != false) {
+      try {
+        final rows = await _db.rawQuery(_draftSummarySql);
+        _hasJson = true;
+        return rows.map(DraftSummary.fromSummaryRow).toList();
+      } on DatabaseException {
+        _hasJson = false;
+      }
+    }
+    final rows = await _db.query('verification_drafts', orderBy: 'updated_at DESC');
+    return [
+      for (final row in rows)
+        () {
+          final d = VerificationDraft.fromRow(row);
+          return DraftSummary.fromPayload(d.assetId, d.updatedAt, d.payload);
+        }(),
+    ];
+  }
+
+  static const _draftSummarySql = r"""
+    SELECT asset_id, updated_at,
+      json_extract(payload, '$.assetName') AS asset_name,
+      json_extract(payload, '$.claimedSerial') AS claimed_serial,
+      json_extract(payload, '$.claimedTag') AS claimed_tag,
+      json_extract(payload, '$.floorId') AS floor_id,
+      json_array_length(payload, '$.photos') AS photo_count
+    FROM verification_drafts
+    ORDER BY updated_at DESC
+  """;
 
   /// Sign-out wipe (PENDING P-002): clears server copies, keeps unsent work
   /// — see `sign_out_wipe.dart` for the table-by-table rule.

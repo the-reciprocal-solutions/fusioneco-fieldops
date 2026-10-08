@@ -29,6 +29,16 @@ class VerificationPhoto {
   final String contentType;
 }
 
+/// FR-4.8 — the register fields the server compares at arrival, picked out
+/// of a cached `claims['asset']` map (single scan or route pack: same keys).
+const kCaptureClaimKeys = ['manufacturer', 'model', 'floorID', 'spaceID', 'location'];
+
+Map<String, Object?> captureClaimsFrom(Map<String, dynamic>? asset) => {
+  if (asset != null)
+    for (final k in kCaptureClaimKeys)
+      if (asset.containsKey(k) && (asset[k] == null || asset[k] is String)) k: asset[k],
+};
+
 /// Pure request-shaping, separated from the network call below so it can be
 /// unit tested without a fake [SyncClient] — same split already used by
 /// `FloorPlanRecord.fromJson` for the read side.
@@ -47,6 +57,7 @@ class FieldVerificationRequest {
     this.flagReason,
     this.claimedSerial,
     this.claimedTag,
+    this.shownRegister = const {},
     this.arContext,
   });
 
@@ -64,6 +75,13 @@ class FieldVerificationRequest {
   /// happen to use the same two fields.
   final String? claimedSerial;
   final String? claimedTag;
+
+  /// FR-4.8 (widened 2026-10-08) — the other register values the
+  /// technician was shown for this asset (manufacturer, model, floor, room,
+  /// location), from the phone's cached copy. Only keys the cache actually
+  /// had are sent; a `null` value means "shown as empty", which the server
+  /// does compare. See [captureClaimsFrom].
+  final Map<String, Object?> shownRegister;
 
   /// FR-3.11 — the crew could not finish this check (blocked access, missing
   /// tool, etc.) and wants the asset requeued for a return visit, regardless
@@ -111,8 +129,9 @@ class FieldVerificationRequest {
       'geo': {'lat': latitude, 'lng': longitude, 'accuracy': ?gpsAccuracy},
     if (flagForReinspection) 'flagForReinspection': true,
     if (flagForReinspection) 'flagReason': ?flagReason,
-    if (claimedSerial != null || claimedTag != null)
+    if (claimedSerial != null || claimedTag != null || shownRegister.isNotEmpty)
       'captureClaims': {
+        ...shownRegister,
         'serialNumber': ?claimedSerial,
         'assetReferenceId': ?claimedTag,
       },

@@ -38,6 +38,15 @@ class SyncProgress {
   final int total;
 }
 
+/// FR-4.6 — a queued write this app session saw reach the server, for the
+/// Sync Center's "Sent" list. In memory only: it is a receipt for the
+/// technician watching the queue drain, not a record (the server has that).
+class SentWrite {
+  const SentWrite({required this.label, required this.at});
+  final String label;
+  final DateTime at;
+}
+
 class SyncedRead<T> {
   const SyncedRead({required this.data, required this.fromCache});
   final T data;
@@ -383,6 +392,18 @@ class SyncClient {
   SyncProgress? _progress;
   SyncProgress? get progress => _progress;
 
+  /// FR-4.6 — the queued write being sent right now, whatever started the
+  /// run (the poll, reconnect, "Sync all" or one row's "Sync now"). Before
+  /// this only a row whose own button was tapped showed it was sending.
+  String? _sendingId;
+  String? get sendingId => _sendingId;
+
+  /// FR-4.6 — the newest [_maxRecentlySent] writes sent this session,
+  /// newest first. A sent row used to just vanish from the list.
+  final _recentlySent = <SentWrite>[];
+  static const _maxRecentlySent = 20;
+  List<SentWrite> get recentlySent => List.unmodifiable(_recentlySent);
+
   bool get isSyncing => _progress != null;
 
   /// Replays oldest-first and stops at the first network failure so ordering
@@ -416,6 +437,16 @@ class SyncClient {
     var changed = false;
     var stopped = false;
 
+    // FR-4.4 heartbeat (2026-10-08) — renew the lease while an item is in
+    // flight, so it can be short (see [SyncLease.ttl]) without lapsing on a
+    // slow upload. If a renewal finds someone else holding it, this run was
+    // frozen past its lease and the other engine has taken over: stop
+    // before the next item rather than drain alongside it.
+    var leaseLost = false;
+    final heartbeat = Timer.periodic(SyncLease.heartbeat, (_) async {
+      if (!await _renewLease()) leaseLost = true;
+    });
+
     try {
       final pending = await _db.listMutations();
       if (pending.isEmpty) return;
@@ -429,7 +460,13 @@ class SyncClient {
       _bus.notify();
 
       for (var i = 0; i < pending.length; i++) {
+        if (leaseLost) {
+          stopped = true;
+          break;
+        }
         final mutation = pending[i];
+        _sendingId = mutation.clientMutationId;
+        _bus.notify();
         try {
           var body = mutation.body;
           if (mutation.hasAttachments) {
@@ -475,6 +512,8 @@ class SyncClient {
           );
           await _db.deleteMutation(mutation.clientMutationId);
           _lastStatus.remove(mutation.clientMutationId);
+          _recentlySent.insert(0, SentWrite(label: mutation.label, at: DateTime.now()));
+          if (_recentlySent.length > _maxRecentlySent) _recentlySent.removeLast();
           replayed.add((entityType: mutation.entityType, entityId: mutation.entityId));
           changed = true;
         } on NetworkFailure {
@@ -569,9 +608,9 @@ class SyncClient {
           changed = true;
         }
 
-        // Renew the lease after every item, so a long drain over a slow
-        // link (8 photos per check) never lets it lapse mid-run.
-        await _db.tryAcquireFlushLease(_leaseOwner);
+        // Renew between items too (the heartbeat covers the item itself).
+        if (!await _renewLease()) leaseLost = true;
+        _sendingId = null;
         _progress = SyncProgress(completed: i + 1, total: total);
         _bus.notify();
         if (mutation.clientMutationId == stopAfterId) break;
@@ -579,7 +618,9 @@ class SyncClient {
       // After the loop, so a slow re-read never holds up the drain.
       await _replayHooks.runFor(replayed);
     } finally {
+      heartbeat.cancel();
       _flushing = false;
+      _sendingId = null; // a run that broke off mid-item
       await _db.releaseFlushLease(_leaseOwner);
       if (_progress != null) {
         _progress = null;
@@ -592,6 +633,16 @@ class SyncClient {
         unawaited(flushQueue());
       }
       _flushAgain = false;
+    }
+  }
+
+  /// Renews this client's lease. False only when another engine holds it —
+  /// a database hiccup is not a lost lease, so it reads as still held.
+  Future<bool> _renewLease() async {
+    try {
+      return await _db.tryAcquireFlushLease(_leaseOwner);
+    } catch (_) {
+      return true;
     }
   }
 

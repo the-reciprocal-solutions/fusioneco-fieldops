@@ -203,11 +203,21 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
   Future<void> _saveDraft() async {
     if (!mounted) return;
     final db = ref.read(offlineDbProvider);
+    // Read now, not after the await: the last save runs from dispose(), and
+    // ref is unusable once the screen is gone.
+    final bus = ref.read(queueBusProvider);
     if (!_hasDraftableContent) {
       await db.deleteDraft(widget.assetId);
+      bus.notify();
       return;
     }
     await db.saveDraft(widget.assetId, {
+      // FR-4.10 — so the Sync Center can name this draft and reopen the form
+      // with the same claims; the form itself never reads these back.
+      'assetName': widget.assetName,
+      'claimedSerial': widget.claimedSerial,
+      'claimedTag': widget.claimedTag,
+      'floorId': widget.floorId,
       'result': _result?.name,
       'condition': _condition?.name,
       'observedSerial': _observedSerial.text,
@@ -229,6 +239,9 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
               'accuracyMeters': _fix!.accuracyMeters,
             },
     });
+    // FR-4.10 — drafts are not queue rows, so nudge the bus by hand: the
+    // "left on this device" count (dashboard card, Sync Center) re-reads.
+    bus.notify();
   }
 
   /// FR-3.4/3.10 — the in-app camera (torch + level) rather than
@@ -326,11 +339,32 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
 
   bool get _canSubmit => _result != null && !_submitting;
 
+  /// FR-4.8 — what the asset screen showed for this asset: the cached copy
+  /// it was opened from. Read at submit (= capture time; a queued check
+  /// keeps this body), and best-effort: no cached copy just means fewer
+  /// fields are compared on arrival.
+  Future<Map<String, Object?>> _shownRegister() async {
+    try {
+      final cached = await ref.read(offlineDbProvider).getC2oAsset(widget.assetId);
+      final asset = cached?.claims['asset'];
+      return captureClaimsFrom(asset is Map ? Map<String, dynamic>.from(asset) : null);
+    } catch (_) {
+      return const {};
+    }
+  }
+
   Future<void> _submit() async {
     final result = _result;
     if (result == null) return;
 
     setState(() => _submitting = true);
+    // Read up front: over a weak link the send can take a while, and a
+    // technician who backs out meanwhile disposes this screen — after which
+    // `ref` throws. That used to skip the draft delete below, leaving a check
+    // that was queued AND listed as "unfinished" (seen on device 2026-10-08).
+    final db = ref.read(offlineDbProvider);
+    final bus = ref.read(queueBusProvider);
+    final repository = ref.read(fieldVerificationRepositoryProvider);
     try {
       final request = FieldVerificationRequest(
         result: result,
@@ -349,19 +383,19 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
         flagReason: _flagReinspection ? _emptyToNull(_flagReason.text) : null,
         claimedSerial: widget.claimedSerial,
         claimedTag: widget.claimedTag,
+        shownRegister: await _shownRegister(),
         arContext: widget.arHandoff?.toArContext(),
       );
 
-      final write = await ref
-          .read(fieldVerificationRepositoryProvider)
-          .submit(widget.assetId, request);
+      final write = await repository.submit(widget.assetId, request);
 
       // Queued offline or sent live, the check itself now owns this
       // evidence — the draft that kept it alive across a crash has done its
       // job and would otherwise resurrect a completed check as "unfinished"
       // next time this asset is opened.
       _autosaveTimer?.cancel();
-      await ref.read(offlineDbProvider).deleteDraft(widget.assetId);
+      await db.deleteDraft(widget.assetId);
+      bus.notify();
 
       if (!mounted) return;
       final message = write.synced

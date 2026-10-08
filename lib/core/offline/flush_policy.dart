@@ -77,14 +77,28 @@ typedef ReplayFailureHook = Future<void> Function(String entityId, ReplayFailure
 ///
 /// It's a lease rather than a plain flag, so a run that dies mid-flush (the
 /// OS kills the background engine) can't lock the queue forever. The holder
-/// renews it after every item.
+/// renews it after every item, and on a [heartbeat] while an item is in
+/// flight.
+///
+/// 2026-10-08 (device test): [ttl] was 3 minutes, sized to outlast one slow
+/// item (8 photos over a weak link) since renewal only happened between
+/// items. Android then cancelled a background run right after its POST
+/// landed — before it deleted the row or released the lease — and the app
+/// showed "1 waiting" for the full 3 minutes although the server had it.
+/// Now the holder renews every [heartbeat] while running, so [ttl] only has
+/// to cover a few missed beats: a dead holder frees the queue in ≤ [ttl],
+/// while a slow but alive one keeps it.
 class SyncLease {
   const SyncLease({required this.owner, required this.expiresAt});
 
   final String owner;
   final DateTime expiresAt;
 
-  static const ttl = Duration(minutes: 3);
+  static const ttl = Duration(seconds: 45);
+
+  /// How often a live holder renews. Three beats fit in one [ttl], so one
+  /// slow database write cannot cost a working holder its lease.
+  static const heartbeat = Duration(seconds: 15);
 
   /// `owner|expiresAtMs` — stored as one `sync_meta` value.
   String encode() => '$owner|${expiresAt.millisecondsSinceEpoch}';

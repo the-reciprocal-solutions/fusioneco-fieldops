@@ -5,6 +5,7 @@ import '../core/ar/channel_ar_engine.dart';
 import '../core/network/api_client.dart';
 import '../core/offline/background_sync.dart';
 import '../core/offline/offline_db.dart';
+import '../core/offline/left_on_device.dart';
 import '../core/offline/queue_bus.dart';
 import '../core/offline/sync_client.dart';
 import '../core/storage/secure_store.dart';
@@ -138,6 +139,15 @@ final pendingMutationsProvider = FutureProvider<List<PendingMutation>>((
   return ref.watch(offlineDbProvider).listMutations();
 });
 
+/// FR-4.10 — everything still only on this phone (queue, unfinished
+/// capture drafts, local-only snags/AR marks). autoDispose: a draft save
+/// does not tick [queueChangedProvider], so the Sync Center re-reads this
+/// each time it opens instead of showing a count from its last visit.
+final leftOnDeviceProvider = FutureProvider.autoDispose<LeftOnDevice>((ref) async {
+  ref.watch(queueChangedProvider);
+  return ref.watch(offlineDbProvider).leftOnDevice();
+});
+
 /// Live progress of the in-flight [SyncClient.flushQueue] run, null when idle.
 /// Reuses [queueChangedProvider]'s tick rather than a stream of its own — a
 /// flush already calls `QueueBus.notify()` after every item, so watching the
@@ -146,6 +156,19 @@ final pendingMutationsProvider = FutureProvider<List<PendingMutation>>((
 final syncProgressProvider = Provider<SyncProgress?>((ref) {
   ref.watch(queueChangedProvider);
   return ref.watch(syncClientProvider).progress;
+});
+
+/// FR-4.6 — the queued write being sent right now (any trigger), else null.
+/// Same tick as [syncProgressProvider]: the flush notifies as each item starts.
+final sendingMutationIdProvider = Provider<String?>((ref) {
+  ref.watch(queueChangedProvider);
+  return ref.watch(syncClientProvider).sendingId;
+});
+
+/// FR-4.6 — writes this app session saw reach the server, newest first.
+final recentlySentProvider = Provider<List<SentWrite>>((ref) {
+  ref.watch(queueChangedProvider);
+  return ref.watch(syncClientProvider).recentlySent;
 });
 
 final syncConflictsProvider = FutureProvider<List<SyncConflict>>((ref) async {

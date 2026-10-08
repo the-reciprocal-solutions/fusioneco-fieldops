@@ -572,8 +572,14 @@ class _HeroWavePainter extends CustomPainter {
 /// bar every screen already carries (see widgets/offline_banner.dart): a
 /// progress bar while a flush is actively running, otherwise just the
 /// backlog count. Tapping it opens the Sync Center, the one place with the
-/// full list and per-item control. Renders nothing once the queue is empty,
-/// same as the thin bar.
+/// full list and per-item control.
+///
+/// FR-4.10 (2026-10-08): it used to render nothing once the queue was empty,
+/// which also hid the only way into the Sync Center — so an unfinished
+/// check sitting on the phone could not be seen, and "nothing is left" was
+/// never said. Now it also shows for unsent drafts / local-only rows, and
+/// turns into a green "Nothing is left on this device" once a sync this
+/// session has emptied everything.
 class _SyncStatusCard extends ConsumerWidget {
   const _SyncStatusCard();
 
@@ -581,7 +587,22 @@ class _SyncStatusCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final pending = ref.watch(pendingMutationCountProvider).valueOrNull ?? 0;
     final progress = ref.watch(syncProgressProvider);
-    if (pending == 0 && progress == null) return const SizedBox.shrink();
+    final left = ref.watch(leftOnDeviceProvider).valueOrNull;
+    final drafts = left?.drafts.length ?? 0;
+    final localOnly = left?.unsentLocal ?? 0;
+    final sentThisSession = ref.watch(recentlySentProvider).isNotEmpty;
+
+    if (pending == 0 && progress == null) {
+      if (drafts > 0 || localOnly > 0) {
+        return _LeftOnDeviceCard(drafts: drafts, localOnly: localOnly);
+      }
+      // Only after a drain this session — a phone that never queued
+      // anything has nothing to reassure the technician about.
+      if (left != null && left.isEmpty && sentThisSession) {
+        return const _NothingLeftCard();
+      }
+      return const SizedBox.shrink();
+    }
 
     final syncing = progress != null;
     final value = syncing
@@ -637,6 +658,68 @@ class _SyncStatusCard extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _LeftOnDeviceCard extends StatelessWidget {
+  const _LeftOnDeviceCard({required this.drafts, required this.localOnly});
+
+  final int drafts;
+  final int localOnly;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: TechCard(
+      onTap: () => context.push(Routes.syncCenter),
+      padding: const EdgeInsets.all(14),
+      tint: FeColors.warningSoft,
+      borderColor: FeColors.warning.withValues(alpha: 0.25),
+      child: Row(
+        children: [
+          const Icon(LucideIcons.filePen, size: 16, color: FeColors.warning),
+          const SizedBox(width: 8),
+          Expanded(
+            child: AppText.bodySmall(
+              drafts > 0
+                  ? context.formatString('sync.card_drafts'.getString(context), [drafts])
+                  : context.formatString('sync.local_only_note'.getString(context), [localOnly]),
+              weight: FontWeight.w700,
+              color: FeColors.warning,
+            ),
+          ),
+          const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.warning),
+        ],
+      ),
+    ),
+  );
+}
+
+class _NothingLeftCard extends StatelessWidget {
+  const _NothingLeftCard();
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: TechCard(
+      onTap: () => context.push(Routes.syncCenter),
+      padding: const EdgeInsets.all(14),
+      borderColor: FeColors.success.withValues(alpha: 0.3),
+      child: Row(
+        children: [
+          const Icon(LucideIcons.cloudCheck, size: 16, color: FeColors.success),
+          const SizedBox(width: 8),
+          Expanded(
+            child: AppText.bodySmall(
+              'sync.nothing_left_title'.getString(context),
+              weight: FontWeight.w700,
+              color: FeColors.success,
+            ),
+          ),
+          const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.success),
+        ],
+      ),
+    ),
+  );
 }
 
 /// Progress Ring tile

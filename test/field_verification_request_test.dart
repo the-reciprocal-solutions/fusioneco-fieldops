@@ -77,4 +77,33 @@ void main() {
       expect(json.containsKey('geo'), isFalse);
     });
   });
+
+  group('FR-4.8 — capture claims widened past serial + tag', () {
+    test('captureClaimsFrom keeps only the compared keys the cache actually had', () {
+      final claims = captureClaimsFrom({
+        'manufacturer': 'Belimo',
+        'model': 'BV-100',
+        'floorID': 'f-1',
+        'location': null, // shown as empty: still compared
+        'assetName': 'VLV-03', // not a compared field
+        // no spaceID: an older cached pack, so the room is not compared
+      });
+      expect(claims, {'manufacturer': 'Belimo', 'model': 'BV-100', 'floorID': 'f-1', 'location': null});
+      expect(captureClaimsFrom(null), isEmpty);
+    });
+
+    test('the request sends them alongside the claimed serial and tag', () {
+      final json = const FieldVerificationRequest(
+        result: VerificationResult.verified,
+        claimedSerial: 'SN-1',
+        shownRegister: {'manufacturer': 'Belimo', 'spaceID': 's-1'},
+      ).toJson();
+      expect(json['captureClaims'], {'manufacturer': 'Belimo', 'spaceID': 's-1', 'serialNumber': 'SN-1'});
+    });
+
+    test('with nothing shown there is no captureClaims at all', () {
+      final json = const FieldVerificationRequest(result: VerificationResult.verified).toJson();
+      expect(json.containsKey('captureClaims'), isFalse);
+    });
+  });
 }

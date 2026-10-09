@@ -643,6 +643,20 @@ struct CaptureRequest {
     }
 }
 
+- (NSString*)diagnostics {
+    auto& rcm = _engine->getRenderableManager();
+    size_t renderables = 0, on = 0;
+    for (auto& kv : _tiles)
+        for (auto& p : kv.second.passes)
+            for (Entity e : p.renderables) {
+                renderables++;
+                if (rcm.getLayerMask(rcm.getInstance(e)) & kLayerModel) on++;
+            }
+    return [NSString stringWithFormat:@"gpuTiles=%zu renderables=%zu on=%zu modelLayer=%d grid=%d pins=%d featureMat=%d",
+                                      _tiles.size(), renderables, on, _placed ? 1 : 0, _grid ? 1 : 0, _pins ? 1 : 0,
+                                      _featureMaterial ? 1 : 0];
+}
+
 // ------------------------------------------------------------------ global state
 
 - (void)setModelMatrix:(simd_float4x4)matrix {

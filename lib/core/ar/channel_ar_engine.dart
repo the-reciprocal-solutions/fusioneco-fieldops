@@ -88,8 +88,10 @@ class ChannelArEngine implements ArEngine {
       _call('startSession', {'recordTo': ?recordTo, 'playbackFrom': ?playbackFrom});
 
   @override
-  Future<void> loadTiles(List<TileRef> tiles) =>
-      _call('loadTiles', {'tiles': [for (final t in tiles) t.toMap()]});
+  Future<TileLoadResult> loadTiles(List<TileRef> tiles) async => TileLoadResult.fromWire(
+        await _call<Object?>('loadTiles', {'tiles': [for (final t in tiles) t.toMap()]}),
+        tiles,
+      );
 
   @override
   Future<void> unloadTiles(List<String> hashes) => _call('unloadTiles', {'hashes': hashes});

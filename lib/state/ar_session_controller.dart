@@ -547,7 +547,29 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   ManualPlacement? get manualPlacement => _manual;
   final _loadedTiles = <String>{};
   var _residencyBusy = false;
-  Vec3? _residencyAtCamera;
+
+  /// A residency request that came in while a pass was running (a lock, a
+  /// finished download, a new target): run again once it ends, forced if
+  /// any of them was. Dropping these was half of "the model elements
+  /// sometimes don't show" (2026-10-09): see [_updateResidency].
+  var _residencyAgain = false;
+  var _residencyAgainForce = false;
+
+  /// The tile-frame point the last completed pass planned around.
+  Vec3? _residencyAtCentre;
+
+  /// The live "Place by hand" transform while previewing, so residency
+  /// loads the tiles under the model the user is moving, not under the
+  /// session's older fit (or the floor's focus point).
+  Mat4? _previewArFromTile;
+
+  /// Tiles native refused (decode failed, file missing), by hash → tries.
+  /// Retried on later passes, at most [_maxTileTries] times.
+  final _tileFailures = <String, int>{};
+  static const _maxTileTries = 3;
+
+  /// The last `[ar-diag]` line, so it is logged once per change.
+  String? _lastDiag;
   double? _lockedResidualM;
   var _reportedLock = false;
   DateTime _lastPoseAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -660,6 +682,15 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     _scanSent = null;
     _anchorToObs.clear();
     _loadedTiles.clear();
+    _tileFailures.clear();
+    _residencyAtCentre = null;
+    _residencyAgain = false;
+    _residencyAgainForce = false;
+    _previewArFromTile = null;
+    // The previous session's layers (a preview's 0.55 or a cancelled hand
+    // placement's 0) must not be re-sent by a Sunlight toggle in this one:
+    // `stop` reset native to opacity 1.
+    _lastLayers = null;
     _lockedResidualM = null;
     _reportedLock = false;
     _reanchor.reset();
@@ -1208,6 +1239,8 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   void beginManualPreview() {
     _manualPreview = true;
     _hiddenByManual = false;
+    _previewArFromTile = null;
+    _logDiag();
   }
 
   bool get manualPreviewing => _manualPreview;
@@ -1217,9 +1250,13 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   Future<void> previewModelTransform(Mat4 arFromTile) async {
     final e = _engine;
     if (e == null || !_manualPreview) return;
+    _previewArFromTile = arFromTile;
     try {
       await e.setModelTransform(arFromTile, easeMs: 0);
     } catch (_) {}
+    // The tiles under the model being moved (skipped until it has moved
+    // 2 m in the tile frame).
+    unawaited(_updateResidency());
   }
 
   /// "Place by hand" was left without locking: the model goes back to the
@@ -1227,6 +1264,8 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   Future<void> endManualPreview() async {
     if (!_manualPreview) return;
     _manualPreview = false;
+    _previewArFromTile = null;
+    unawaited(_updateResidency());
     final fit = state.fit;
     final l = _lastLayers;
     if (fit != null && fit.isPlaced) {
@@ -1258,6 +1297,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   /// caller hands over to the workspace with [enterWorkspace].
   Future<AlignmentFit> applyManualPlacement(ManualPlacement p) async {
     _manualPreview = false;
+    _previewArFromTile = null;
     _hiddenByManual = false;
     _anchorToObs.clear();
     _clearManual();
@@ -1360,16 +1400,40 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
 
   /// Resident set = target tiles + tiles within 15 m of the camera, closest
   /// first, within the triangle budget; 3 m hysteresis (§6.5).
+  ///
+  /// **Keyed on the tile frame, never dropped** (2026-10-09, "sometimes the
+  /// model elements are not displaying" after Place by hand on an iPhone).
+  /// Three things used to leave the user standing in an unloaded part of
+  /// the model, with camera and UI working (test/ar_session_residency_test):
+  /// 1. A request made while a pass was running (`loadTiles` answers only
+  ///    when native has decoded every tile, seconds on a big floor) was
+  ///    dropped, the lock's forced pass included; that pass then stamped the
+  ///    camera position, so nothing ran again until the user walked 2 m.
+  /// 2. The "walked 2 m" check measured the camera in the AR world, so a new
+  ///    placement (a hand re-placement, a corner after a hand placement)
+  ///    that moved the model, not the camera, never reloaded.
+  /// 3. While previewing "Place by hand" the centre came from the old fit
+  ///    (or the focus point), not the model under the user's finger.
+  /// Now requests made mid-pass run once it ends, the skip check compares
+  /// tile-frame centres, and the preview transform is the centre's frame.
+  /// A pass from a previous session (restart) no longer marks tiles
+  /// resident in this one, and only tiles native reports loaded count.
   Future<void> _updateResidency({bool force = false}) async {
+    if (_residencyBusy) {
+      _residencyAgain = true;
+      _residencyAgainForce = _residencyAgainForce || force;
+      return;
+    }
     final e = _engine;
     final floor = state.floor;
-    if (e == null || floor == null || floor.tiles.isEmpty || _residencyBusy) return;
+    if (e == null || floor == null || floor.tiles.isEmpty) return;
     if (!state.download.focusReady && !state.download.done && !floor.fromCache) return;
-    final centre = state.cameraTile ?? _focusPoint();
+    final centre = _residencyCentre();
     if (centre == null) return;
-    final last = _residencyAtCamera;
-    final cam = state.cameraAr;
-    if (!force && last != null && cam != null && last.distanceXzTo(cam) < 2) return;
+    final last = _residencyAtCentre;
+    if (!force && last != null && last.distanceXzTo(centre) < 2) return;
+    final token = _startToken;
+    bool current() => !_disposed && token == _startToken && identical(e, _engine);
     _residencyBusy = true;
     try {
       final pinned = _targetTileHashes();
@@ -1381,24 +1445,73 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
       );
       if (plan.unload.isNotEmpty) {
         await e.unloadTiles(plan.unload);
+        if (!current()) return;
         _loadedTiles.removeAll(plan.unload);
       }
-      if (plan.load.isNotEmpty) {
+      final wanted = [for (final t in plan.load) if ((_tileFailures[t.hash] ?? 0) < _maxTileTries) t];
+      if (wanted.isNotEmpty) {
         // Only tiles already on the phone: the rest arrive with the download
         // and the next residency pass picks them up.
-        final paths = await _gateway!.tilePaths(plan.load);
+        final paths = await _gateway!.tilePaths(wanted);
+        if (!current()) return;
         final refs = [for (final entry in paths.entries) makeTileRef(entry.key, entry.value)];
         if (refs.isNotEmpty) {
-          await e.loadTiles(refs);
-          _loadedTiles.addAll(paths.keys);
+          final result = await e.loadTiles(refs);
+          if (!current()) return;
+          for (final h in result.loaded) {
+            if (paths.containsKey(h)) _loadedTiles.add(h);
+          }
+          result.failed.forEach((h, why) {
+            _tileFailures[h] = (_tileFailures[h] ?? 0) + 1;
+            debugPrint('[ar-diag] tile $h failed: $why');
+          });
         }
       }
-      _residencyAtCamera = state.cameraAr;
+      _residencyAtCentre = centre;
     } catch (_) {
       // A tile that fails to load is retried on the next move.
     } finally {
       _residencyBusy = false;
+      _logDiag();
+      if (_residencyAgain && !_disposed) {
+        final again = _residencyAgainForce;
+        _residencyAgain = false;
+        _residencyAgainForce = false;
+        unawaited(_updateResidency(force: again));
+      }
     }
+  }
+
+  /// The tile-frame point residency plans around: the camera through the
+  /// live hand-placement preview, else through the fit, else the floor's
+  /// focus point (nothing placed yet).
+  Vec3? _residencyCentre() {
+    final cam = state.cameraAr;
+    final preview = _manualPreview ? _previewArFromTile : null;
+    if (preview != null && cam != null) return preview.inverse().transformPoint(cam);
+    return state.cameraTile ?? _focusPoint();
+  }
+
+  /// Developer diagnostic for device tests (never on screen): what Dart
+  /// believes is resident and how the model is being shown, logged once per
+  /// change as `[ar-diag] dart …`. Native logs its own side as
+  /// `fe_ar diag …` (GPU tiles, renderables drawn); compare the two.
+  void _logDiag() {
+    if (_disposed) return;
+    final floor = state.floor;
+    final l = _lastLayers;
+    final line = '[ar-diag] dart tiles=${_loadedTiles.length}/${floor?.tiles.length ?? 0}'
+        ' failed=${_tileFailures.length}'
+        ' placed=${state.isPlaced ? (state.fit?.method ?? 'yes') : 'no'}'
+        ' preview=${_manualPreview ? 1 : 0}'
+        ' hiddenByManual=${_hiddenByManual ? 1 : 0}'
+        ' opacity=${l == null ? '-' : l.opacity.toStringAsFixed(2)}'
+        ' layers=${l == null ? '-' : '${l.mep ? 'M' : 'm'}${l.structure ? 'S' : 's'}${l.architecture ? 'A' : 'a'}'}'
+        ' section=${l?.sectionY == null ? 'off' : l!.sectionY!.toStringAsFixed(2)}'
+        ' stage=${state.stage.name}';
+    if (line == _lastDiag) return;
+    _lastDiag = line;
+    debugPrint(line);
   }
 
   /// Before the model is placed: the focus board, else the target, else the
@@ -1442,6 +1555,7 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
     double? sectionY,
   }) async {
     _lastLayers = (mep: mep, structure: structure, architecture: architecture, opacity: opacity, sectionY: sectionY);
+    _logDiag();
     try {
       await _engine?.setLayers(makeLayerState(
         mep: mep,
@@ -1692,14 +1806,22 @@ class ArSessionController extends AutoDisposeNotifier<ArSessionState> {
   }
 
   Future<void> _stopEngine() async {
-    await _events?.cancel();
-    _events = null;
     _demoDriftTimer?.cancel();
     final e = _engine;
     _engine = null;
-    if (e != null) {
+    // `stop` goes on the channel first, synchronously: cancelling the event
+    // subscription is a platform round trip, and a `stop` sent after it
+    // could land behind the next screen's startSession/loadTiles on the same
+    // native controller and wipe its tiles (re-entering AR quickly).
+    final stopping = e?.stop();
+    final events = _events;
+    _events = null;
+    try {
+      await events?.cancel();
+    } catch (_) {}
+    if (stopping != null) {
       try {
-        await e.stop();
+        await stopping;
       } catch (_) {}
     }
   }

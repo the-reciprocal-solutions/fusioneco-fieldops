@@ -614,6 +614,10 @@ class FakeArEngine implements ArEngine {
     _at(_elapsedMs + 800, () => _emit(const TrackingEvent(state: ArTracking.tracking)));
   }
 
+  /// A camera pose, as the native side reports it at 5 Hz (tests that drive
+  /// the session by hand, with `autoplay: false`).
+  void simulatePose(Mat4 arFromCamera) => _emit(CameraPoseEvent(arFromCamera: arFromCamera));
+
   void simulateTrackingLost({String reason = 'insufficientFeatures'}) {
     _emit(TrackingEvent(state: ArTracking.limited, reason: reason));
     _at(_elapsedMs + 1500, () => _emit(const TrackingEvent(state: ArTracking.tracking)));
@@ -659,9 +663,10 @@ class FakeArEngine implements ArEngine {
   // --------------------------------------------------------------- commands
 
   @override
-  Future<void> loadTiles(List<TileRef> tiles) async {
+  Future<TileLoadResult> loadTiles(List<TileRef> tiles) async {
     commands.add('loadTiles');
     loadedTiles.addAll(tiles.map((t) => t.hash));
+    return TileLoadResult.all(tiles);
   }
 
   @override

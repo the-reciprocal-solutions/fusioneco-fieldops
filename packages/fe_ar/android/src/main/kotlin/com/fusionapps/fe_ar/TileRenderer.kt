@@ -47,7 +47,10 @@ internal class TileRenderer(
         var stateTexture: Texture?,
         var stateTextureHeight: Int,
         var uploadedVersion: Int,
-    )
+    ) {
+        /** Renderables switched on by the last [applyVisibility] (diagnostic). */
+        var renderablesOn = 0
+    }
 
     private val materialProvider: UbershaderProvider
     private val assetLoader: AssetLoader
@@ -239,6 +242,7 @@ internal class TileRenderer(
     private fun applyVisibility(entry: TileEntry, t: GpuTile) {
         val rcm = engine.renderableManager
         val layerOn = placed && layers.visible(entry.layer)
+        t.renderablesOn = 0
         for ((p, pass) in t.passes.withIndex()) {
             val on = layerOn && when {
                 featureMaterial == null -> p == PASS_SOLID
@@ -247,7 +251,27 @@ internal class TileRenderer(
                 else -> entry.countHighlight > 0
             }
             for (e in pass.renderables) rcm.setLayerMask(rcm.getInstance(e), 0xff, if (on) 0x01 else 0x00)
+            if (on) t.renderablesOn += pass.renderables.size
         }
+    }
+
+    /**
+     * Developer diagnostic (logcat only, never on screen): GPU tiles, tile
+     * renderables and how many are switched on, placed, grid/pins. Discrete
+     * values only, so the caller logs it once per change. Mirrors iOS
+     * FeArRenderer.diagnostics.
+     */
+    fun diagnostics(): String {
+        var renderables = 0
+        var on = 0
+        for (t in gpu.values) {
+            for (p in t.passes) renderables += p.renderables.size
+            on += t.renderablesOn
+        }
+        return "gpuTiles=${gpu.size} renderables=$renderables on=$on placed=${if (placed) 1 else 0} " +
+            "grid=${if (gridAsset != null) 1 else 0} pins=${if (pinAsset != null) 1 else 0} " +
+            "featureMat=${if (featureMaterial != null) 1 else 0} opacity=${"%.2f".format(layers.opacity)} " +
+            "section=${layers.sectionY?.let { "%.2f".format(it) } ?: "off"}"
     }
 
     // -------------------------------------------------------- global state

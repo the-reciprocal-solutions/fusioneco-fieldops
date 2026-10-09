@@ -25,7 +25,11 @@ abstract interface class ArEngine {
   Future<void> startSession({String? recordTo, String? playbackFrom});
 
   /// Tiles by content hash and local file path (`<appSupport>/ar/tiles/<hash>.glb`).
-  Future<void> loadTiles(List<TileRef> tiles);
+  /// Answers once every tile is decoded, with what native actually holds
+  /// (CHANNEL.md `{loaded, failed}`): a tile that failed, or was unloaded
+  /// (`stop`) while it was still loading, is not resident and must be asked
+  /// for again.
+  Future<TileLoadResult> loadTiles(List<TileRef> tiles);
 
   Future<void> unloadTiles(List<String> hashes);
 
@@ -396,6 +400,41 @@ class TileRef {
   final String path;
 
   Map<String, dynamic> toMap() => {'hash': hash, 'path': path};
+}
+
+/// The answer to `loadTiles` (CHANNEL.md): the hashes now resident (or
+/// already loading) and those that failed, with the native reason.
+class TileLoadResult {
+  const TileLoadResult({required this.loaded, this.failed = const {}});
+
+  /// Every asked tile resident: a plugin that answers without a result map.
+  TileLoadResult.all(List<TileRef> tiles)
+      : loaded = [for (final t in tiles) t.hash],
+        failed = const {};
+
+  /// Reads the native `{loaded: [hash], failed: [{hash, reason}]}`. Anything
+  /// else (an older plugin answering `null`) counts every tile as loaded,
+  /// which is what the session assumed before the answer was read.
+  factory TileLoadResult.fromWire(Object? raw, List<TileRef> asked) {
+    if (raw is! Map) return TileLoadResult.all(asked);
+    final loaded = raw['loaded'];
+    final failed = <String, String>{};
+    final rawFailed = raw['failed'];
+    if (rawFailed is List) {
+      for (final f in rawFailed) {
+        if (f is Map && f['hash'] is String) failed[f['hash'] as String] = '${f['reason'] ?? 'failed'}';
+      }
+    }
+    return TileLoadResult(
+      loaded: loaded is List ? [for (final h in loaded) if (h is String) h] : [for (final t in asked) if (!failed.containsKey(t.hash)) t.hash],
+      failed: failed,
+    );
+  }
+
+  final List<String> loaded;
+
+  /// hash → reason.
+  final Map<String, String> failed;
 }
 
 /// Layer toggles and the section plane (docs/ar-setup-and-gamma-parity.md

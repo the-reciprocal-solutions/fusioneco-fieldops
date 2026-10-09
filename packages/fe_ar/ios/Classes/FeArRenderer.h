@@ -107,6 +107,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// drawsCamera). The completion runs on the main thread.
 - (void)captureNextFrame:(void (^)(UIImage* _Nullable image))completion;
 
+/// Developer diagnostic (device logs only, never on screen): GPU tiles,
+/// tile renderables and how many of them are switched on, whether the view
+/// draws the model layer, and the grid/pins. Discrete values only, so the
+/// caller can log it once per change.
+- (NSString*)diagnostics;
+
 @end
 
 NS_ASSUME_NONNULL_END

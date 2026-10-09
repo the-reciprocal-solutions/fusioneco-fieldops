@@ -512,6 +512,12 @@ Full plan: [docs/ar-bim-overlay.md](docs/ar-bim-overlay.md). These are the findi
 **What to watch:** when AR "never works", check first that the floor's model is the room the user stands in. `flutter test test/ar_*` also loads helper files named `ar_*` (e.g. `ar_workspace_fakes.dart`) — not a real failure. Flutter's scale gesture restarts whenever a finger lands or lifts (Place by hand).
 **Where:** `lib/state/ar_setup_controller.dart`, `lib/core/ar/corner_matcher.dart`, `lib/features/ar/setup/ar_setup_coach.dart`, `lib/state/ar_manual_place_controller.dart`
 
+### Model elements "sometimes" missing: tile residency dropped requests and tracked the camera, not the model (2026-10-09)
+**What happened:** after Place by hand shipped, the owner saw the model sometimes not render while camera and UI worked. Native renderers were clean (tiles parent to the model root, reveal ends visible, scan mesh doesn't write depth). The cause was Dart `_updateResidency`: a request during a running load (incl. the lock's forced one) was dropped and the finished load stamped the camera position, so nothing reloaded until the user walked 2 m; the 2 m test used camera movement, so moving the *model* by hand never reloaded; the preview loaded around the old fit; a stale pass from a previous session could mark tiles loaded in the new one; native `{loaded, failed}` was never read.
+**Fix:** queue-not-drop, model-space distance, preview loads under the dragged model, session-stamped passes, `TileLoadResult` with retries; `ar-diag` logs on both sides. Reproducer: `test/ar_session_residency_test.dart` (each case failed before).
+**What to watch:** shows mainly on large floors (the small Demo Bedroom may not reproduce it). Any feature that moves the model instead of the camera must trigger residency.
+**Where:** `lib/state/ar_session_controller.dart`, `lib/core/ar/ar_engine.dart`, docs/ar-implementation.md §2.8
+
 ## Snag Assistant
 
 Design: [docs/snag-assistant.md](docs/snag-assistant.md). Server: `../fusion-eco-server/documentation/snag-assistant.md`.

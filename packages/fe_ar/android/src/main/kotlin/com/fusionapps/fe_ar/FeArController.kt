@@ -150,6 +150,11 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     private var lastPoseMs = 0L
     private var lastCamCheckMs = 0L
 
+    // Developer diagnostic (`fe_ar diag …` in logcat, never on screen):
+    // checked twice a second, logged only when it changes.
+    private var lastDiagMs = 0L
+    private var lastDiag: String? = null
+
     /**
      * The per-2 s `camera check` log (Filament camera vs ARCore pose). It
      * settled P-012 on 2026-09-27 (the camera follows ARCore to the
@@ -406,6 +411,10 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
             renderer?.setModelMatrix(modelCurrent)
         }
         renderer?.tick((SystemClock.elapsedRealtimeNanos() - startNs) / 1e9f, tiles.tiles.values)
+        if (nowMs - lastDiagMs >= 500L) {
+            lastDiagMs = nowMs
+            logDiagnostics()
+        }
 
         if (tracking && nowMs - lastPoseMs >= POSE_INTERVAL_MS) {
             lastPoseMs = nowMs
@@ -619,6 +628,21 @@ internal class FeArController(private val appContext: Context) : MethodChannel.M
     }
 
     /** Eases the model over easeMs: yaw along the shortest arc, translation linearly. Never snaps. */
+    /**
+     * "Model elements sometimes don't show" (2026-10-09): what native holds
+     * against what it draws, for device tests. Compare with Dart's
+     * `[ar-diag] dart tiles=N/M …` (see the iOS twin in FeArController.swift).
+     */
+    private fun logDiagnostics() {
+        val scale = kotlin.math.sqrt(modelCurrent[4] * modelCurrent[4] + modelCurrent[5] * modelCurrent[5] + modelCurrent[6] * modelCurrent[6])
+        val line = "store=${tiles.tiles.size} modelPlaced=${if (modelPlaced) 1 else 0} " +
+            "layers=${if (layers.mep) "M" else "m"}${if (layers.structure) "S" else "s"}${if (layers.architecture) "A" else "a"} " +
+            "scale=${"%.1f".format(scale)} " + (renderer?.diagnostics() ?: "renderer=null")
+        if (line == lastDiag) return
+        lastDiag = line
+        android.util.Log.i("fe_ar", "fe_ar diag $line")
+    }
+
     private fun stepEase() {
         if (easeDurNs == 0L) return
         val t = ((SystemClock.elapsedRealtimeNanos() - easeStartNs).toFloat() / easeDurNs).coerceIn(0f, 1f)

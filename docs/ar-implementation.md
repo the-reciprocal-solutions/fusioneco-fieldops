@@ -177,6 +177,15 @@ flowchart LR
 - **Tests:** `test/ar_manual_place_math_test.dart` (33), `test/ar_manual_place_controller_test.dart` (20, incl. the lock hand-off through the real session code), `test/ar_manual_place_widget_test.dart` (15: 360×780, 320×568, 915×412 × EN/AR × Sunlight, plus the chooser).
 - **Not verified:** any device. The feel of the gestures, ARKit/ARCore plane quality for Snap to wall/corner, the anchor re-anchoring, the frame-coalesced transform and the scaled section plane only show on a phone.
 
+### 2.8 Tile residency rules (2026-10-09)
+
+Which tiles are loaded around the user is decided in `ArSessionController._updateResidency`. Rules, after "model elements sometimes don't show":
+- A request that arrives while a load is running is **queued and run after it**, never dropped (the lock forces one).
+- "Moved enough to reload" (2 m) is measured in **model coordinates**, so re-placing the model by hand reloads even when the camera stands still.
+- During the Place by hand preview, tiles load **under the dragged model**, not the old fit.
+- A pass from a previous session is ignored; only tiles native confirms in `TileLoadResult {loaded, failed}` count, with up to 3 retries.
+- Device diagnosis: Console.app filter `ar-diag` — `[ar-diag] dart tiles=N/M` (Dart's view) vs `fe_ar diag store=… gpuTiles=… renderables=… on=… modelLayer=…` (native). Native store < N = a lost load; `on=0` with tiles = hidden by filters; `modelLayer=0` = no transform sent; `opacity=0.00` = a cancelled hand placement. Developer-only, never on screen.
+
 ## 3. A session, end to end
 
 ```mermaid

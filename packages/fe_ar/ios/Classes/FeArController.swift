@@ -96,6 +96,11 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
     private var torchOn = false
     private var torchNeedsApply = false
 
+    // developer diagnostic (`fe_ar diag …` in the device log, never on
+    // screen): checked twice a second, logged only when it changes
+    private var lastDiagCheck: CFTimeInterval = 0
+    private var lastDiag: String?
+
     override init() {
         super.init()
         session.delegate = self
@@ -378,6 +383,29 @@ final class FeArController: NSObject, FlutterStreamHandler, ARSessionDelegate {
             lastTarget = now
             if let e = targetScreen() { emit(e) }
         }
+        if now - lastDiagCheck >= 0.5 {
+            lastDiagCheck = now
+            logDiagnostics()
+        }
+    }
+
+    /// "Model elements sometimes don't show" (2026-10-09): what native holds
+    /// against what it draws, for the next device test. Compare with Dart's
+    /// `[ar-diag] dart tiles=N/M …`: store < N means a load was lost;
+    /// on=0 with gpuTiles>0 means the feature state or layers hid them;
+    /// modelLayer=0 means no setModelTransform arrived (hide-until-placed);
+    /// opacity 0 means a cancelled hand placement hid the model.
+    private func logDiagnostics() {
+        let s = sectionY.map { String(format: "%.2f", $0) } ?? "off"
+        let scale = simd_length(simd_make_float3(modelCurrent.columns.1))
+        let line = String(format: "store=%d placed=%d revealing=%d opacity=%.2f section=%@ layers=%@%@%@ scale=%.1f view=%d running=%d ",
+                          tiles.entries.count, modelPlaced ? 1 : 0, revealing ? 1 : 0, opacity, s,
+                          layerMep ? "M" : "m", layerStructure ? "S" : "s", layerArchitecture ? "A" : "a",
+                          scale, platformView != nil ? 1 : 0, running ? 1 : 0)
+            + (renderer?.diagnostics() ?? "renderer=nil")
+        if line == lastDiag { return }
+        lastDiag = line
+        NSLog("fe_ar diag %@", line)
     }
 
     // MARK: floor

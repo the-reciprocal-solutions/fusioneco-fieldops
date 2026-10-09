@@ -8,6 +8,7 @@ import '../../app/router.dart';
 import '../../core/c2o/route_download_service.dart';
 import '../../core/c2o/route_pack.dart';
 import '../../core/c2o/route_progress.dart';
+import '../../core/c2o/route_walk_context.dart';
 import '../../core/offline/offline_db.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
@@ -79,7 +80,12 @@ class RouteDetailScreen extends ConsumerWidget {
               assets: assets,
               onOpenAsset: (assetId) => stale
                   ? _showStaleBlock(context, ref, route)
-                  : context.push(Routes.assetDetail(assetId)),
+                  : context.push(
+                      Routes.assetDetail(
+                        assetId,
+                        route: RouteWalkContext(scope: scope, id: id, offRoute: false),
+                      ),
+                    ),
             ),
           );
         },
@@ -150,14 +156,18 @@ final _routeAssetsProvider =
     FutureProvider.family<List<RouteAssetRow>, (RouteScope, String)>((ref, key) async {
       final (scope, id) = key;
       ref.watch(routePacksTickProvider);
-      final routes = await ref.watch(offlineDbProvider).listRoutePacks();
+      // A submitted or synced check ticks the queue; re-read so the count
+      // and the "waiting to upload" marks follow it (FR-5.3).
+      ref.watch(queueChangedProvider);
+      final db = ref.watch(offlineDbProvider);
+      final routes = await db.listRoutePacks();
       final route = routes.where((r) => r.scope == scope && r.id == id).firstOrNull;
       if (route == null) return const [];
 
       final wanted = route.assetIds.toSet();
-      final cached = await ref.watch(offlineDbProvider).listC2oAssets();
+      final cached = await db.listC2oAssets();
 
-      return cached
+      final rows = cached
           .where((c) => wanted.contains(c.assetId))
           .map(
             (c) => routeAssetRowFromClaims(
@@ -167,6 +177,7 @@ final _routeAssetsProvider =
             ),
           )
           .toList();
+      return applyQueuedChecks(rows, await db.listMutations());
     });
 
 String _scopeLabel(BuildContext context, RouteScope scope) => switch (scope) {
@@ -189,8 +200,7 @@ class _RouteBody extends StatelessWidget {
     final stale = RouteDownloadService.isStale(route);
 
     final unassignedLabel = 'routes.unassigned_room'.getString(context);
-    final byRoom = groupRouteAssetsByRoom(assets, unassignedLabel: unassignedLabel);
-    final roomNames = sortRoomNames(byRoom.keys, unassignedLabel: unassignedLabel);
+    final stops = groupRouteForWalk(assets);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
@@ -222,12 +232,16 @@ class _RouteBody extends StatelessWidget {
             title: 'routes.no_assets_title'.getString(context),
           )
         else
-          for (final room in roomNames) ...[
+          for (final stop in stops) ...[
             Padding(
               padding: const EdgeInsets.only(bottom: 8, top: 8),
-              child: AppText.bodyMedium(room, weight: FontWeight.w700, color: FeColors.ink2),
+              child: AppText.bodyMedium(
+                [?stop.level, stop.room ?? unassignedLabel].join(' · '),
+                weight: FontWeight.w700,
+                color: FeColors.ink2,
+              ),
             ),
-            for (final asset in byRoom[room]!)
+            for (final asset in stop.rows)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: _AssetRow(asset: asset, onTap: () => onOpenAsset(asset.id)),
@@ -322,6 +336,12 @@ class _AssetRow extends StatelessWidget {
           Expanded(
             child: AppText.bodyMedium(asset.name ?? asset.id, weight: FontWeight.w600),
           ),
+          if (asset.queued) ...[
+            const Icon(LucideIcons.cloudUpload, size: 16, color: FeColors.warning),
+            const SizedBox(width: 4),
+            AppText.caption('routes.queued_upload'.getString(context), color: FeColors.warning),
+            const SizedBox(width: 8),
+          ],
           const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
         ],
       ),

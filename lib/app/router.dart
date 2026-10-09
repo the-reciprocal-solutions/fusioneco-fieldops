@@ -25,6 +25,7 @@ import '../features/order_detail/order_detail_screen.dart';
 import '../features/orders/orders_screen.dart';
 import '../features/overview/overview_screen.dart';
 import '../core/c2o/route_pack.dart';
+import '../core/c2o/route_walk_context.dart';
 import '../domain/ar_handoff.dart';
 import '../features/permits/permit_detail_screen.dart';
 import '../features/permits/permit_resolve_screen.dart';
@@ -114,7 +115,11 @@ abstract final class Routes {
     final query = {'assetId': ?assetId, 'name': ?assetName};
     return Uri(path: '/bim-viewer/$floorId', queryParameters: query.isEmpty ? null : query).toString();
   }
-  static String assetDetail(String assetId) => '/asset/$assetId';
+  /// [route] — FR-5.4: opened from a route (its list or its scanner), so
+  /// a check started from here is sent with that route and whether the
+  /// asset was on it.
+  static String assetDetail(String assetId, {RouteWalkContext? route}) =>
+      Uri(path: '/asset/$assetId', queryParameters: route?.toQuery()).toString();
 
   // Snag Assistant (docs/snag-assistant.md). The server's notification link
   // `/technician/snags/<id>` maps onto [snagDetail] like every other link.
@@ -191,12 +196,14 @@ abstract final class Routes {
     String? claimedSerial,
     String? claimedTag,
     String? floorId,
+    RouteWalkContext? route,
   }) {
     final query = {
       'name': ?assetName,
       'claimedSerial': ?claimedSerial,
       'claimedTag': ?claimedTag,
       'floorId': ?floorId,
+      ...?route?.toQuery(),
     };
     return Uri(path: '/verify/$assetId', queryParameters: query).toString();
   }
@@ -478,6 +485,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         parentNavigatorKey: _rootKey,
         builder: (context, state) => AssetDetailScreen(
           assetId: state.pathParameters['assetId'] ?? '',
+          route: RouteWalkContext.fromQuery(state.uri.queryParameters),
         ),
       ),
       GoRoute(
@@ -499,6 +507,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           floorId: state.uri.queryParameters['floorId'],
           // P-006: the AR workspace's `ar*` params (null from a scan).
           arHandoff: ArHandoff.fromQuery(state.uri.queryParameters),
+          route: RouteWalkContext.fromQuery(state.uri.queryParameters),
         ),
       ),
       // Snag Assistant — the fixed segments must stay above `/snags/:id`.

@@ -814,6 +814,10 @@ class _DownloadRouteSheetState extends ConsumerState<_DownloadRouteSheet> {
           TextField(
             controller: _id,
             enabled: !busy,
+            // Without this the buttons below (enabled on a non-empty id)
+            // never noticed typing until some unrelated rebuild — found on
+            // device 2026-10-08. A changed id also voids the old estimate.
+            onChanged: (_) => setState(() => _estimate = null),
             decoration: InputDecoration(
               labelText: 'routes.id_label'.getString(context),
             ),
@@ -828,6 +832,7 @@ class _DownloadRouteSheetState extends ConsumerState<_DownloadRouteSheet> {
             TextField(
               controller: _packageId,
               enabled: !busy,
+              onChanged: (_) => setState(() => _estimate = null),
               decoration: InputDecoration(
                 labelText: 'routes.package_anchor_label'.getString(context),
               ),
@@ -836,6 +841,7 @@ class _DownloadRouteSheetState extends ConsumerState<_DownloadRouteSheet> {
             TextField(
               controller: _projectId,
               enabled: !busy,
+              onChanged: (_) => setState(() => _estimate = null),
               decoration: InputDecoration(
                 labelText: 'routes.project_anchor_label'.getString(context),
               ),

@@ -8,8 +8,13 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../core/c2o/asset_detail.dart';
+import '../../core/c2o/claims_freshness.dart';
+import '../../core/c2o/route_progress.dart';
+import '../../core/c2o/route_walk_context.dart';
 import '../../core/capture/capture_services.dart';
 import '../../core/ocr/nameplate_reader.dart';
+import '../../core/offline/offline_db.dart' show CachedC2oAsset, OfflineDb;
 import '../../core/offline/sync_client.dart' show kOfflineQueuedMessage;
 import '../../data/field_verification_repository.dart';
 import '../../domain/ar_handoff.dart';
@@ -42,6 +47,7 @@ class FieldVerificationScreen extends ConsumerStatefulWidget {
     this.claimedTag,
     this.floorId,
     this.arHandoff,
+    this.route,
   });
 
   final String assetId;
@@ -54,6 +60,10 @@ class FieldVerificationScreen extends ConsumerStatefulWidget {
   /// is shown, its capture attached as a photo, and it is submitted as the
   /// request's `arContext` (docs/ar-bim-overlay.md §8). Null otherwise.
   final ArHandoff? arHandoff;
+
+  /// FR-5.4 — the route this check was started from, if any. Kept in the
+  /// draft too, so a check resumed from the Sync Center still carries it.
+  final RouteWalkContext? route;
 
   @override
   ConsumerState<FieldVerificationScreen> createState() => _FieldVerificationScreenState();
@@ -91,6 +101,22 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
   Timer? _autosaveTimer;
   var _draftLoaded = false;
 
+  /// FR-5.7 — the cached claims this check would be compared against, when
+  /// they are past the agreed window. Non-null blocks the form until a
+  /// refresh succeeds. Checked here, not at each entry point, so every way
+  /// in (scan, search, route, BIM, AR, a resumed draft) hits it.
+  CachedC2oAsset? _staleClaims;
+  var _refreshingClaims = false;
+  ClaimsRefreshOutcome? _refreshOutcome;
+
+  /// What the register claims, shown beside the observed fields and sent
+  /// with the check. Starts as what the opening screen passed in; a refresh
+  /// replaces it with the fresh claims, or the check would be compared
+  /// against the very values the refresh replaced.
+  late String? _claimedSerial = widget.claimedSerial;
+  late String? _claimedTag = widget.claimedTag;
+  late RouteWalkContext? _route = widget.route;
+
   @override
   void initState() {
     super.initState();
@@ -99,6 +125,50 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
     _notes.addListener(_scheduleAutosave);
     _flagReason.addListener(_scheduleAutosave);
     unawaited(_loadDraft().then((_) => _attachArPhoto()));
+    unawaited(_checkClaimsAge());
+  }
+
+  Future<void> _checkClaimsAge() async {
+    try {
+      final cached = await ref.read(offlineDbProvider).getC2oAsset(widget.assetId);
+      // Nothing cached (a BIM/AR asset never scanned): nothing stale to
+      // compare against — the server checks the live register itself.
+      if (cached == null || !claimsAreStale(cached) || !mounted) return;
+      setState(() => _staleClaims = cached);
+    } catch (_) {}
+  }
+
+  Future<void> _refreshClaims() async {
+    final stale = _staleClaims;
+    if (stale == null) return;
+    setState(() {
+      _refreshingClaims = true;
+      _refreshOutcome = null;
+    });
+    final db = ref.read(offlineDbProvider);
+    final ticks = ref.read(routePacksTickProvider.notifier);
+    final outcome = await ref.read(claimsRefresherProvider).refresh(stale);
+    final fresh = outcome == ClaimsRefreshOutcome.refreshed ? await db.getC2oAsset(widget.assetId) : null;
+    // A route download changes route rows; let open route screens re-read.
+    if (outcome == ClaimsRefreshOutcome.refreshed) ticks.state++;
+    if (!mounted) return;
+    final detail = fresh == null ? null : AssetDetail.fromClaims(fresh.claims);
+    setState(() {
+      _refreshingClaims = false;
+      _refreshOutcome = outcome;
+      if (fresh != null) {
+        _staleClaims = null;
+        if (detail != null) {
+          _claimedSerial = detail.serialNumber;
+          _claimedTag = detail.assetReferenceId ?? detail.supplierTagNumber;
+        }
+      }
+    });
+    if (fresh != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('fieldVerify.claims_refreshed'.getString(context))),
+      );
+    }
   }
 
   /// The AR capture joins the photos once (after a restored draft, which may
@@ -154,6 +224,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
       _notes.text = payload['notes'] as String? ?? '';
       _flagReinspection = payload['flagForReinspection'] as bool? ?? false;
       _flagReason.text = payload['flagReason'] as String? ?? '';
+      _route ??= RouteWalkContext.fromJson(payload['routeContext']);
       _photos
         ..clear()
         ..addAll(
@@ -215,9 +286,10 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
       // FR-4.10 — so the Sync Center can name this draft and reopen the form
       // with the same claims; the form itself never reads these back.
       'assetName': widget.assetName,
-      'claimedSerial': widget.claimedSerial,
-      'claimedTag': widget.claimedTag,
+      'claimedSerial': _claimedSerial,
+      'claimedTag': _claimedTag,
       'floorId': widget.floorId,
+      'routeContext': ?_route?.toJson(),
       'result': _result?.name,
       'condition': _condition?.name,
       'observedSerial': _observedSerial.text,
@@ -337,7 +409,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
     }
   }
 
-  bool get _canSubmit => _result != null && !_submitting;
+  bool get _canSubmit => _result != null && !_submitting && _staleClaims == null;
 
   /// FR-4.8 — what the asset screen showed for this asset: the cached copy
   /// it was opened from. Read at submit (= capture time; a queued check
@@ -381,10 +453,11 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
         gpsAccuracy: _fix?.accuracyMeters,
         flagForReinspection: _flagReinspection,
         flagReason: _flagReinspection ? _emptyToNull(_flagReason.text) : null,
-        claimedSerial: widget.claimedSerial,
-        claimedTag: widget.claimedTag,
+        claimedSerial: _claimedSerial,
+        claimedTag: _claimedTag,
         shownRegister: await _shownRegister(),
         arContext: widget.arHandoff?.toArContext(),
+        routeContext: _route,
       );
 
       final write = await repository.submit(widget.assetId, request);
@@ -395,6 +468,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
       // next time this asset is opened.
       _autosaveTimer?.cancel();
       await db.deleteDraft(widget.assetId);
+      await _markChecked(db, result);
       bus.notify();
 
       if (!mounted) return;
@@ -408,6 +482,19 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  /// FR-5.3 — the route count moves now, not at the next pack download.
+  /// Best effort: the check is already safe, and a failure here only means
+  /// the count waits for that download.
+  Future<void> _markChecked(OfflineDb db, VerificationResult result) async {
+    try {
+      final cached = await db.getC2oAsset(widget.assetId);
+      if (cached == null) return;
+      await db.upsertC2oAsset(
+        withLocalVerificationStatus(cached, verificationStatusForResult(result.name)),
+      );
+    } catch (_) {}
   }
 
   void _showError(String message) {
@@ -427,7 +514,14 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
         title: widget.assetName ?? 'fieldVerify.title'.getString(context),
       ),
       body: SafeArea(
-        child: ListView(
+        child: _staleClaims != null
+            ? _StaleClaimsBlock(
+                cachedAt: _staleClaims!.cachedAt,
+                refreshing: _refreshingClaims,
+                outcome: _refreshOutcome,
+                onRefresh: _refreshClaims,
+              )
+            : ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
           children: [
             if (widget.arHandoff != null) ...[
@@ -444,7 +538,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
             _ObservedField(
               label: 'fieldVerify.observed_serial'.getString(context),
               controller: _observedSerial,
-              claimed: widget.claimedSerial,
+              claimed: _claimedSerial,
               onScan: _scanningNameplate ? null : _scanNameplate,
               scanning: _scanningNameplate,
             ),
@@ -452,7 +546,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
             _ObservedField(
               label: 'fieldVerify.observed_tag'.getString(context),
               controller: _observedTag,
-              claimed: widget.claimedTag,
+              claimed: _claimedTag,
             ),
             const SizedBox(height: 24),
 
@@ -523,7 +617,7 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
           ],
         ),
       ),
-      bottomNavigationBar: SafeArea(
+      bottomNavigationBar: _staleClaims != null ? null : SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: SizedBox(
@@ -550,6 +644,96 @@ class _FieldVerificationScreenState extends ConsumerState<FieldVerificationScree
           ),
         ),
       ),
+    );
+  }
+}
+
+/// FR-5.7 — shown instead of the form while the claims are too old. Any
+/// draft for this asset is untouched underneath and comes back after the
+/// refresh.
+class _StaleClaimsBlock extends StatelessWidget {
+  const _StaleClaimsBlock({
+    required this.cachedAt,
+    required this.refreshing,
+    required this.outcome,
+    required this.onRefresh,
+  });
+
+  final DateTime cachedAt;
+  final bool refreshing;
+  final ClaimsRefreshOutcome? outcome;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final age = DateTime.now().difference(cachedAt);
+    final ageText = age.inDays >= 1
+        ? context.formatString(
+            'fieldVerify.claims_age_days'.getString(context),
+            [age.inDays],
+          )
+        : context.formatString(
+            'fieldVerify.claims_age_hours'.getString(context),
+            [age.inHours],
+          );
+    final error = switch (outcome) {
+      ClaimsRefreshOutcome.failed =>
+        'fieldVerify.claims_refresh_failed'.getString(context),
+      ClaimsRefreshOutcome.noWayToRefresh =>
+        'fieldVerify.claims_refresh_no_way'.getString(context),
+      _ => null,
+    };
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        const SizedBox(height: 24),
+        const Icon(LucideIcons.clockAlert, size: 48, color: FeColors.warning),
+        const SizedBox(height: 16),
+        AppText.title(
+          'fieldVerify.claims_stale_title'.getString(context),
+          weight: FontWeight.w800,
+          align: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        AppText.bodyMedium(
+          context.formatString(
+            'fieldVerify.claims_stale_body'.getString(context),
+            [ageText],
+          ),
+          color: FeColors.ink2,
+          align: TextAlign.center,
+        ),
+        const SizedBox(height: 24),
+        SizedBox(
+          height: 52,
+          child: FilledButton.icon(
+            onPressed: refreshing ? null : onRefresh,
+            icon: refreshing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(LucideIcons.refreshCw, size: 18),
+            label: AppText.label(
+              'fieldVerify.claims_refresh'.getString(context),
+              color: Colors.white,
+              weight: FontWeight.w700,
+            ),
+          ),
+        ),
+        if (error != null) ...[
+          const SizedBox(height: 16),
+          AppText.bodySmall(
+            error,
+            color: FeColors.danger,
+            align: TextAlign.center,
+          ),
+        ],
+      ],
     );
   }
 }

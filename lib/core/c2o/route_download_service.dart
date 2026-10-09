@@ -1,5 +1,6 @@
 import '../../data/route_pack_repository.dart';
 import '../offline/offline_db.dart';
+import 'asset_detail.dart';
 import 'route_pack.dart';
 
 /// FR-5.1 — downloads a route pack and writes it into local storage:
@@ -18,15 +19,18 @@ class RouteDownloadService {
     required C2oAssetCache assetCache,
     required RoutePackStore routeStore,
     FloorPlanPrefetcher? floorPlans,
+    PhotoPrefetch? photos,
   }) : _fetcher = fetcher,
        _assetCache = assetCache,
        _routeStore = routeStore,
-       _floorPlans = floorPlans;
+       _floorPlans = floorPlans,
+       _photos = photos;
 
   final RouteFetcher _fetcher;
   final C2oAssetCache _assetCache;
   final RoutePackStore _routeStore;
   final FloorPlanPrefetcher? _floorPlans;
+  final PhotoPrefetch? _photos;
 
   /// FR-5.1's pre-download size check.
   Future<RoutePackEstimate> estimate({
@@ -101,7 +105,26 @@ class RouteDownloadService {
     );
 
     await _prefetchFloorPlans(pack);
+    await _prefetchPhotos(pack);
     return pack;
+  }
+
+  /// FR-2.1 — each asset's reference photo, for the same reason as the
+  /// floor plans: the walk is offline. Best effort, one at a time; a photo
+  /// that fails only shows as "not downloaded yet" on its asset.
+  Future<void> _prefetchPhotos(RoutePack pack) async {
+    final photos = _photos;
+    if (photos == null) return;
+
+    final urls = <String>{
+      for (final asset in pack.assets)
+        if (referencePhotoUrl(asset.raw['imageUrl']) case final String url) url,
+    };
+    for (final url in urls) {
+      try {
+        await photos(url);
+      } catch (_) {}
+    }
   }
 
   /// FR-2.8 — downloading a route is the technician deliberately preparing
@@ -133,9 +156,16 @@ class RouteDownloadService {
   /// relied on to verify against. No server-side enforcement of this
   /// threshold (SR-2 only gives the freshness stamp); it's a client policy,
   /// kept here rather than scattered across widgets.
-  static bool isStale(DownloadedRoutePack pack, {Duration maxAge = const Duration(hours: 24)}) =>
+  static bool isStale(DownloadedRoutePack pack, {Duration maxAge = RouteDownloadService.maxAge}) =>
       pack.age > maxAge;
+
+  /// The agreed window: older than this, a pack (or one cached asset's
+  /// claims, see `claims_freshness.dart`) must be refreshed before a check.
+  static const maxAge = Duration(hours: 24);
 }
+
+/// Downloads one image to the device (FR-2.1's reference photos).
+typedef PhotoPrefetch = Future<void> Function(String imageUrl);
 
 /// Brings one floor's plan (metadata and image) onto the device so FR-2.8
 /// works offline. An interface so [RouteDownloadService] stays testable

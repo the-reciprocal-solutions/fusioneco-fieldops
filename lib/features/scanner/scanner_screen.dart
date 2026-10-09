@@ -16,6 +16,7 @@ import '../../app/router.dart';
 import '../../core/ar/marker_code.dart';
 import '../../core/c2o/c2o_asset_resolver.dart';
 import '../../core/c2o/route_pack.dart';
+import '../../core/c2o/route_walk_context.dart';
 import '../../core/permit/permit_gas.dart';
 import '../../core/scanner/scan_history.dart';
 import '../../core/utils/qr_payload.dart';
@@ -377,7 +378,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   /// `pushReplacement`, so continuous mode (FR-1.2) is still there, scanning,
   /// when the technician backs out.
   void _openAssetDetail(String assetId, String? name) {
-    context.push(Routes.assetDetail(assetId));
+    final scope = widget.activeRouteScope;
+    final routeId = widget.activeRouteId;
+    final routeIds = _activeRouteAssetIds;
+    // FR-5.4 — walking a route: the check is sent saying whether this asset
+    // was on it. Same rule as the flash ([_activeRouteAssetIds] still
+    // loading means "can't tell", so no context rather than a guess).
+    final route = scope == null || routeId == null || routeIds == null
+        ? null
+        : RouteWalkContext(scope: scope, id: routeId, offRoute: !routeIds.contains(assetId));
+    context.push(Routes.assetDetail(assetId, route: route));
   }
 
   @override
@@ -970,15 +980,23 @@ class _C2oSessionStrip extends StatelessWidget {
       ),
       child: Row(
         children: [
-          AppText(
-            context.formatString(
-              'scanner.c2o_session_count'.getString(context),
-              [history.length.toString()],
-            ),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
+          // Flexible: with an off-route chip as well, the row overflowed a
+          // phone's width and squeezed the dots below to nothing — the dots
+          // are the only way to open a scanned asset with its route
+          // (FR-5.4, caught on device 2026-10-08). The count gives way first.
+          Flexible(
+            child: AppText(
+              context.formatString(
+                'scanner.c2o_session_count'.getString(context),
+                [history.length.toString()],
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
           if (flagged > 0) ...[

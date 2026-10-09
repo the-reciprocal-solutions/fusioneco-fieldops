@@ -332,6 +332,55 @@ void main() {
     });
   });
 
+  // FR-2.1 — the reference photo was only ever there online; a route is
+  // walked offline, so its photos come down with it.
+  group('RouteDownloadService.download — reference photos (FR-2.1)', () {
+    test('fetches each real photo link once, skipping junk, and survives a failure', () async {
+      final fetched = <String>[];
+      final routeStore = _FakeRouteStore();
+      final service = RouteDownloadService(
+        fetcher: _FakeFetcher(
+          packAnswer: _packJson(
+            assets: [
+              {'id': 'a1', 'imageUrl': 'https://files/a.jpg'},
+              {'id': 'a2', 'imageUrl': 'https://files/a.jpg'},
+              {'id': 'a3', 'imageUrl': 'https://files/broken.jpg'},
+              {'id': 'a4', 'imageUrl': '/images/assets/seed.jpg'},
+              {'id': 'a5', 'imageUrl': ''},
+              {'id': 'a6'},
+            ],
+          ),
+        ),
+        assetCache: _FakeAssetCache(),
+        routeStore: routeStore,
+        photos: (url) async {
+          fetched.add(url);
+          if (url.contains('broken')) throw StateError('404');
+        },
+      );
+
+      await service.download(scope: RouteScope.package, id: 'pkg-1');
+
+      expect(fetched, unorderedEquals(['https://files/a.jpg', 'https://files/broken.jpg']));
+      expect(routeStore.saved, hasLength(1), reason: 'a failed photo never fails the route');
+    });
+
+    test('referencePhotoUrl keeps only real http(s) links', () {
+      expect(referencePhotoUrl(' https://files/x.jpg '), 'https://files/x.jpg');
+      expect(referencePhotoUrl('http://192.168.0.1:9002/b/x.jpg'), 'http://192.168.0.1:9002/b/x.jpg');
+      expect(referencePhotoUrl('/images/x.jpg'), isNull);
+      expect(referencePhotoUrl('file:///etc/passwd'), isNull);
+      expect(referencePhotoUrl(''), isNull);
+      expect(referencePhotoUrl(42), isNull);
+      expect(
+        AssetDetail.fromClaims({
+          'asset': {'id': 'a', 'imageUrl': '/seed/x.jpg'},
+        })!.imageUrl,
+        isNull,
+      );
+    });
+  });
+
   group('RouteDownloadService.delete / listDownloaded', () {
     test('delete removes the route from the store', () async {
       final routeStore = _FakeRouteStore();

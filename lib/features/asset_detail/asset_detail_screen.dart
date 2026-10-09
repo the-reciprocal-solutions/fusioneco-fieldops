@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +10,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../app/env.dart';
 import '../../app/router.dart';
 import '../../core/c2o/asset_detail.dart';
+import '../../core/c2o/route_walk_context.dart';
 import '../ar/widgets/ar_entry_widgets.dart';
 import '../../state/auth_controller.dart';
 import '../../state/providers.dart';
@@ -30,9 +34,12 @@ import '../../widgets/fe_header.dart';
 /// not), so it is worth the extra request rather than reusing search's
 /// already-fetched data.
 class AssetDetailScreen extends ConsumerStatefulWidget {
-  const AssetDetailScreen({super.key, required this.assetId});
+  const AssetDetailScreen({super.key, required this.assetId, this.route});
 
   final String assetId;
+
+  /// FR-5.4 — handed on to the verify screen; null when not from a route.
+  final RouteWalkContext? route;
 
   @override
   ConsumerState<AssetDetailScreen> createState() => _AssetDetailScreenState();
@@ -161,7 +168,7 @@ class _AssetDetailScreenState extends ConsumerState<AssetDetailScreen> {
                       // 3D/floor-plan wayfinding buttons below it.
                       Padding(
                         padding: const EdgeInsets.only(bottom: 12),
-                        child: _VerifyAssetButton(detail: detail),
+                        child: _VerifyAssetButton(detail: detail, route: widget.route),
                       ),
                       // FR-2.9 — a full native 3D renderer was ruled "Won't
                       // (v1)" in the plan; TwinScreen already hosts the web's
@@ -235,9 +242,10 @@ class _AssetDetailScreenState extends ConsumerState<AssetDetailScreen> {
 /// claimed" shortcut has something to fill in, and the floor id so a
 /// completed verification can offer the floor plan next without re-scanning.
 class _VerifyAssetButton extends StatelessWidget {
-  const _VerifyAssetButton({required this.detail});
+  const _VerifyAssetButton({required this.detail, this.route});
 
   final AssetDetail detail;
+  final RouteWalkContext? route;
 
   @override
   Widget build(BuildContext context) {
@@ -251,6 +259,7 @@ class _VerifyAssetButton extends StatelessWidget {
             claimedSerial: detail.serialNumber,
             claimedTag: detail.assetReferenceId ?? detail.supplierTagNumber,
             floorId: detail.floorId,
+            route: route,
           ),
         ),
         style: ElevatedButton.styleFrom(
@@ -421,10 +430,13 @@ class _RaiseSnagButton extends StatelessWidget {
   }
 }
 
-/// FR-2.1 — identity block: reference photo, name, reference id, type.
-/// Reference-photo section deliberately removed: real asset records in this
-/// system carry no `imageUrl`, so the old image tile always rendered as an
-/// empty placeholder box. A colored type icon fills that role instead.
+/// FR-2.1 — identity block: name, reference id, type, and the reference
+/// photo when the asset has one. The photo was once removed because most
+/// records carry no `imageUrl` and the tile rendered as an empty box; it is
+/// now shown only when there is a real link ([referencePhotoUrl]), from the
+/// on-device copy when there is one (route downloads prefetch them), and
+/// says so plainly when it was never downloaded. The type icon stays as the
+/// fallback for the many assets with no photo.
 class _IdentityBlock extends StatelessWidget {
   const _IdentityBlock({required this.detail});
 
@@ -492,6 +504,10 @@ class _IdentityBlock extends StatelessWidget {
               ),
             ],
           ),
+          if (detail.imageUrl case final String url) ...[
+            const SizedBox(height: 16),
+            _ReferencePhoto(url: url, title: detail.assetName ?? detail.assetReferenceId ?? detail.id),
+          ],
           if (detail.type != null || detail.category != null) ...[
             const SizedBox(height: 16),
             Row(
@@ -910,4 +926,121 @@ class _Row extends StatelessWidget {
       ),
     );
   }
+}
+
+/// FR-2.1 — the reference photo: the on-device copy first (works offline),
+/// else a download that also keeps the copy for next time. Tap for full
+/// screen with pinch-zoom — a technician compares it against the real kit.
+class _ReferencePhoto extends ConsumerStatefulWidget {
+  const _ReferencePhoto({required this.url, required this.title});
+
+  final String url;
+  final String title;
+
+  @override
+  ConsumerState<_ReferencePhoto> createState() => _ReferencePhotoState();
+}
+
+class _ReferencePhotoState extends ConsumerState<_ReferencePhoto> {
+  late Future<File?> _file = _load();
+
+  Future<File?> _load() async {
+    final cache = ref.read(assetPhotoCacheProvider);
+    try {
+      return await cache.cached(widget.url) ?? await cache.getOrDownload(widget.url);
+    } catch (_) {
+      return null; // offline and never downloaded
+    }
+  }
+
+  @override
+  void didUpdateWidget(_ReferencePhoto old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url) _file = _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<File?>(
+      future: _file,
+      builder: (context, snapshot) {
+        final file = snapshot.data;
+        if (snapshot.connectionState != ConnectionState.done) {
+          return Container(
+            height: 160,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            alignment: Alignment.center,
+            child: const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+            ),
+          );
+        }
+        if (file == null) {
+          return Row(
+            children: [
+              const Icon(LucideIcons.imageOff, size: 14, color: Colors.white70),
+              const SizedBox(width: 6),
+              Expanded(
+                child: AppText.bodySmall(
+                  'assetDetail.photo_not_downloaded'.getString(context),
+                  color: Colors.white.withValues(alpha: 0.92),
+                ),
+              ),
+            ],
+          );
+        }
+        return Semantics(
+          button: true,
+          label: 'assetDetail.photo_open'.getString(context),
+          child: GestureDetector(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                fullscreenDialog: true,
+                builder: (_) => _PhotoViewer(file: file, title: widget.title),
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.file(
+                file,
+                height: 160,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                // A corrupt or non-image file must not break the screen.
+                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PhotoViewer extends StatelessWidget {
+  const _PhotoViewer({required this.file, required this.title});
+
+  final File file;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: Colors.black,
+    appBar: AppBar(
+      backgroundColor: Colors.black,
+      foregroundColor: Colors.white,
+      // The app theme's title style and status bar are for light screens;
+      // both read dark-on-black here without these (seen on device).
+      systemOverlayStyle: SystemUiOverlayStyle.light,
+      title: AppText.title(title, color: Colors.white, maxLines: 1, overflow: TextOverflow.ellipsis),
+    ),
+    body: Center(
+      child: InteractiveViewer(maxScale: 5, child: Image.file(file)),
+    ),
+  );
 }

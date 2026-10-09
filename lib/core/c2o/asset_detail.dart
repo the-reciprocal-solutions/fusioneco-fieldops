@@ -119,7 +119,7 @@ class AssetDetail {
       assetName: a['assetName']?.toString(),
       type: a['type']?.toString(),
       category: a['category']?.toString(),
-      imageUrl: _nonEmpty(a['imageUrl']),
+      imageUrl: referencePhotoUrl(a['imageUrl']),
       locationPath: locationPath,
       manufacturer: a['manufacturer']?.toString(),
       model: a['model']?.toString(),
@@ -157,7 +157,7 @@ class AssetDetail {
       assetName: _nonEmpty(a['assetName']) ?? _nonEmpty(a['name']),
       type: _nonEmpty(a['type']),
       category: _nonEmpty(a['category']),
-      imageUrl: _nonEmpty(a['imageUrl']),
+      imageUrl: referencePhotoUrl(a['imageUrl']),
       manufacturer: _nonEmpty(a['manufacturer']),
       model: _nonEmpty(a['model']),
       serialNumber: _nonEmpty(a['serialNumber']),
@@ -296,4 +296,15 @@ String? _nonEmpty(dynamic v) {
 DateTime? _parseDate(dynamic v) {
   if (v == null) return null;
   return DateTime.tryParse(v.toString());
+}
+
+/// FR-2.1 — an asset's `imageUrl` when it is a real http(s) link, else
+/// null. Seed data carries bare paths that were never uploaded anywhere;
+/// those would only ever fail, so they count as "no photo".
+String? referencePhotoUrl(Object? value) {
+  if (value is! String) return null;
+  final trimmed = value.trim();
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null || !(uri.isScheme('http') || uri.isScheme('https')) || uri.host.isEmpty) return null;
+  return trimmed;
 }

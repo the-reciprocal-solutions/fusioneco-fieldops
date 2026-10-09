@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../core/c2o/route_walk_context.dart';
 import '../core/offline/sync_client.dart';
 
 /// FR-3.1 — one of five outcomes. Matches the server's enum exactly
@@ -59,6 +60,7 @@ class FieldVerificationRequest {
     this.claimedTag,
     this.shownRegister = const {},
     this.arContext,
+    this.routeContext,
   });
 
   final VerificationResult result;
@@ -94,6 +96,9 @@ class FieldVerificationRequest {
   /// when the check was started in AR (P-006). The server ignores unknown
   /// keys until AR-24 stores it.
   final Map<String, dynamic>? arContext;
+
+  /// FR-5.4 — the route this check was started from, if any.
+  final RouteWalkContext? routeContext;
 
   /// Capped at 8 client-side (FR-3.4) — the server has no explicit limit.
   final List<VerificationPhoto> photos;
@@ -136,6 +141,7 @@ class FieldVerificationRequest {
         'assetReferenceId': ?claimedTag,
       },
     'arContext': ?arContext,
+    'routeContext': ?routeContext?.toJson(),
   };
 
   /// The queued upload for each entry in [photos], keyed to the same

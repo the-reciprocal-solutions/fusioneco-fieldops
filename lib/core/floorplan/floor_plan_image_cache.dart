@@ -16,10 +16,17 @@ import 'package:path_provider/path_provider.dart';
 /// either on first open, or when a route is downloaded (the technician is
 /// deliberately preparing to lose signal, and a route touches few floors —
 /// see `RouteFloorPlanPrefetcher`).
+///
+/// FR-2.1 reuses it for asset reference photos, in their own [folder]
+/// (`assetPhotoCacheProvider`): the same "download once, key by URL" rule
+/// fits a photo exactly.
 class FloorPlanImageCache {
-  FloorPlanImageCache({Dio? dio}) : _dio = dio ?? Dio();
+  FloorPlanImageCache({Dio? dio, this.folder = 'floor_plans'}) : _dio = dio ?? Dio();
 
   final Dio _dio;
+
+  /// Sub-folder of the app-support directory these files live in.
+  final String folder;
 
   /// The cached file for [imageUrl], or null if it has never been
   /// downloaded (or the on-disk copy has gone missing). Never touches the
@@ -47,7 +54,7 @@ class FloorPlanImageCache {
     );
     final bytes = response.data;
     if (bytes == null) {
-      throw StateError('Floor plan download returned no data: $imageUrl');
+      throw StateError('Image download returned no data: $imageUrl');
     }
 
     // Write to a temp file first — a crash or kill mid-write must never
@@ -62,7 +69,7 @@ class FloorPlanImageCache {
   Future<File> _fileFor(String imageUrl) async {
     final dir = await getApplicationSupportDirectory();
     final ext = _extensionFor(imageUrl);
-    return File(p.join(dir.path, 'floor_plans', '${_keyFor(imageUrl)}$ext'));
+    return File(p.join(dir.path, folder, '${_keyFor(imageUrl)}$ext'));
   }
 
   String _keyFor(String url) => url.replaceAll(RegExp(r'[^A-Za-z0-9]'), '_');

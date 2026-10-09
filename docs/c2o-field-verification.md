@@ -48,7 +48,8 @@ flowchart TD
     QUEUE -->|flushQueue| UPL
     POST -->|"response.captureConflict"| CONF[("conflicts, dropped = false")]
     POST --> SRV["server sets assets.c2oVerificationStatus"]
-    SRV -.->|"only seen after the next pack download"| PROG["RouteDetailScreen progress (FR-5.3)"]
+    REPO -->|"_markChecked: cached status set at submit"| PROG["RouteDetailScreen progress (FR-5.3)"]
+    QUEUE -->|"applyQueuedChecks: 'Waiting to upload'"| PROG
 ```
 
 ### Route pack download, refresh and release
@@ -177,11 +178,11 @@ Only IDs that appear in this area's code comments.
 | FR-4.7 | One queued upload per photo | [field_verification_repository.dart:14-19](../lib/data/field_verification_repository.dart#L14), [:83-124](../lib/data/field_verification_repository.dart#L83) |
 | FR-4.8 | Capture conflict: the register changed since capture | `captureClaims` [field_verification_repository.dart:58-65](../lib/data/field_verification_repository.dart#L58), [sync_client.dart:441-466](../lib/core/offline/sync_client.dart#L441) |
 | FR-5.1 | Route pack download with a size estimate first | [route_pack.dart](../lib/core/c2o/route_pack.dart), [route_download_service.dart](../lib/core/c2o/route_download_service.dart), [route_list_screen.dart](../lib/features/routes/route_list_screen.dart) |
-| FR-5.2 / 5.3 | Room-grouped list; verified/outstanding/flagged | [route_progress.dart](../lib/core/c2o/route_progress.dart), [route_detail_screen.dart](../lib/features/routes/route_detail_screen.dart) |
-| FR-5.4 | Off-route marking while walking a route | [scanner_screen.dart:40-46](../lib/features/scanner/scanner_screen.dart#L40), [:144-149](../lib/features/scanner/scanner_screen.dart#L144), `Routes.scanForRoute` |
+| FR-5.2 / 5.3 | Walk order (level → room, natural sort); verified/outstanding/flagged that moves at submit, offline included | [route_progress.dart](../lib/core/c2o/route_progress.dart) (`groupRouteForWalk`, `withLocalVerificationStatus`, `applyQueuedChecks`), [route_detail_screen.dart](../lib/features/routes/route_detail_screen.dart) |
+| FR-5.4 | Off-route marking while walking a route, sent with the check as `routeContext` | [route_walk_context.dart](../lib/core/c2o/route_walk_context.dart), [scanner_screen.dart](../lib/features/scanner/scanner_screen.dart) `_openAssetDetail`, `Routes.scanForRoute` |
 | FR-5.5 | Routes assigned to me | [assigned_route.dart](../lib/core/c2o/assigned_route.dart), [route_assignment_repository.dart](../lib/data/route_assignment_repository.dart) |
 | FR-5.6 | Route detail survives a force-quit (everything read from the DB) | [route_detail_screen.dart:18-23](../lib/features/routes/route_detail_screen.dart#L18) |
-| FR-5.7 | Pack age; hard block after 24h | [route_download_service.dart:107-112](../lib/core/c2o/route_download_service.dart#L107), [route_detail_screen.dart:91-95](../lib/features/routes/route_detail_screen.dart#L91) |
+| FR-5.7 | Pack age; hard block after 24h on the route screen AND in the verify screen (every way in) | `RouteDownloadService.maxAge`, [claims_freshness.dart](../lib/core/c2o/claims_freshness.dart), [route_detail_screen.dart](../lib/features/routes/route_detail_screen.dart), `_StaleClaimsBlock` in [field_verification_screen.dart](../lib/features/field_verification/field_verification_screen.dart) |
 | FR-5.8 | Hand-over display; release; warning about queued checks | [assigned_route.dart:41-49](../lib/core/c2o/assigned_route.dart#L41), [:99-117](../lib/core/c2o/assigned_route.dart#L99), [route_list_screen.dart:269-310](../lib/features/routes/route_list_screen.dart#L269) |
 | SR-1 | Bulk route-pack endpoint | [route_pack_repository.dart:22](../lib/data/route_pack_repository.dart#L22) |
 | SR-2 | Pack freshness stamp (`asOf`) and `versionTag` for 304 | [route_pack.dart:100-106](../lib/core/c2o/route_pack.dart#L100), `DownloadedRoutePack` [offline_db.dart:364](../lib/core/offline/offline_db.dart#L364) |

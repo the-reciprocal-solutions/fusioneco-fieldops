@@ -12,6 +12,7 @@ import '../core/storage/secure_store.dart';
 import '../core/storage/session_store.dart';
 import '../core/c2o/c2o_asset_resolver.dart';
 import '../core/c2o/route_download_service.dart';
+import '../core/c2o/claims_freshness.dart';
 import '../core/floorplan/floor_plan_image_cache.dart';
 import '../data/ar_repository.dart';
 import '../data/asset_repository.dart';
@@ -95,6 +96,11 @@ final floorPlanImageCacheProvider = Provider<FloorPlanImageCache>(
   (ref) => FloorPlanImageCache(),
 );
 
+/// FR-2.1 — asset reference photos, same on-disk store as plans, own folder.
+final assetPhotoCacheProvider = Provider<FloorPlanImageCache>(
+  (ref) => FloorPlanImageCache(folder: 'asset_photos'),
+);
+
 /// FR-1.1 — offline-first resolve of a scanned c2o tag.
 final c2oAssetResolverProvider = Provider<C2oAssetResolver>(
   (ref) => C2oAssetResolver(
@@ -118,6 +124,17 @@ final routeDownloadServiceProvider = Provider<RouteDownloadService>(
       ref.watch(floorPlanRepositoryProvider),
       ref.watch(floorPlanImageCacheProvider),
     ),
+    photos: (url) => ref.read(assetPhotoCacheProvider).getOrDownload(url),
+  ),
+);
+
+/// FR-5.7 — refreshes one asset's stale claims before a check may start.
+final claimsRefresherProvider = Provider<ClaimsRefresher>(
+  (ref) => ClaimsRefresher(
+    cache: ref.watch(offlineDbProvider),
+    routes: ref.watch(offlineDbProvider),
+    downloader: ref.watch(routeDownloadServiceProvider),
+    fetcher: ref.watch(c2oFieldVerificationRepositoryProvider),
   ),
 );
 

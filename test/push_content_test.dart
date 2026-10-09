@@ -76,14 +76,16 @@ void main() {
       expect(pushActionsFor(_push(title: kInviteTitle, entityType: 'work_order')), [PushAction.open]);
     });
 
-    test('new work and at-risk work offer the job and the order list', () {
-      expect(pushActionsFor(_push(entityType: 'WorkOrder', entityId: 'w')), [PushAction.open, PushAction.myOrders]);
-      expect(pushActionsFor(_push(entityType: 'WorkOrder', entityId: 'w', type: 'warning')), [PushAction.open, PushAction.myOrders]);
+    // 2026-10-10 (owner: "Mark read" on the tray): the order-list button
+    // gave way to Mark read; the order list is one tap away in the app.
+    test('new work and at-risk work offer the job and Mark read', () {
+      expect(pushActionsFor(_push(entityType: 'WorkOrder', entityId: 'w')), [PushAction.open, PushAction.markRead]);
+      expect(pushActionsFor(_push(entityType: 'WorkOrder', entityId: 'w', type: 'warning')), [PushAction.open, PushAction.markRead]);
     });
 
-    test('routes offer the scanner; general and withdrawn offer nothing', () {
+    test('routes offer the scanner; general offers Mark read; withdrawn offers nothing', () {
       expect(pushActionsFor(_push(entityType: 'c2o_route_assignment', entityId: 'r')), [PushAction.open, PushAction.scan]);
-      expect(pushActionsFor(_push(entityType: 'room_booking')), isEmpty);
+      expect(pushActionsFor(_push(entityType: 'room_booking')), [PushAction.markRead]);
       expect(pushActionsFor(_push(title: 'Assignment reassigned', entityType: 'work_order', entityId: 'w')), isEmpty);
     });
 
@@ -99,6 +101,13 @@ void main() {
           PushKind.permit => _push(entityType: 'PermitToWork', entityId: 'x'),
           PushKind.arInstall => _push(entityType: 'ar_install_request', entityId: 'x'),
           PushKind.certification => _push(entityType: 'Technician', entityId: 'x'),
+          PushKind.finding => _push(entityType: 'c2o_finding', entityId: 'x'),
+          PushKind.message => _push(entityType: 'conversation:snag:message', entityId: 'x'),
+          PushKind.mention => _push(entityType: 'conversation:permit:mention', entityId: 'x'),
+          PushKind.agentSession => _push(entityType: 'session:done', entityId: 'x'),
+          PushKind.schedule => _push(entityType: 'schedule:failed', entityId: 'x'),
+          PushKind.alert => _push(entityType: 'FlowAgentSuggestion', entityId: 'x'),
+          PushKind.digest => PushData.fromMap(const {'kind': 'digest', 'entityType': 'digest', 'v': '2'}),
           PushKind.general => _push(),
         };
         expect(pushKindOf(sample), kind);

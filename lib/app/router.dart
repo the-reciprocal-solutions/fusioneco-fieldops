@@ -59,6 +59,14 @@ abstract final class Routes {
   static const profile = '/profile';
   static const calendar = '/calendar';
   static const notifications = '/notifications';
+
+  /// The notifications screen on one tab ([group] = a `NoticeGroup` wire
+  /// name) and/or with one notification's details sheet open ([open] = its
+  /// id) — where a tap with no screen of its own lands, never a dead tap.
+  static String notificationsFor({String? group, String? open}) {
+    final query = <String, String>{'group': ?group, 'open': ?open};
+    return Uri(path: notifications, queryParameters: query.isEmpty ? null : query).toString();
+  }
   static const scan = '/scan';
   static const nameplateOcr = '/nameplate-ocr';
   static const c2oSearch = '/c2o-search';
@@ -416,7 +424,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: Routes.notifications,
         parentNavigatorKey: _rootKey,
-        builder: (context, state) => const NotificationsScreen(),
+        builder: (context, state) => NotificationsScreen(
+          initialGroup: state.uri.queryParameters['group'],
+          openId: state.uri.queryParameters['open'],
+        ),
       ),
       GoRoute(
         path: Routes.scan,

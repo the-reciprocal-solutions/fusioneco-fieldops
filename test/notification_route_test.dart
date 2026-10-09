@@ -109,9 +109,11 @@ void main() {
         routeForNotification(_notification(entityType: 'WorkOrder')),
         isNull,
       );
+      // A type the app has no screen for (here a C2O finding) → null, and
+      // the caller shows its details sheet instead.
       expect(
         routeForNotification(
-          _notification(entityType: 'Asset', entityId: 'a-1'),
+          _notification(entityType: 'c2o_finding', entityId: 'f-1'),
         ),
         isNull,
       );

@@ -175,13 +175,12 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
     if (photo == null || !mounted) return;
     if (_photos.any((p) => p.fileName == photo.fileName)) return;
     setState(() => _photos.insert(0, photo));
-    _autoAi();
   }
 
-  /// First photo in → ask the assistant once, in the background.
-  void _autoAi() {
-    if (_ai == null && !_aiRunning && _photos.isNotEmpty) unawaited(_runAi());
-  }
+  // Photo analysis no longer starts by itself (owner, 2026-10-10: it is not
+  // the headline AI feature on a snag). The technician taps "Check photo" on
+  // SnagAiPanel, which calls [_runAi]; the main AI help is the estimate &
+  // quote card on the snag detail screen.
 
   Future<void> _runAi() async {
     if (_photos.isEmpty) return;
@@ -288,7 +287,6 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
     );
     if (photo != null && mounted) {
       setState(() => _photos.add(photo));
-      _autoAi();
     }
   }
 
@@ -296,7 +294,6 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
     final photo = await PhotoCapture().pickFromGallery();
     if (photo != null && mounted) {
       setState(() => _photos.add(photo));
-      _autoAi();
     }
   }
 
@@ -422,40 +419,27 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
       photoRegions: _keptRegions,
     );
     try {
-      final pool = await repo.local(buildingId: _buildingId);
-      final candidates = SnagDuplicateFinder.find(
-        draft.signature(raisedBy: actor.id),
-        pool,
+      // UC-3 duplicate guard: the photo goes to an existing (open) snag only
+      // when the person picks it in the sheet — see SnagRepository.saveShot.
+      final r = await repo.saveShot(
+        draft,
+        actor,
+        mode: SnagShotMode.single,
+        confirmDuplicate: (candidates) async => mounted
+            ? showDuplicateSheet(
+                context,
+                candidates: candidates,
+                draftPhoto: Image.memory(_photos.first.bytes, fit: BoxFit.cover),
+              )
+            : const DuplicateDecision(DuplicateChoice.different),
       );
-      if (candidates.isNotEmpty && mounted) {
-        final decision = await showDuplicateSheet(
-          context,
-          candidates: candidates,
-          draftPhoto: Image.memory(_photos.first.bytes, fit: BoxFit.cover),
-        );
-        if (decision.choice == DuplicateChoice.sameIssue &&
-            decision.snag != null) {
-          final r = await repo.addEvidence(
-            decision.snag!,
-            actor,
-            photos: _photos,
-            duplicateReport: true,
-            firstPhotoRegions: _keptRegions,
-          );
-          if (!mounted) return;
-          bumpSnags(ref);
-          context.pushReplacement(Routes.snagDetail(r.snag.id));
-          return;
-        }
-      }
-      final r = await repo.raise(draft, actor);
       if (!mounted) return;
       _dirty = false;
       bumpSnags(ref);
       showTechPopup(
         context,
-        message: r.synced
-            ? snagTr(context, 'snags.saved_ref', [r.snag.displayRef])
+        message: r.addedToExisting
+            ? snagTr(context, 'snags.added_to', [r.snag.displayRef])
             : 'snags.saved_sending'.getString(context),
       );
       context.pushReplacement(Routes.snagDetail(r.snag.id));

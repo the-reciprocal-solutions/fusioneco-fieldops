@@ -553,10 +553,8 @@ class SyncClient {
             keepOnServerError: kKeepOnServerErrorEntityTypes.contains(mutation.entityType),
           );
           final code = _codeOf(e);
-          await _reportFailure(
-            mutation,
-            ReplayFailure(status: status, outcome: outcome, code: code),
-          );
+          final failure = ReplayFailure(status: status, outcome: outcome, code: code);
+          if (outcome != FlushOutcome.drop) await _reportFailure(mutation, failure);
           switch (outcome) {
             case FlushOutcome.stopRun:
               stopped = true;
@@ -575,6 +573,12 @@ class SyncClient {
               await _db.deleteMutation(mutation.clientMutationId);
               _lastStatus.remove(mutation.clientMutationId);
               changed = true;
+              // After the delete (2026-10-10): the hook may re-read the
+              // record from the server (SnagRepository.afterReplayFailed
+              // does, since no delta pull ever restores a refused change),
+              // and it must see the queue as it now is — without the write
+              // that was just refused.
+              await _reportFailure(mutation, failure);
             case FlushOutcome.retryLater:
               await _db.bumpAttempts(
                 mutation.clientMutationId,

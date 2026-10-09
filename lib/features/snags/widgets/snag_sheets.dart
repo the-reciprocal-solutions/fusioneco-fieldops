@@ -237,13 +237,8 @@ abstract final class FeBadgeStyleFor {
 // Duplicate guard (UC-3)
 // ---------------------------------------------------------------------------
 
-enum DuplicateChoice { sameIssue, different }
-
-class DuplicateDecision {
-  const DuplicateDecision(this.choice, [this.snag]);
-  final DuplicateChoice choice;
-  final Snag? snag;
-}
+// DuplicateChoice / DuplicateDecision live in core/snag/snag_rules.dart (pure,
+// shared with SnagRepository.saveShot).
 
 /// "Looks like this might already be raised." The inspector's photo sits
 /// beside each candidate's, because a photo comparison is how people

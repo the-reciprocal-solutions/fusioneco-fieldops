@@ -37,7 +37,7 @@ FieldOps refuses partner (contractor) logins, so contractors close their own sna
 |---|---|---|---|
 | UC-1 | **Walk mode.** Choose building and survey, then floor and room. Take a photo, pick trade and severity, save, and keep going. The camera stays live, a film strip shows this room's snags, and **Next room** asks you to confirm the room is done. | Inspector | P5. The core of snagging. |
 | UC-2 | **Room sweep.** Mark a room *Clear* (inspected, no snags) or *Done (n snags)*. Coverage is shown per floor. | Inspector | P6. Coverage is what makes a takeover survey believable. |
-| UC-3 | **Duplicate guard.** On save, similar open snags are scored and shown side by side. *Same issue* adds the photo as +1 evidence and bumps "Also reported by". *Different* saves a new snag. Works offline over the local cache. | Inspector | P2 |
+| UC-3 | **Duplicate guard.** On save **from the raise form**, similar open / in-progress snags are scored and shown side by side. *Same issue* adds the photo as +1 evidence (stage `extra`) and bumps "Also reported by". *Different* saves a new snag. Works offline over the local cache. **Walk mode does not run it** since 2026-10-10: one walk shot = one new snag (§6 "Integrity"). | Inspector | P2 |
 | UC-4 | **Photo markup.** Arrow, circle or freehand over the photo, using the existing `PhotoAnnotationScreen`. | Inspector | P3 |
 | UC-5 | **Quick snag from context.** From an asset or a work order, a pre-filled raise form: building, floor, room and asset are already set, and the work order is linked. | Technician | P7 |
 | UC-6 | **Fix → Ready.** *Start fixing*, then *Mark ready*. Mark ready opens the **ghost camera**, which overlays the before photo on the live preview so the after photo is taken from the same angle. | Fixer | P1 |
@@ -68,11 +68,8 @@ flowchart LR
   Setup --> Room[Pick floor › room]
   Room --> Cam((Live camera))
   Cam -->|shutter| Compose[Photo + AI highlights<br/>details sheet: AI · trade · severity · Save]
-  Compose -->|save| Dup{Similar open<br/>snag nearby?}
-  Dup -->|no| Saved[Saved on device<br/>haptic + counter]
-  Dup -->|same issue| PlusOne[+1 evidence on<br/>existing snag]
+  Compose -->|Save & next| Saved[NEW snag saved on device<br/>haptic + counter]
   Saved --> Cam
-  PlusOne --> Cam
   Cam -->|Next room| Sweep[Room done / clear]
   Sweep --> Room
   Hub -->|Verify n| Verify[Compare slider<br/>accept / reject]
@@ -167,9 +164,59 @@ flowchart LR
 
 **Speed.** Buildings and room trees are cache-first with background revalidation. Building pulls ask `view=list` (no `activity`) and, after one full pull, `updatedSince=<last serverTime − 2 min>`; a full pull (with prune) runs at most every 6 h. Rows are written in one batch (`SnagStore.upsertSnags`). The hub list is lazy (slivers); thumbnails are memoised and decoded at display size. The detail screen opens from the local row and reads the full snag in the background.
 
-**AI assist (2026-10-06).** After the first photo the create screen asks `POST /api/snags/ai/assist` (server doc §4a) in the background: suggestions for title, trade, severity, issue type, description, likely cause, fix and who should fix it, each with Apply (and Apply all); photo tips (dark/blurry are measured on the phone, `core/snag/snag_photo_quality.dart`, so they work offline); open snags nearby that look the same; and what is still missing. Fields set from it carry an "AI suggested" badge until edited. Walk mode shows the AI strip at the top of its details sheet and ✨ marks on the chips. Since 2026-10-06 it also highlights where the defect is on the photo (`regions`, see §4 "AI defect highlights"); the server waits up to 15 s for the engine and the app 24 s. Offline it says "AI assist needs a connection. Your snag still saves." Nothing is saved without a tap.
+**AI estimate & quote help (2026-10-10) — the main AI help on a snag.** The owner's direction: photo analysis is not the headline; the AI should work out what the fix needs and roughly what it costs, and help prepare a quote. The snag detail screen has an "Estimate & quote" card (`features/snags/widgets/snag_estimate_card.dart`, model `domain/snag_estimate.dart`, online-only `data/snag_estimate_repository.dart`; server doc §4c):
 
-**Merge on read.** The server's copy of a snag replaces the local copy unless that snag still has a pending mutation in the queue, in which case the local copy is ahead and wins. Snags that exist only locally are kept. A server-side rejection (a 4xx such as `409 SELF_VERIFY`) goes to the conflict log through the normal flush policy. Once that mutation is gone, the next fetch restores the server's truth.
+- On open it asks `POST /api/snags/:id/ai/estimate` with `ai:false` — quick, no AI wait. It shows a cached estimate if one exists, plus the parts that need no AI: who pays (contractor / warranty / facilities team, with a back-charge pill), DLP / warranty, the suggested priority (**Apply**), a fix-by date from the SLA policy (**Set as due**), and similar past snags (count, median days, cost range).
+- **Work out scope & cost** asks the AI (~15–25 s): steps, trades, crew and hours, materials matched to the catalogue with stock ("3 free" / "short 2"), and an approximate cost range (labour + materials + contingency) with every assumption listed. **Every amount is the server's.** A material it can't price shows **Price needed**, never a guess, and the total says what's left out.
+- **Prepare quote** opens a review sheet: tick/untick lines, fill in any missing price (the button stays off until every included line has one), **Create draft quote** → a Draft in the office's Quotes, linked on the snag's thread. **Reserve / request materials** (catalogue items only): reserve from stock or raise a purchase request per line. **Create work order** (when none is linked): a WO with the scope steps, technician matched by trade.
+- Each approval mints one `requestId` per sheet and reuses it on retry, so a double tap returns the first quote/WO. Nothing is queued offline — these are decisions made while looking at live numbers; offline the card says it needs a connection.
+
+```mermaid
+flowchart LR
+  D[Snag detail opens] -->|ai:false| E[estimate: cached + who pays, DLP, fix-by, similar]
+  E -->|Work out scope & cost| A[AI: steps, crew, hours, materials]
+  A --> S[Server: catalogue match, stock, prices, sums]
+  S --> C[Card: cost range · Price needed · assumptions]
+  C -->|review + Create draft quote| Q[Draft quote]
+  C -->|review + Confirm| M[Reserve / purchase request]
+  C -->|Create work order| W[Work order linked]
+```
+
+**Photo check is optional (2026-10-10).** The create step and walk mode no longer ask the AI about the photo by themselves. The create step shows one small **Check photo** chip (`SnagAiPanel`); walk mode shows the chip on the frozen shot, and its details-sheet strip appears only after the technician asked. Highlights (`regions`) still come with the answer.
+
+**AI assist (2026-10-06, now on request — see above).** After the first photo the create screen asks `POST /api/snags/ai/assist` (server doc §4a) in the background: suggestions for title, trade, severity, issue type, description, likely cause, fix and who should fix it, each with Apply (and Apply all); photo tips (dark/blurry are measured on the phone, `core/snag/snag_photo_quality.dart`, so they work offline); open snags nearby that look the same; and what is still missing. Fields set from it carry an "AI suggested" badge until edited. Walk mode shows the AI strip at the top of its details sheet and ✨ marks on the chips. Since 2026-10-06 it also highlights where the defect is on the photo (`regions`, see §4 "AI defect highlights"); the server waits up to 15 s for the engine and the app 24 s. Offline it says "AI assist needs a connection. Your snag still saves." Nothing is saved without a tap.
+
+**Merge on read.** The server's copy of a snag replaces the local copy unless that snag still has a pending mutation in the queue, in which case the local copy is ahead and wins. Snags that exist only locally are kept. A server-side rejection (a 4xx such as `409 SELF_VERIFY`) goes to the conflict log through the normal flush policy, and the refused snag is re-read from the server at once (a delta pull never would: the server row did not change). Since 2026-10-10 "replaces" means **field by field** — see "Integrity" below.
+
+**Integrity (2026-10-10, owner iPhone report).** Two reports: "I captured one photo in walk mode … it got added to an existing snag's after-photos" and "some snags were not visible, some status and metadata missing". Causes and rules:
+
+| Cause | Rule now | Where |
+|---|---|---|
+| Walk Save & next ran the duplicate guard. Room + trade + the default type `defect` = 0.65 ≥ 0.6, so most shots in a room with another live same-trade snag opened "Already raised?"; its primary button put the shot on THAT snag (ready ones included, beside their after-photos) and raised nothing — the walk's snag never existed. | One walk shot = one new snag (`saveShot(mode: walk)`); the guard runs on the raise form only, offers open / in-progress snags only, and a "+1" goes only to the snag picked if it is still a candidate. | `SnagRepository.saveShot`, `SnagDuplicateFinder.find` |
+| Screens hand writes a `Snag` built minutes earlier (Mark ready waits on the camera); writing on top of it put back the old status, photos, timeline. | Every write re-reads the newest local copy (`_fresh`). | `transition`, `addEvidence`, `comment` |
+| A draft id already on the phone replaced that other snag's row. | `raise` refuses it (StateError + log). | `raise` |
+| A pull replaced the evidence list wholesale: the device's own photo the server never got (upload refused, placeholder never swapped) vanished. A missing key in a list row blanked the field. | `mergeServerRow`: keys the row does not carry keep the device value (explicit `null` still clears); own captures filed under `own/<thisSnagId>/` that the server lacks are kept. | `mergeServerRow`, `mergeEvidence` |
+| A refused change left the optimistic status for up to 6 h (delta pulls never resend an unchanged row). | Dropped write → re-read server copy, keep the "Not sent" issue. The sync client now reports a drop after deleting it from the queue. | `afterReplayFailed`, `SyncClient.flushQueue` |
+| Full-pull prune could delete a server-known row holding unsent work. | Rows with local-only photos or a send issue are never pruned. | `refresh` |
+| A device clock moved backwards kept every pull a delta. | Negative "since last full pull" → full pull. Cursor key bumped to `snag.cursor.v2.*` so every device does one full pull after updating. | `refresh` |
+| Lean rows (no timeline) for snags new to the phone. | Each full pull re-reads up to 25 rows missing their SN- number or timeline. | `_repairAfterFullPull` |
+| A reused thumbnail widget showed the previous snag's photo while the new lookup ran. | `SnagPhoto`'s `FutureBuilder` is keyed by evidence. | `snag_visuals.dart` |
+
+Server side (same day): `/evidence` can never add after-photos (`after` → `extra`), evidence appends are idempotent on id, an evidence id already on another snag is `409 EVIDENCE_ID_CONFLICT`, lean lists omit `activity` instead of sending `[]`, and `updatedSince` is inclusive — server `docs/kb/learnings/2026-10-10-snag-walk-shot-misfiled-and-list-merge.md`.
+
+**Developer integrity log** (never shown to users): `snag_media/diag/integrity.jsonl`, one JSON event per line, capped at 500, kept across sign-out; `[snag-integrity]` lines in debug builds. Kinds: `id-reused`, `stale-write-avoided`, `device-only-evidence-kept`, `prune-kept`, `repaired-from-server`, `refused-write-resynced`, `clock-skew-full-pull`, and the two the full-pull scan reports without changing anything — `possible-misattached` ("+1" photos this person added through the duplicate guard: the walk shots of the report) and `after-photo-without-ready` (an after-photo whose taker never marked that snag ready). Read it with `SnagRepository.integrity.read()`.
+
+```mermaid
+flowchart TB
+  Pull[GET /api/snags view=list] --> Merge[mergeServerRow<br/>absent key = keep device value<br/>keep own unsent photos]
+  Merge --> Pending{write still queued?}
+  Pending -->|yes| Skip[device is ahead: skip]
+  Pending -->|no| Save[(snags)]
+  Save --> Full{full pull?}
+  Full -->|yes| Prune[prune — never rows with unsent work]
+  Prune --> Repair[re-read ≤25 rows missing SN- / timeline]
+  Repair --> Scan[SnagIntegrityScan → integrity.jsonl]
+```
 
 **Ids.** The client mints UUIDs for snags, evidence and surveys, so replays are idempotent: `POST /api/snags` with an existing id returns the existing row. The human reference `SN-00042` is assigned by the server. Until the server assigns it, the app shows `#` plus the first 6 characters of the id.
 
@@ -226,6 +273,9 @@ These ran on Flutter 3.47.5 / Dart 3.13.4, bootstrapped in the session scratchpa
 | `test/snag_widgets_test.dart` | card, severity pills, stepper and compare slider in EN and AR at 320 px; no raw i18n keys | 4/4 |
 | `test/snag_screens_test.dart` | hub (scrolled end to end), detail (accept/reject for a ready snag), and survey dashboard in EN and AR at 360 px, with providers overridden | 6/6 |
 | server `snagRules.test.ts`, `runStore.test.ts` (fence), `authLocationGate.test.ts` (exemption) | status mapping, guards, sanitising, never auto-resolving a field snag, 428 exemption for POST only | 79/79 across 8 files |
+| `test/snag_integrity_repro_test.dart` (2026-10-10) | reproducers for the owner's report: ready snag offered as duplicate, id reuse replacing another snag, stale-copy write, own photo dropped by a pull, refused change never restored under deltas, prune of unsent work, clock-skew deltas, lean timeline never repaired, absent list key blanking a field | 9/9 (all 9 failed on HEAD `5c2006c`) |
+| `test/snag_integrity_test.dart` (2026-10-10) | `saveShot` walk vs raise form, integrity log (dedupe, cap, id reuse), full-pull scan, pure merge helpers | 11/11 |
+| server `snagRules.test.ts` `appendEvidence` (2026-10-10) | replay appends nothing, `/evidence` never makes after-photos | 21/21 in file |
 
 `dart analyze` on the whole app reports only the 6 infos that were there before this module. There is no widget test for the walk, raise, verify or ghost-camera screens, because they need the camera plugin; a device run is still owed (PENDING P-001).
 

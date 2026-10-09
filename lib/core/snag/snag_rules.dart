@@ -183,6 +183,16 @@ class DuplicateCandidate {
   final List<String> reasons;
 }
 
+enum DuplicateChoice { sameIssue, different }
+
+/// The person's answer to the duplicate sheet. [snag] is the existing snag
+/// they picked for "Same issue"; null for "Different".
+class DuplicateDecision {
+  const DuplicateDecision(this.choice, [this.snag]);
+  final DuplicateChoice choice;
+  final Snag? snag;
+}
+
 /// Scores open snags against a draft. The cost of a false positive is one
 /// "Different" tap; the cost of a false negative is a duplicate on a punch
 /// list that then gets fixed twice or argued about — so the bar is moderate.
@@ -201,7 +211,12 @@ abstract final class SnagDuplicateFinder {
   }) {
     final out = <DuplicateCandidate>[];
     for (final s in pool) {
-      if (!s.status.isLive) continue;
+      // Open / in progress only. A *ready* snag is waiting for someone to
+      // verify the fix: its gallery is the fix evidence, and a "+1" photo
+      // landing there sits right beside the after-photos (owner iPhone
+      // report 2026-10-10: "my walk photo got added to an existing snag's
+      // after-photos"). A defect seen again on a ready snag is a reject.
+      if (s.status != SnagStatus.open && s.status != SnagStatus.inProgress) continue;
       if (draft.buildingId != null && s.buildingId != null && s.buildingId != draft.buildingId) continue;
       // The inspector knows what they raised minutes ago in this same walk;
       // asking them about it again is pure friction.

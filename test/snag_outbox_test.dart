@@ -440,15 +440,18 @@ void main() {
       localOnly: false,
       updatedAt: DateTime(2026),
     );
+    // The list query (a full pull may follow it with repair reads of single
+    // snags, 2026-10-10).
+    Map<String, dynamic> listQuery() => rig.api.queries[rig.api.calls.lastIndexOf('GET /api/snags')]!;
     expect(await rig.repo.refresh(buildingId: _building), isTrue);
-    expect(rig.api.queries.last!['view'], 'list');
-    expect(rig.api.queries.last!.containsKey('updatedSince'), isFalse);
+    expect(listQuery()['view'], 'list');
+    expect(listQuery().containsKey('updatedSince'), isFalse);
     final s = await rig.local('33333333-3333-4333-8333-333333333333');
     expect(s.title, 'Door closer missing');
     expect(s.activity, hasLength(1), reason: 'lean rows carry no activity; the local timeline stays');
 
     await rig.repo.refresh(buildingId: _building);
-    expect(rig.api.queries.last!['updatedSince'], '2026-10-06T10:03:00.000Z', reason: 'server clock − 2 min overlap');
+    expect(listQuery()['updatedSince'], '2026-10-06T10:03:00.000Z', reason: 'server clock − 2 min overlap');
   });
 
   group('pure helpers', () {

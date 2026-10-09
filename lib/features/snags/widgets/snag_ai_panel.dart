@@ -26,11 +26,20 @@ List<SnagAiField> snagAiFieldsOf(SnagAiResult r) => [
   if (r.responsibleTrade != null) SnagAiField.responsible,
 ];
 
-/// The highlighted "AI assist" panel on the snag create step (2026-10-06).
+/// The optional photo check on the snag create step.
+///
+/// 2026-10-10 (owner): photo analysis is NOT the headline AI feature on a
+/// snag any more — the main AI help is the estimate & quote card on the
+/// snag detail screen (snag_estimate_card.dart). So this no longer runs by
+/// itself and no longer sits in a big highlighted panel: until the
+/// technician taps "Check photo" it is one small chip, while it works it is
+/// one quiet line, and only an answer gets a (flat) card. The defect
+/// highlights are still there on demand.
+///
 /// Violet is the app's AI-only accent (`FeColors.ai`). It never blocks the
-/// snag: the form saves whether or not the panel has answered, and nothing
-/// here changes a field until the technician taps Apply (agents are
-/// read-only by default).
+/// snag: the form saves whether or not it has answered, and nothing here
+/// changes a field until the technician taps Apply (agents are read-only by
+/// default).
 class SnagAiPanel extends StatelessWidget {
   const SnagAiPanel({
     super.key,
@@ -67,15 +76,37 @@ class SnagAiPanel extends StatelessWidget {
     final r = result;
     final fields = r == null ? const <SnagAiField>[] : snagAiFieldsOf(r);
     final pendingFields = fields.where((f) => !applied.contains(f)).toList();
+    // Quiet until asked: no photo → nothing; a photo → one "Check photo" chip.
+    if (!running && r == null) {
+      if (!hasPhoto) return const SizedBox.shrink();
+      return Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: ActionChip(
+          key: const ValueKey('snag-check-photo'),
+          onPressed: onRun,
+          avatar: const Icon(LucideIcons.scanSearch, size: 15, color: FeColors.ai),
+          label: Text('snags.ai.check_photo'.getString(context)),
+          labelStyle: const TextStyle(color: FeColors.ai, fontWeight: FontWeight.w600, fontSize: 13),
+          side: const BorderSide(color: FeColors.aiLine),
+          backgroundColor: Colors.white,
+          visualDensity: VisualDensity.compact,
+        ),
+      );
+    }
+    if (running) {
+      return Row(
+        children: [
+          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.6, color: FeColors.ai)),
+          const SizedBox(width: 8),
+          Expanded(child: AppText.bodySmall('snags.ai.step_photo'.getString(context), color: FeColors.ai)),
+        ],
+      );
+    }
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: FeColors.aiLine),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [FeColors.aiSoft, Colors.white],
-        ),
       ),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       child: AnimatedSize(
@@ -92,8 +123,8 @@ class SnagAiPanel extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      AppText.titleSmall('snags.ai.title'.getString(context), color: FeColors.ai),
-                      AppText.bodySmall('snags.ai.subtitle'.getString(context), color: FeColors.ink2),
+                      AppText.titleSmall('snags.ai.photo_title'.getString(context), color: FeColors.ai),
+                      AppText.bodySmall('snags.ai.photo_subtitle'.getString(context), color: FeColors.ink2),
                     ],
                   ),
                 ),

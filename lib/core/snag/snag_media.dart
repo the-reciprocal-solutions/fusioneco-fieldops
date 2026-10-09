@@ -63,6 +63,17 @@ class SnagMedia {
     return p.joinAll([currentRoot, ...rest.split('/')]);
   }
 
+  /// A developer diagnostics file under `snag_media/diag/` (the snag
+  /// integrity log). Lives beside the photos because, unlike `sync_meta`,
+  /// this folder survives sign-out.
+  Future<File> diagnosticsFile(String name) async => File(p.join((await _dir('diag')).path, name));
+
+  /// True when [stored] is this device's own capture for [snagId]
+  /// (`own/<snagId>/<evidenceId>.<ext>`). The folder is named by the snag id
+  /// at capture time, so it proves which snag a photo was taken for. Pure.
+  static bool isOwnCaptureFor(String stored, String snagId) =>
+      stored.replaceAll(r'\', '/').contains('/$_folder/own/$snagId/');
+
   /// Synchronous peek at an already-resolved file, for a first-frame paint.
   File? peek(SnagEvidence e) => _resolved[_key(e)];
 

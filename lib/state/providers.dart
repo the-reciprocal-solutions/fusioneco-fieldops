@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/push/native_push_actions.dart';
 import '../core/ar/ar_engine.dart';
 import '../core/ar/channel_ar_engine.dart';
 import '../core/network/api_client.dart';
@@ -257,6 +258,9 @@ final unseenNotificationCountProvider = FutureProvider<int>((ref) async {
     final page = await ref
         .watch(notificationsRepositoryProvider)
         .list(limit: 1);
+    // The app icon number follows the bell (iOS; Android launchers count
+    // the tray entries themselves).
+    NativePushActions.setBadge(page.unseenCount);
     return page.unseenCount;
   } catch (_) {
     // A badge is not worth surfacing an error for; show nothing.

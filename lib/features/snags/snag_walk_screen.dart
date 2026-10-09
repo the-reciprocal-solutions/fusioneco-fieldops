@@ -15,7 +15,6 @@ import 'package:vibration/vibration.dart';
 import '../../app/router.dart';
 import '../../core/capture/capture_services.dart';
 import '../../core/snag/snag_photo_quality.dart';
-import '../../core/snag/snag_rules.dart';
 import '../../core/snag/snag_send_state.dart';
 import '../../data/snag_repository.dart';
 import '../../domain/snag.dart';
@@ -79,9 +78,11 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
   SnagSuggestion? _suggestion;
   var _assisting = false;
 
-  // AI assist after the snap (2026-10-06): starts by itself on each shot,
-  // marks its picks with ✨ on the chips (one tap accepts each), never
-  // blocks Save & next. [_aiRun] drops an answer for a photo already saved.
+  // Photo check after the snap: since 2026-10-10 it runs only when the
+  // technician taps "Check photo" on the shot (owner: photo analysis is not
+  // the headline AI feature; the estimate & quote card on the snag is).
+  // Its picks get ✨ on the chips (one tap accepts each); it never blocks
+  // Save & next. [_aiRun] drops an answer for a photo already saved.
   SnagAiResult? _ai;
   var _aiRunning = false;
   var _aiRun = 0;
@@ -273,7 +274,6 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
         _shooting = false;
         if (_recentTrades.isNotEmpty) _trade = _recentTrades.first;
       });
-      unawaited(_runAi());
     } catch (_) {
       if (mounted) setState(() => _shooting = false);
     }
@@ -409,8 +409,10 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
     final survey = _survey;
     final actor = ref.read(snagActorProvider);
     if (photo == null || survey == null || actor == null || _saving) return;
-    if (_recording) await _toggleVoice();
+    // Claimed before the first await: stopping the voice note is async, and
+    // a second tap in that gap used to save the same shot twice.
     setState(() => _saving = true);
+    if (_recording) await _toggleVoice();
     final repo = ref.read(snagRepositoryProvider);
     final draft = SnagDraft(
       id: repo.newId(),
@@ -432,38 +434,14 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
       photoRegions: List.of(_regions),
     );
     try {
-      // UC-3 — the duplicate guard runs against everything this device
-      // knows about the building, offline included.
-      final pool = await repo.local(buildingId: survey.buildingId);
-      final candidates = SnagDuplicateFinder.find(draft.signature(raisedBy: actor.id), pool);
-      var decision = const DuplicateDecision(DuplicateChoice.different);
-      if (candidates.isNotEmpty && mounted) {
-        decision = await showDuplicateSheet(
-          context,
-          candidates: candidates,
-          draftPhoto: Image.memory(photo.bytes, fit: BoxFit.cover),
-        );
-      }
-      final String message;
-      if (decision.choice == DuplicateChoice.sameIssue && decision.snag != null) {
-        final r = await repo.addEvidence(
-          decision.snag!,
-          actor,
-          photos: [photo],
-          duplicateReport: true,
-          firstPhotoRegions: List.of(_regions),
-        );
-        if (!mounted) return;
-        message = snagTr(context, 'snags.added_to', [r.snag.displayRef]);
-      } else {
-        // Local save + queue only (outbox first): back to the camera at
-        // once. The film strip shows each snag's send state.
-        final r = await repo.raise(draft, actor);
-        if (!mounted) return;
-        message = r.synced
-            ? snagTr(context, 'snags.saved_ref', [r.snag.displayRef])
-            : 'snags.saved_sending'.getString(context);
-      }
+      // One shot = one NEW snag (2026-10-10). No duplicate sheet in walk
+      // mode: its "Same issue — add my photo" put walk shots on other
+      // snags (owner iPhone report) — see SnagRepository.saveShot. Local
+      // save + queue only (outbox first): back to the camera at once; the
+      // film strip shows each snag's send state.
+      await repo.saveShot(draft, actor, mode: SnagShotMode.walk);
+      if (!mounted) return;
+      final message = 'snags.saved_sending'.getString(context);
       _recentTrades
         ..remove(_trade)
         ..insert(0, _trade);
@@ -627,9 +605,22 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
     );
   }
 
-  /// The AI's presence on the photo itself: "looking…" while it works, then
-  /// a show/hide toggle for the highlights it drew.
+  /// The photo check on the shot itself: a small "Check photo" chip until
+  /// asked, "looking…" while it works, then a show/hide toggle for the
+  /// highlights it drew.
   Widget _aiPhotoChip() {
+    if (!_aiRunning && _ai == null) {
+      return ActionChip(
+        key: const ValueKey('snag-walk-check-photo'),
+        onPressed: _runAi,
+        avatar: const Icon(LucideIcons.scanSearch, size: 14, color: Colors.white),
+        label: Text('snags.ai.check_photo'.getString(context)),
+        labelStyle: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
+        backgroundColor: Colors.black54,
+        side: const BorderSide(color: Colors.white24),
+        visualDensity: VisualDensity.compact,
+      );
+    }
     if (_aiRunning) {
       return Container(
         height: 32,

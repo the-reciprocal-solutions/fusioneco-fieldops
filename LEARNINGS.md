@@ -544,6 +544,12 @@ Design: [docs/snag-assistant.md](docs/snag-assistant.md). Server: `../fusion-eco
 **What to watch:** any local-first entity needs a replay follow-up. Never store absolute file paths on iOS — store relative or re-root. Never make a save wait on an upload.
 **Where:** `lib/core/offline/sync_client.dart`, `flush_policy.dart`, `lib/core/snag/snag_media.dart`, `lib/data/snag_repository.dart`, `test/snag_outbox_test.dart`
 
+### A walk shot was filed on someone else's snag: the duplicate check's main button attached it (2026-10-10)
+**What happened:** the owner's walk-mode photo appeared as an existing snag's after-photo and no new snag existed. Walk "Save & next" ran the duplicate check; same room (0.35) + same trade (0.2) + default type (0.1) = 0.65 > 0.6, so most shots in a room with a live same-trade snag opened "Already raised?", whose filled button "Same issue — add my photo" posted the shot to that snag — including snags already marked ready, next to their after-photos. Separately, pulls replaced whole photo lists (dropping unsent ones), a missing list key blanked the field, and refused changes lingered 6 h.
+**Fix:** walk mode always creates a new snag (`SnagRepository.saveShot`); the raise form only offers open/in-progress candidates; server add-photo never makes after-photos and refuses a photo id filed elsewhere (409); field-by-field merge; reproducers `test/snag_integrity_repro_test.dart` (9, all failed before).
+**What to watch:** a "helpful" default action must never write to a record the user didn't open. Score thresholds made of default values (type `defect`) inflate matches.
+**Where:** `lib/data/snag_repository.dart`, `lib/features/snags/snag_walk_screen.dart`, `lib/core/snag/snag_rules.dart`
+
 ## Model viewer (2D / 3D)
 
 ### iOS WebView: wait for every setup step before loading the page, or the JS bridge misses "ready" (2026-10-06)

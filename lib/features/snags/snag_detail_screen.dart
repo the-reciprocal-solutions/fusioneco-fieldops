@@ -27,6 +27,7 @@ import '../conversation/conversation_preview_card.dart';
 import 'ghost_camera_screen.dart';
 import 'snag_plan_screen.dart';
 import 'widgets/snag_sheets.dart';
+import 'widgets/snag_estimate_card.dart';
 import 'widgets/snag_region_overlay.dart';
 import 'widgets/snag_visuals.dart';
 
@@ -282,6 +283,22 @@ class _SnagDetailScreenState extends ConsumerState<SnagDetailScreen> {
                             ),
                         ],
                       ),
+                    ),
+                    // The main AI help on a snag (2026-10-10): scope, materials
+                    // with stock and catalogue prices, an approximate cost, and
+                    // quote / materials / work order on approval. Online-only.
+                    const SizedBox(height: 12),
+                    SnagEstimateCard(
+                      key: ValueKey('snag-estimate-${s.id}'),
+                      snag: s,
+                      onChanged: () async {
+                        try {
+                          await ref.read(snagRepositoryProvider).fetchOne(s.id);
+                        } catch (_) {
+                          // The write already happened; the next pull refreshes the copy.
+                        }
+                        if (mounted) bumpSnags(ref);
+                      },
                     ),
                     for (final audio in s.evidence.where((e) => !e.isPhoto))
                       Padding(

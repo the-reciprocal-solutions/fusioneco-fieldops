@@ -169,7 +169,7 @@ class SnagSyncController extends Notifier<SnagSyncState> {
     var online = false;
     var resent = 0;
     try {
-      online = await repo.refresh(buildingId: buildingId);
+      online = await repo.refresh(buildingId: buildingId, actorId: ref.read(snagActorProvider)?.id);
       if (online) {
         await repo.refreshSurveys(buildingId: buildingId);
         resent = await repo.resendStranded(buildingId: buildingId);

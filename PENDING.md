@@ -23,9 +23,15 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-032**
+Next number: **P-033**
 
 ## Open
+
+### P-032 · 2026-10-10 round: snag integrity, snag AI estimate & quote, rich grouped notifications — no device run
+- **Status:** needs verification · **Priority:** P1 · **Area:** snags, notifications
+- **Found:** 2026-10-10 (owner: walk shot landed on another snag's after-photos; snags/metadata missing; AI should help with materials/costs/quotes, not lead with photo analysis; group notifications, route by data, rich push)
+- **Done so far:** every walk shot creates its own snag; field-by-field merge of list rows, unsent photos kept, refused changes re-read, no prune of unsent work, cursor `snag.cursor.v2` forces one full pull, repair re-reads up to 25 incomplete snags, dev-only `snag_media/diag/integrity.jsonl`; "Check photo" chip (optional) + "Estimate & quote" card (scope, materials vs catalogue with stock, cost range + assumptions, quote / materials / WO on approve, DLP, similar snags); notifications grouped in tabs with swipe/mark-all/inline actions, one routing table, Android BigPicture/Inbox/group/actions/Reply, iOS categories/threads/interruption/attachments. 1250 tests pass (1 pre-existing `qr_payload_test`). Server 776b376, web e65ab93f.
+- **Left:** deploy server 776b376; iPhone: 3 walk shots in a room with a same-trade snag → 3 new snags; run the read-only SQL in server `docs/kb/learnings/2026-10-10-snag-walk-shot-misfiled-and-list-merge.md` on the deployed DB to find misfiled photos; estimate card + quote landing on a real DB; push on device after APNs key + `FIREBASE_SERVICE_ACCOUNT_JSON` (`node scripts/test-push.mjs <technician>`); wire the iOS Notification Service Extension (needs its App ID + profile, docs/push-notifications.md §6); optional Time Sensitive entitlement and Android `USE_FULL_SCREEN_INTENT`.
 
 ### P-031 · Rich tray notifications + action buttons (2026-10-07): never run on a phone
 - **Status:** needs verification · **Priority:** P2 · **Area:** push (`lib/core/push`, `notification_route.dart`) + server `notificationService.ts`

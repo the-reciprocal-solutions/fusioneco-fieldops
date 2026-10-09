@@ -183,6 +183,12 @@ class _SnagPhotoState extends ConsumerState<SnagPhoto> {
     final known = ref.read(snagMediaProvider).peek(e);
     return _clip(
       FutureBuilder<File?>(
+        // Keyed by the evidence (2026-10-10): a reused widget (film strip,
+        // hub list, duplicate sheet) whose evidence changed must not keep
+        // painting the PREVIOUS photo while the new lookup runs — a plain
+        // FutureBuilder carries the old future's data into the new one, so
+        // for a moment one snag showed another snag's photo.
+        key: ValueKey(_keyOf(e)),
         future: _lookup(),
         initialData: known,
         builder: (context, snap) {

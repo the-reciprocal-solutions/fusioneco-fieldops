@@ -188,13 +188,16 @@ class _SnagWalkComposeSheetState extends State<SnagWalkComposeSheet> {
                           ? sizes.peek
                           : sizes.collapsed,
                     )),
-                    SnagWalkAiStrip(
-                      running: widget.aiRunning,
-                      result: ai,
-                      onApplyAll: widget.onApplyAllAi,
-                      onRetry: widget.onRetryAi,
-                    ),
-                    const SizedBox(height: 10),
+                    // Only once the technician asked for a photo check (2026-10-10).
+                    if (widget.aiRunning || ai != null) ...[
+                      SnagWalkAiStrip(
+                        running: widget.aiRunning,
+                        result: ai,
+                        onApplyAll: widget.onApplyAllAi,
+                        onRetry: widget.onRetryAi,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
                     TradeChipRail(
                       value: widget.trade,
                       dark: true,
@@ -456,10 +459,11 @@ class _ToolButton extends StatelessWidget {
   }
 }
 
-/// The walk's AI strip, at the top of the sheet so it is the first thing the
-/// eye lands on: animated while it looks, then the proposal in one line with
-/// a clear "Apply all", photo tips and a "maybe already raised" hint. Violet
-/// is the app's AI-only accent. Never blocks Save & next.
+/// The walk's photo-check strip, shown only after the technician tapped
+/// "Check photo" (2026-10-10 — photo analysis is optional, not the headline):
+/// a quiet line while it looks, then the proposal in one line with "Apply
+/// all", photo tips and a "maybe already raised" hint. Violet is the app's
+/// AI-only accent. Never blocks Save & next.
 class SnagWalkAiStrip extends StatelessWidget {
   const SnagWalkAiStrip({
     super.key,
@@ -498,11 +502,9 @@ class SnagWalkAiStrip extends StatelessWidget {
     return Container(
       padding: const EdgeInsetsDirectional.fromSTEB(10, 8, 6, 8),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        gradient: LinearGradient(
-          colors: [FeColors.ai.withValues(alpha: 0.55), FeColors.ai.withValues(alpha: 0.22)],
-        ),
-        border: Border.all(color: FeColors.aiLine.withValues(alpha: 0.6)),
+        borderRadius: BorderRadius.circular(14),
+        color: Colors.white.withValues(alpha: 0.06),
+        border: Border.all(color: FeColors.aiLine.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -526,7 +528,7 @@ class SnagWalkAiStrip extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'snags.ai.title'.getString(context),
+                      'snags.ai.photo_title'.getString(context),
                       style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3),
                     ),
                     Text(

@@ -12,6 +12,8 @@ import '../core/network/envelope.dart';
 import '../core/offline/flush_policy.dart';
 import '../core/offline/offline_db.dart';
 import '../core/offline/sync_client.dart';
+import '../core/snag/snag_integrity_log.dart';
+import '../core/snag/snag_integrity_scan.dart';
 import '../core/snag/snag_media.dart';
 import '../core/snag/snag_rules.dart';
 import '../domain/snag.dart';
@@ -107,6 +109,25 @@ class SnagWriteResult {
   final bool synced;
 }
 
+/// Where a captured snag is being saved from (see [SnagRepository.saveShot]).
+enum SnagShotMode {
+  /// Walk mode: every shot is a new snag, no duplicate prompt.
+  walk,
+
+  /// The raise form: the duplicate guard may offer a "+1" on an open snag.
+  single,
+}
+
+class SnagShotResult {
+  const SnagShotResult({required this.snag, required this.addedToExisting});
+
+  /// The new snag, or the existing one the photo was added to.
+  final Snag snag;
+
+  /// true only when the person picked an existing snag in the duplicate sheet.
+  final bool addedToExisting;
+}
+
 /// A local rule refused the action before anything was written.
 class SnagRuleException implements Exception {
   const SnagRuleException(this.failure);
@@ -154,17 +175,22 @@ class SnagRepository {
     required SnagStore store,
     required SnagMedia media,
     Uuid? uuid,
+    SnagIntegrityLog? integrity,
   }) : _sync = sync,
        _api = api,
        _store = store,
        _media = media,
-       _uuid = uuid ?? const Uuid();
+       _uuid = uuid ?? const Uuid(),
+       integrity = integrity ?? SnagIntegrityLog(() => media.diagnosticsFile('integrity.jsonl'));
 
   final SyncClient _sync;
   final ApiClient _api;
   final SnagStore _store;
   final SnagMedia _media;
   final Uuid _uuid;
+
+  /// Developer-only diagnostics (never shown to users); see [SnagIntegrityLog].
+  final SnagIntegrityLog integrity;
 
   static const entityType = 'Snag';
   static const surveyEntityType = 'SnagSurvey';
@@ -232,15 +258,21 @@ class SnagRepository {
     return row == null ? null : _fromRow(row);
   }
 
-  /// A full pull (which also prunes) at least this often; delta pulls in
-  /// between. Server-side deletes are rare, so a 6 h prune is plenty.
+  /// A full pull (which also prunes and repairs) at least this often; delta
+  /// pulls in between. Server-side deletes are rare, so a 6 h prune is plenty.
   static const _fullPullEvery = Duration(hours: 6);
 
   /// Overlap on the delta cursor, so a row written while the last pull was
-  /// in flight is never skipped.
+  /// in flight is never skipped. The cursor itself is the SERVER's clock
+  /// (`serverTime` of the last pull), never this phone's.
   static const _cursorOverlap = Duration(minutes: 2);
 
-  static String _cursorKey(String buildingId) => 'snag.cursor.$buildingId';
+  /// At most this many damaged rows are re-read in full per full pull.
+  static const _repairBatch = 25;
+
+  /// `v2` (2026-10-10): the first pull after this build is a full pull, so
+  /// the repair pass runs once on every device that already had a cursor.
+  static String _cursorKey(String buildingId) => 'snag.cursor.v2.$buildingId';
 
   /// Pulls one building's snags and merges them in. Returns false when the
   /// device is offline — the local store is then all there is, which is the
@@ -252,17 +284,35 @@ class SnagRepository {
   /// pull (`updatedSince`). A server without that support ignores both and
   /// answers the full list as before, with no `serverTime`, so every pull
   /// stays full — the old behaviour.
-  Future<bool> refresh({required String buildingId, bool full = false}) async {
+  ///
+  /// Integrity rules (2026-10-10, owner iPhone report "some snags not
+  /// visible, status and metadata missing"):
+  /// - a list row is merged **field by field** onto the device's copy
+  ///   ([mergeServerRow]): a key the row does not carry keeps the device's
+  ///   value, and a lean row never empties the timeline;
+  /// - the device's own photos the server does not have are kept, not
+  ///   dropped with the old evidence list;
+  /// - a full pull never prunes a row that still holds unsent work;
+  /// - a device clock that went backwards forces a full pull instead of
+  ///   delta-pulling forever;
+  /// - each full pull repairs damaged rows from the server and logs what it
+  ///   cannot explain ([SnagIntegrityScan]) — developer log only.
+  Future<bool> refresh({required String buildingId, bool full = false, String? actorId}) async {
     final cursor = _SnagCursor.decode(await _readMeta(_cursorKey(buildingId)));
     final now = DateTime.now();
-    final delta = !full && cursor != null && now.difference(cursor.fullAt) < _fullPullEvery;
+    final sinceFull = cursor == null ? null : now.difference(cursor.fullAt);
+    if (sinceFull != null && sinceFull.isNegative) {
+      unawaited(integrity.record(SnagIntegrityLog.clockSkewFullPull, detail: {'buildingId': buildingId}));
+    }
+    final deltaFrom = !full && sinceFull != null && !sinceFull.isNegative && sinceFull < _fullPullEvery ? cursor : null;
+    final delta = deltaFrom != null;
     final dynamic body;
     try {
       final res = await _api.get('/api/snags', query: {
         'buildingId': buildingId,
         'limit': 2000,
         'view': 'list',
-        if (delta) 'updatedSince': cursor.since.subtract(_cursorOverlap).toUtc().toIso8601String(),
+        if (deltaFrom != null) 'updatedSince': deltaFrom.since.subtract(_cursorOverlap).toUtc().toIso8601String(),
       });
       body = res.data;
     } on NetworkFailure {
@@ -270,32 +320,119 @@ class SnagRepository {
     }
     final data = unwrapMap(body);
     final lean = data['view'] == 'list';
-    final items = data['items'] is List
-        ? (data['items'] as List).whereType<Map>().map((e) => Snag.fromJson(Map<String, dynamic>.from(e))).toList()
-        : <Snag>[];
-    final pending = await _store.pendingEntityIds(entityType);
-    final fresh = items.where((s) => s.id.isNotEmpty && !pending.contains(s.id)).toList();
-    final existing = fresh.length > 20
-        ? {for (final s in await local(buildingId: buildingId)) s.id: s}
-        : {for (final s in fresh) s.id: ?await localById(s.id)};
-    await _store.upsertSnags([
-      for (final s in fresh) _row(_mergeServer(s, existing[s.id], lean: lean)),
-    ]);
-    // Prune only on a complete, full list: a truncated page or a delta must
-    // never delete rows.
-    final total = asInt(data['total']) ?? items.length;
+    final rows = data['items'] is List
+        ? [
+            for (final e in (data['items'] as List).whereType<Map>())
+              if ((e['id']?.toString() ?? '').isNotEmpty) Map<String, dynamic>.from(e),
+          ]
+        : <Map<String, dynamic>>[];
     final wasDelta = delta && data['serverTime'] != null;
-    if (!wasDelta && total <= items.length) {
-      await _store.pruneSnags(buildingId: buildingId, keepIds: {...items.map((s) => s.id), ...pending});
+    final total = asInt(data['total']) ?? rows.length;
+    final complete = !wasDelta && total <= rows.length;
+
+    // A full pull reads every local row anyway (prune protection); a delta
+    // of a few rows reads just those.
+    final localAll = complete || rows.length > 20
+        ? {for (final s in await local(buildingId: buildingId)) s.id: s}
+        : null;
+    final merged = <Snag>[];
+    for (final row in rows) {
+      final id = row['id'].toString();
+      final existing = localAll != null ? localAll[id] : await localById(id);
+      merged.add(mergeServerRow(row, existing, lean: lean));
+    }
+    // Read the queue as late as possible: a write queued while the list was
+    // in flight (or while the rows were merged) keeps the device ahead.
+    final pending = await _store.pendingEntityIds(entityType);
+    final fresh = [for (final s in merged) if (!pending.contains(s.id)) s];
+    await _store.upsertSnags([for (final s in fresh) _row(s)]);
+    for (final s in fresh) {
+      final kept = s.evidence.where((e) => e.url == null && e.localPath != null).map((e) => e.id).toList();
+      if (kept.isNotEmpty) {
+        unawaited(integrity.record(
+          SnagIntegrityLog.deviceOnlyEvidenceKept,
+          snagId: s.id,
+          detail: {'evidenceIds': kept, 'ref': s.reference},
+          dedupeKey: 'kept:${s.id}:${kept.join(",")}',
+        ));
+      }
+    }
+
+    // Prune only on a complete, full list: a truncated page or a delta must
+    // never delete rows. And never a row that still holds unsent work: the
+    // store already spares `local_only` rows; this spares queued snags and
+    // server-known snags carrying photos or a refused write the server does
+    // not have.
+    if (complete) {
+      final serverIds = {for (final r in rows) r['id'].toString()};
+      final protected = <String>{
+        for (final s in localAll?.values ?? const <Snag>[])
+          if (!serverIds.contains(s.id) && _holdsUnsentWork(s)) s.id,
+      };
+      for (final id in protected) {
+        unawaited(integrity.record(SnagIntegrityLog.pruneKept, snagId: id, dedupeKey: 'prune:$id'));
+      }
+      await _store.pruneSnags(buildingId: buildingId, keepIds: {...serverIds, ...pending, ...protected});
     }
     final serverTime = asDate(data['serverTime']);
     if (serverTime != null) {
       await _writeMeta(
         _cursorKey(buildingId),
-        _SnagCursor(since: serverTime, fullAt: wasDelta ? cursor.fullAt : now).encode(),
+        _SnagCursor(since: serverTime, fullAt: wasDelta ? deltaFrom.fullAt : now).encode(),
       );
     }
+    if (!wasDelta) await _repairAfterFullPull(buildingId, actorId: actorId);
     return true;
+  }
+
+  /// Work on this phone that the server does not have: photos never
+  /// uploaded, or a write the server refused.
+  static bool _holdsUnsentWork(Snag s) =>
+      s.localOnly || s.sendIssue != null || s.evidence.any((e) => e.url == null && e.localPath != null);
+
+  /// Re-reads, in full, rows the lean list left without their timeline or
+  /// SN- number (bounded), then logs photos this device cannot explain.
+  /// Never throws; a network failure just ends the pass.
+  Future<void> _repairAfterFullPull(String buildingId, {String? actorId}) async {
+    try {
+      final pending = await _store.pendingEntityIds(entityType);
+      final snags = await local(buildingId: buildingId);
+      final damaged = [
+        for (final s in snags)
+          if (!s.localOnly && !pending.contains(s.id) && (s.reference == null || s.activity.isEmpty)) s,
+      ]..sort((a, b) {
+          // Unnumbered first (the card shows "#abc123" instead of SN-), then newest.
+          final byRef = (a.reference == null ? 0 : 1).compareTo(b.reference == null ? 0 : 1);
+          return byRef != 0 ? byRef : b.updatedAt.compareTo(a.updatedAt);
+        });
+      for (final s in damaged.take(_repairBatch)) {
+        final Map<String, dynamic> data;
+        try {
+          data = unwrapMap((await _api.get('/api/snags/${s.id}')).data);
+        } on NetworkFailure {
+          break;
+        } on ApiFailure {
+          continue;
+        }
+        if (data.isEmpty || (await _store.pendingEntityIds(entityType)).contains(s.id)) continue;
+        await _saveServerRow(data);
+        unawaited(integrity.record(
+          SnagIntegrityLog.repairedFromServer,
+          snagId: s.id,
+          detail: {'missingRef': s.reference == null, 'missingActivity': s.activity.isEmpty},
+        ));
+      }
+      for (final f in SnagIntegrityScan.find(await local(buildingId: buildingId), actorId: actorId)) {
+        await integrity.record(
+          f.kind,
+          snagId: f.snagId,
+          detail: {'ref': f.ref, 'evidenceIds': f.evidenceIds},
+          dedupeKey: f.key,
+        );
+      }
+    } catch (_) {
+      // Diagnostics and repair are best effort; the pull itself succeeded.
+    }
   }
 
   Future<String?> _readMeta(String key) async {
@@ -322,7 +459,7 @@ class SnagRepository {
     try {
       final res = await _api.get('/api/snags/$id');
       final data = unwrapMap(res.data);
-      return data.isEmpty ? null : await _saveServer(Snag.fromJson(data));
+      return data.isEmpty ? null : await _saveServerRow(data);
     } on ApiFailure {
       return localById(id);
     }
@@ -354,22 +491,61 @@ class SnagRepository {
   /// until the detail screen reads the snag in full. Pure, for tests.
   static Snag mergeServerCopy(Snag server, Snag? existing, {bool lean = false}) => _mergeServer(server, existing, lean: lean);
 
-  static Snag _mergeServer(Snag server, Snag? existing, {bool lean = false}) {
-    final paths = {
-      for (final e in existing?.evidence ?? const <SnagEvidence>[])
-        if (e.localPath != null) e.id: e.localPath,
+  /// A server row exactly as received, merged **field by field** onto the
+  /// device's copy (2026-10-10): a key the row does not carry keeps the
+  /// device's value (an explicit `null` still clears it — that is the
+  /// server's answer), so a slimmer list view can never blank out metadata
+  /// the device already has. [existing] must be the same snag; anything
+  /// else is ignored. Pure, for tests.
+  static Snag mergeServerRow(
+    Map<String, dynamic> row,
+    Snag? existing, {
+    bool lean = false,
+    bool keepSendIssue = false,
+  }) {
+    final id = row['id']?.toString();
+    final same = existing != null && existing.id == id ? existing : null;
+    final merged = <String, dynamic>{
+      for (final e in (same?.toJson() ?? const <String, dynamic>{}).entries)
+        if (e.key != 'localOnly' && e.key != 'sendIssue') e.key: e.value,
+      ...row,
     };
+    // A lean row from a server that still sends `activity: []` is "not
+    // included", not "no events".
+    final leanRow = lean || !row.containsKey('activity');
+    return _mergeServer(Snag.fromJson(merged), same, lean: leanRow, keepSendIssue: keepSendIssue);
+  }
+
+  static Snag _mergeServer(Snag server, Snag? existing, {bool lean = false, bool keepSendIssue = false}) {
     return server.copyWith(
       localOnly: false,
-      clearSendIssue: true,
+      clearSendIssue: !keepSendIssue,
+      sendIssue: keepSendIssue ? existing?.sendIssue : null,
       activity: lean && existing != null && server.activity.isEmpty ? existing.activity : null,
-      evidence: [for (final e in server.evidence) paths.containsKey(e.id) ? e.withLocalPath(paths[e.id]) : e],
+      evidence: mergeEvidence(server.id, server.evidence, existing?.evidence ?? const []),
     );
   }
 
-  /// Saves a server copy (see [mergeServerCopy]).
-  Future<Snag> _saveServer(Snag server) async {
-    final merged = _mergeServer(server, await localById(server.id));
+  /// The server's evidence list, plus this device's own captures **for this
+  /// snag** that the server does not have (2026-10-10). Server evidence is
+  /// append-only, so a missing item was never delivered (an upload refused,
+  /// a placeholder never swapped for a URL, a write refused): dropping it
+  /// with the old list made the photo vanish from the phone, with nothing
+  /// left to resend it. Only captures whose file lives under
+  /// `own/<snagId>/` are kept, so a photo can never move between snags. Pure.
+  static List<SnagEvidence> mergeEvidence(String snagId, List<SnagEvidence> server, List<SnagEvidence> local) {
+    final paths = {for (final e in local) if (e.localPath != null) e.id: e.localPath};
+    final serverIds = {for (final e in server) e.id};
+    return [
+      for (final e in server) paths.containsKey(e.id) ? e.withLocalPath(paths[e.id]) : e,
+      for (final e in local)
+        if (!serverIds.contains(e.id) && e.url == null && e.localPath != null && SnagMedia.isOwnCaptureFor(e.localPath!, snagId)) e,
+    ];
+  }
+
+  /// Saves a server copy from its raw JSON (see [mergeServerRow]).
+  Future<Snag> _saveServerRow(Map<String, dynamic> row, {bool keepSendIssue = false}) async {
+    final merged = mergeServerRow(row, await localById(row['id']?.toString() ?? ''), keepSendIssue: keepSendIssue);
     await _saveLocal(merged);
     return merged;
   }
@@ -387,7 +563,7 @@ class SnagRepository {
     try {
       final res = await _api.get('/api/snags/$id');
       final data = unwrapMap(res.data);
-      if (data.isNotEmpty) await _saveServer(Snag.fromJson(data));
+      if (data.isNotEmpty) await _saveServerRow(data);
     } on ApiFailure {
       // Offline again, or gone: leave the row; a pull or detail open retries.
     }
@@ -395,17 +571,41 @@ class SnagRepository {
 
   /// A queued write for snag [id] failed on replay: remember why, so the
   /// screens can say it in plain words (and offer Retry once it was dropped).
+  ///
+  /// A *dropped* write on a snag the server knows (a refused transition, a
+  /// refused photo) also re-reads the server's copy right away (2026-10-10):
+  /// the optimistic change never happened on the server, so its row was not
+  /// touched and no delta pull would ever bring the truth back — the phone
+  /// kept showing, say, "ready" for up to 6 h while the server said "in
+  /// progress". The refusal stays on the row (Not sent + Retry), and the
+  /// device's own photos stay (see [mergeEvidence]).
   Future<void> afterReplayFailed(String id, ReplayFailure failure) async {
     final s = await localById(id);
     if (s == null) return;
+    final dropped = failure.outcome == FlushOutcome.drop;
     await _saveLocal(s.copyWith(
       sendIssue: SnagSendIssue(
         status: failure.status,
         code: failure.code,
-        dropped: failure.outcome == FlushOutcome.drop,
+        dropped: dropped,
         at: DateTime.now(),
       ),
     ));
+    if (!dropped || s.localOnly) return;
+    if ((await _store.pendingEntityIds(entityType)).contains(id)) return;
+    try {
+      final data = unwrapMap((await _api.get('/api/snags/$id')).data);
+      if (data.isEmpty) return;
+      final before = s.status;
+      final after = await _saveServerRow(data, keepSendIssue: true);
+      unawaited(integrity.record(
+        SnagIntegrityLog.refusedWriteResynced,
+        snagId: id,
+        detail: {'status': failure.status, 'code': failure.code, 'deviceStatus': before.wire, 'serverStatus': after.status.wire},
+      ));
+    } on ApiFailure {
+      // Offline: the next full pull restores it.
+    }
   }
 
   /// A queued survey write synced: the server has the survey (a sweep or a
@@ -590,7 +790,16 @@ class SnagRepository {
     return '${cap(trade.replaceAll('-', ' '))} ${issueType.replaceAll('-', ' ')}';
   }
 
+  /// Raises a NEW snag. A draft id that already names a snag on this phone
+  /// is refused (2026-10-10): saving it would silently replace that other
+  /// snag's row — its photos, status and history — with this one. Every
+  /// caller mints the id with [newId] per shot, so this only fires on a bug,
+  /// and then it fails loudly instead of mixing two snags.
   Future<SnagWriteResult> raise(SnagDraft d, SnagActor actor) async {
+    if (await _store.getSnag(d.id) != null) {
+      await integrity.record(SnagIntegrityLog.idReused, snagId: d.id, detail: {'surveyId': d.surveyId});
+      throw StateError('Snag id ${d.id} is already in use on this device.');
+    }
     final (evidence, uploads) = await _capture(
       snagId: d.id,
       stage: 'before',
@@ -649,6 +858,57 @@ class SnagRepository {
     return SnagWriteResult(snag: snag, synced: false);
   }
 
+  /// Saves one captured snag (walk shot or the raise form) — the single
+  /// place that decides "new snag" vs "photo on an existing snag".
+  ///
+  /// **Walk mode always raises a new snag** (2026-10-10, owner iPhone
+  /// report: "I started one snag in walk mode and captured one photo … it
+  /// got added to an existing snag's after-photos"). The walk used to run
+  /// the duplicate guard on Save & next: same room + same trade + the
+  /// default issue type `defect` already scores 0.65 (bar 0.6), so almost
+  /// every shot in a room with another live same-trade snag — from an
+  /// earlier walk, or another person's — opened the "Already raised?" sheet,
+  /// whose filled primary button ("Same issue — add my photo") put the shot
+  /// on THAT snag (including snags already marked ready, beside their
+  /// after-photos) and raised nothing. One walk shot = one new snag; merging
+  /// duplicates is a deliberate act on the snag itself, never a side effect
+  /// of saving.
+  ///
+  /// [SnagShotMode.single] (the raise form) still asks [confirmDuplicate]
+  /// with open / in-progress candidates; the photo goes to an existing snag
+  /// only when the person picked that snag, and only if it is still one of
+  /// the candidates on this phone when the answer comes back.
+  Future<SnagShotResult> saveShot(
+    SnagDraft draft,
+    SnagActor actor, {
+    required SnagShotMode mode,
+    Future<DuplicateDecision> Function(List<DuplicateCandidate> candidates)? confirmDuplicate,
+  }) async {
+    if (mode == SnagShotMode.single && confirmDuplicate != null) {
+      final pool = await local(buildingId: draft.buildingId);
+      final candidates = SnagDuplicateFinder.find(draft.signature(raisedBy: actor.id), pool);
+      if (candidates.isNotEmpty) {
+        final decision = await confirmDuplicate(candidates);
+        final chosen = decision.snag;
+        if (decision.choice == DuplicateChoice.sameIssue &&
+            chosen != null &&
+            !chosen.localOnly &&
+            candidates.any((c) => c.snag.id == chosen.id)) {
+          final r = await addEvidence(
+            chosen,
+            actor,
+            photos: draft.photos,
+            duplicateReport: true,
+            firstPhotoRegions: draft.photoRegions,
+          );
+          return SnagShotResult(snag: r.snag, addedToExisting: true);
+        }
+      }
+    }
+    final r = await raise(draft, actor);
+    return SnagShotResult(snag: r.snag, addedToExisting: false);
+  }
+
   /// Sends one online-first write. On success the server's copy replaces
   /// the optimistic one. When the server refuses it — or the request failed
   /// in a way that queued nothing (an upload answered without a URL) — the
@@ -664,7 +924,7 @@ class SnagRepository {
       if (!write.synced) return SnagWriteResult(snag: optimistic, synced: false);
       final data = unwrapMap(write.data);
       if (data.isEmpty) return SnagWriteResult(snag: optimistic, synced: true);
-      final saved = await _saveServer(Snag.fromJson(data));
+      final saved = await _saveServerRow(data);
       return SnagWriteResult(snag: saved, synced: true);
     } on ApiFailure {
       if (rollbackTo != null) await _saveLocal(rollbackTo);
@@ -672,14 +932,29 @@ class SnagRepository {
     }
   }
 
+  /// The newest copy of [snag] on this phone (2026-10-10). Screens hand
+  /// writes the [Snag] they built with, which can be minutes old (the detail
+  /// screen's Mark ready waits on the camera; a pull or a replay follow-up
+  /// may have saved a newer copy since). Writing on top of the old object
+  /// put the old status, photos and timeline back — metadata "went missing".
+  Future<Snag> _fresh(Snag snag) async {
+    final current = await localById(snag.id);
+    if (current == null) return snag;
+    if (jsonEncode(current.toJson()) != jsonEncode(snag.toJson())) {
+      unawaited(integrity.record(SnagIntegrityLog.staleWriteAvoided, snagId: snag.id));
+    }
+    return current;
+  }
+
   Future<SnagWriteResult> transition(
-    Snag snag,
+    Snag stale,
     SnagAction action,
     SnagActor actor, {
     String? reason,
     String? note,
     List<CapturedPhoto> photos = const [],
   }) async {
+    final snag = await _fresh(stale);
     final stage = action == SnagAction.ready ? 'after' : 'extra';
     final (added, uploads) = await _capture(snagId: snag.id, stage: stage, actor: actor, photos: photos);
     final result = SnagRules.apply(
@@ -719,15 +994,19 @@ class SnagRepository {
 
   /// Adds photos to an existing snag. [duplicateReport] is the "+1" from the
   /// duplicate guard: the same defect seen again, which also raises
-  /// "Also reported by N".
+  /// "Also reported by N". Photos added here are always `extra` — only the
+  /// "ready" [transition] makes after-photos (the server enforces the same).
+  /// Only for a snag the person explicitly chose; walk mode never calls it
+  /// (see [saveShot]).
   Future<SnagWriteResult> addEvidence(
-    Snag snag,
+    Snag stale,
     SnagActor actor, {
     List<CapturedPhoto> photos = const [],
     bool duplicateReport = false,
     String? note,
     List<SnagRegion> firstPhotoRegions = const [],
   }) async {
+    final snag = await _fresh(stale);
     final (added, uploads) = await _capture(
       snagId: snag.id,
       stage: 'extra',
@@ -768,7 +1047,8 @@ class SnagRepository {
     return SnagWriteResult(snag: next, synced: false);
   }
 
-  Future<SnagWriteResult> comment(Snag snag, SnagActor actor, String note) async {
+  Future<SnagWriteResult> comment(Snag stale, SnagActor actor, String note) async {
+    final snag = await _fresh(stale);
     final now = DateTime.now();
     final next = snag.copyWith(
       updatedAt: now,

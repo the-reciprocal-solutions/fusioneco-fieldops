@@ -16,6 +16,7 @@ class DashboardState {
     this.overdueCount = 0,
     this.dueTodayCount = 0,
     this.activeTasks = const [],
+    this.records = const [],
     this.loading = true,
     this.loaded = false,
     this.error,
@@ -26,6 +27,11 @@ class DashboardState {
   final int overdueCount;
   final int dueTodayCount;
   final List<MaintenanceRecord> activeTasks;
+
+  /// Every assigned work order from the last fetch (network or the offline
+  /// cache). The Your day card plans from these when the server brief can't
+  /// be reached (docs/day-brief.md), so it costs no second request.
+  final List<MaintenanceRecord> records;
   final bool loading;
 
   /// True once counts have come back at least once. Before that the zeros in
@@ -67,6 +73,7 @@ class DashboardController extends Notifier<DashboardState> {
       overdueCount: state.overdueCount,
       dueTodayCount: state.dueTodayCount,
       activeTasks: state.activeTasks,
+      records: state.records,
       loading: true,
       loaded: state.loaded,
     );
@@ -79,6 +86,7 @@ class DashboardController extends Notifier<DashboardState> {
     } on ApiFailure catch (e) {
       if (requestId != _requestId) return;
       state = DashboardState(
+        records: state.records,
         loading: false,
         loaded: state.loaded,
         error: e.message,
@@ -131,6 +139,7 @@ class DashboardController extends Notifier<DashboardState> {
       overdueCount: overdue.length,
       dueTodayCount: dueToday.length,
       activeTasks: combined.values.take(5).toList(),
+      records: records,
       loading: false,
       loaded: true,
     );

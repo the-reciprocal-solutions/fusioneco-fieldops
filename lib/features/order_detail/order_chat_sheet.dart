@@ -44,10 +44,15 @@ import '../../widgets/voice_waveform.dart';
 /// (one per [ChatMode]) since, unlike web's open-ended per-open session ids,
 /// each mode here has exactly one deterministic thread per order (see
 /// `ChatController`/`AiChatRepository.sessionIdFor`).
+///
+/// [initialQuestion] (the home screen's "How do I…?" guides, "Ask AI about
+/// it") opens straight on the general thread with the question typed in the
+/// composer — not sent: the technician reads it, edits it, and taps send.
 Future<void> showOrderChatSheet(
   BuildContext context, {
   required OrderKey orderKey,
   String? assetName,
+  String? initialQuestion,
 }) =>
     showModalBottomSheet<void>(
       context: context,
@@ -56,14 +61,16 @@ Future<void> showOrderChatSheet(
       builder: (context) => OrderChatSheet(
         orderKey: orderKey,
         assetName: assetName,
+        initialQuestion: initialQuestion,
       ),
     );
 
 class OrderChatSheet extends ConsumerStatefulWidget {
-  const OrderChatSheet({super.key, required this.orderKey, this.assetName});
+  const OrderChatSheet({super.key, required this.orderKey, this.assetName, this.initialQuestion});
 
   final OrderKey orderKey;
   final String? assetName;
+  final String? initialQuestion;
 
   @override
   ConsumerState<OrderChatSheet> createState() => _OrderChatSheetState();
@@ -96,7 +103,13 @@ class _OrderChatSheetState extends ConsumerState<OrderChatSheet> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(chatControllerProvider(widget.orderKey).notifier).open();
+      final notifier = ref.read(chatControllerProvider(widget.orderKey).notifier);
+      notifier.open();
+      final question = widget.initialQuestion?.trim();
+      if (question != null && question.isNotEmpty) {
+        notifier.openMode(ChatMode.general);
+        _fillSuggestion(question);
+      }
     });
   }
 

@@ -103,7 +103,7 @@ Next number: **P-033**
 - **Next step:** after server P-112.
 
 ### P-022 · Day plan + pre-job brief (plan use case #7)
-- **Status:** not started · **Priority:** P2 · **Area:** FieldOps agent surface
+- **Status:** partial (2026-10-10: "Your day" card built — server `GET /api/fm/technicians/me/day-brief` (564d56e), rule order + grounded AI summary/reasons/"before you go", offline local planner, "How do I…?" guides; see [docs/day-brief.md](docs/day-brief.md); not run on a device or real DB; Arabic AI quality unchecked; the Flow Agents Day Planner (server P-112) is still separate) · **Priority:** P2 · **Area:** FieldOps agent surface
 - **Found:** 2026-09-29 (`../docs/fieldops-agentic-workforce-plan-2026-09.md` §2 #7; `../docs/research/fieldops-agentic-2026-09/`R4-field-usecases.md FM01)
 - **Done so far:** dashboard/calendar are client-side views over orders (`lib/state/dashboard_controller.dart:47`); no brief.
 - **Left:** a day plan screen fed by the Day Planner agent (server P-112) and a 30-second pre-job brief (last fixes, likely cause, parts, permit/access needed).

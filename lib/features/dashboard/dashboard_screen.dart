@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -10,12 +11,14 @@ import '../../app/locale_config.dart';
 import '../../app/router.dart';
 import '../../state/auth_controller.dart';
 import '../../state/dashboard_controller.dart';
+import '../../state/day_brief_controller.dart';
 import '../../state/locale_controller.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../permits/widgets/permit_dashboard_card.dart';
 import '../snags/widgets/snag_dashboard_card.dart';
+import 'widgets/day_brief_card.dart';
 import '../ar/widgets/ar_entry_widgets.dart';
 import '../../widgets/common.dart';
 import '../../widgets/motion.dart';
@@ -54,7 +57,12 @@ class DashboardScreen extends ConsumerWidget {
       body: SafeArea(
         bottom: false,
         child: RefreshIndicator(
-          onRefresh: ref.read(dashboardControllerProvider.notifier).refresh,
+          // The Your day card refreshes with the dashboard; it never holds
+          // the pull-to-refresh up on its own (its model call can be slow).
+          onRefresh: () {
+            unawaited(ref.read(dayBriefControllerProvider.notifier).refresh());
+            return ref.read(dashboardControllerProvider.notifier).refresh();
+          },
           child: ListView(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             children: [
@@ -66,6 +74,13 @@ class DashboardScreen extends ConsumerWidget {
                 onLogout: () => _logout(context, ref),
               ),
               const SizedBox(height: 18),
+
+              // "Your day": AI summary + the day's ordered plan + "How do
+              // I…?" guides (docs/day-brief.md). Top of the page on purpose
+              // (owner, 2026-10-10); it shows the phone's own plan while the
+              // server brief loads or without signal, so it never blocks.
+              const DayBriefCard(),
+              const SizedBox(height: 16),
 
               // Hero Greeting Card with soft organic light-blue wave gradient
               _HeroGreetingCard(

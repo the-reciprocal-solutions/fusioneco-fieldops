@@ -80,6 +80,7 @@ Deep dive: [docs/architecture.md](docs/architecture.md).
 
 ## Detail files (load on demand)
 
+- [docs/day-brief.md](docs/day-brief.md): home "Your day" card (server day-brief endpoint, rule order + grounded AI text, offline planner `lib/core/day/day_planner.dart`, process guides `lib/core/day/process_guides.dart`).
 - [docs/architecture.md](docs/architecture.md): core engine (bootstrap, DI, network, offline sync, DB schema, session, location gate, push, routing, i18n). **Read before touching `lib/core/` or `lib/state/providers.dart`.**
 - [docs/maintenance-orders.md](docs/maintenance-orders.md): order types and the routes the server still serves, lifecycle diagram, checklist write shapes, close flow, offline behaviour per action, endpoints, inspections logic, the Order Assistant.
 - [docs/c2o-field-verification.md](docs/c2o-field-verification.md): scan payload formats, offline-first resolve, capture form, drafts and photo paths, route packs (download, refresh, release), requirement-ID map, endpoints.

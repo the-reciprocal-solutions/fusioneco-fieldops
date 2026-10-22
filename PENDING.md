@@ -23,9 +23,17 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-033**
+Next number: **P-035**
 
 ## Open
+
+### P-034 · Daily attendance for payroll (shifts, grace time, Sundays): built and unit-tested, not yet run on a phone
+- **Status:** needs verification · **Priority:** P1 · **Area:** attendance, payroll
+- **Found:** 2026-10-22 (owner: fixed per-day attendance for payroll even with no work orders; shifts as a master, chosen on the technician form; Sundays; grace time and an alert when it is crossed; plan in [docs/daily-attendance-shift-plan.md](docs/daily-attendance-shift-plan.md))
+- **Done so far:** server (6 tables, rules engine, check-in / out, 5-minute watcher with the alerts, manager views, monthly sheet, month lock; 80 vitest in `services/attendance`); web (Masters ▸ Shifts and Public Holidays, shift fields on the technician form, Attendance ▸ Daily and Monthly, review / correct / leave, CSV); app (`DayCard`, `DayBanner`, `DayAttendanceRepository` offline outbox, soft prompt on a job check-in; 34 new tests pass).
+- **Phone-tested 2026-10-22:** late start online, end of day offline then synced, off-day work on a holiday with approval. **Also tested 2026-10-22:** on-time start, forgotten end of day (auto-close + both pushes), month lock (current and previous month), holiday name, push (FCM works on dev), local offline reminder in airplane mode. **Left:** (1) Sunday weekly off (needs a Sunday); (2) iOS (incl. the local reminder); (3) a screen for bulk "assign technicians" to a shift; (4) go-live: create the shifts, give every field technician one, load the public holidays.
+- **Where:** `lib/data/day_attendance_repository.dart`, `lib/core/attendance/day_rules.dart`, `lib/features/attendance/`, `lib/state/day_attendance_controller.dart`; server `src/services/attendance/`, `documentation/daily-attendance.md`; web `components/attendance/{DailyBoard,MonthlySheet,DayReviewSheet}.tsx`, `app/facility-management/masters/{shifts-tab,public-holidays-tab}.tsx`
+- **Next step:** an on-time start in the morning and a Sunday; then the push alert once an FCM key is on the dev server.
 
 ### P-032 · 2026-10-10 round: snag integrity, snag AI estimate & quote, rich grouped notifications — no device run
 - **Status:** needs verification · **Priority:** P1 · **Area:** snags, notifications
@@ -328,4 +336,4 @@ Next number: **P-033**
 
 ## Closed
 
-_None yet._
+- **P-033 · Job check-in / check-out (site attendance)** · 2026-10-22 · removed by owner decision ("I don't want those visits"): app, server and web code, tests, docs and tables deleted. Daily shift attendance (P-034) is the only attendance. No LEARNINGS entry.

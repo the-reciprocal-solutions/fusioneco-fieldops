@@ -6,6 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 import '../../theme/fe_colors.dart';
 import 'notification_images.dart';
@@ -147,6 +148,48 @@ class LocalNotifications {
         await android.createNotificationChannel(c);
       }
     }
+  }
+
+  /// The language the person chose (en / ar).
+  static Future<String> language() => _language();
+
+  /// Draws a reminder at [at] by itself, with no server and no signal (the OS keeps it).
+  /// [tag] makes it replaceable: scheduling the same tag again moves it, and a push carrying the
+  /// same tag (see `pushTagFor`) takes its place. Inexact on purpose: no exact-alarm permission,
+  /// and a reminder a minute late is fine. Android only draws it while the app is allowed notifications.
+  static Future<void> scheduleReminder({required String tag, required String title, required String body, required DateTime at, String? payload}) async {
+    await init();
+    final lang = await _language();
+    final channel = _channels(lang).firstWhere((c) => c.id == channelIdFor(NoticeGroup.work, NoticePriority.high));
+    await _plugin.zonedSchedule(
+      id: pushIdFor(tag),
+      title: title,
+      body: body,
+      // An absolute moment: the zone only matters for repeating schedules, and this does not repeat.
+      scheduledDate: tz.TZDateTime.from(at, tz.UTC),
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          channel.id,
+          channel.name,
+          channelDescription: channel.description,
+          importance: Importance.high,
+          priority: Priority.high,
+          sound: channel.sound,
+          styleInformation: BigTextStyleInformation(body, contentTitle: title),
+          category: AndroidNotificationCategory.reminder,
+          color: FeColors.warning,
+        ),
+        iOS: const DarwinNotificationDetails(presentAlert: true, presentBanner: true, presentList: true, presentSound: true, sound: 'notification_ting.wav'),
+      ),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      payload: payload,
+    );
+  }
+
+  /// Removes a reminder (scheduled or already showing) by its tag.
+  static Future<void> cancelReminder(String tag) async {
+    await init();
+    await _plugin.cancel(id: pushIdFor(tag));
   }
 
   /// The notification (and button, and typed text) that launched the app

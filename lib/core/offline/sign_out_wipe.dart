@@ -34,6 +34,9 @@ const kKeptOnSignOut = <String>{
   // doesn't wipe a shift's scans; every row carries its user id and is only
   // ever read back for that user, so the next person signing in sees none.
   'scan_history',
+  // Daily attendance (2026-10-22): the start / end of the technician's day, and
+  // today's shift. A start of day not yet sent is payroll evidence; rows carry the user id.
+  'day_attendance',
 };
 
 /// Server copies, cleared on sign-out. Rows the server does not have yet

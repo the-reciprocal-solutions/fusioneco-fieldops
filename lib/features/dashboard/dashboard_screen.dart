@@ -11,11 +11,13 @@ import '../../app/locale_config.dart';
 import '../../app/router.dart';
 import '../../state/auth_controller.dart';
 import '../../state/dashboard_controller.dart';
+import '../../state/day_attendance_controller.dart';
 import '../../state/day_brief_controller.dart';
 import '../../state/locale_controller.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
+import '../attendance/day_card.dart';
 import '../permits/widgets/permit_dashboard_card.dart';
 import '../snags/widgets/snag_dashboard_card.dart';
 import 'widgets/day_brief_card.dart';
@@ -61,6 +63,7 @@ class DashboardScreen extends ConsumerWidget {
           // the pull-to-refresh up on its own (its model call can be slow).
           onRefresh: () {
             unawaited(ref.read(dayBriefControllerProvider.notifier).refresh());
+            unawaited(_refreshDay(ref));
             return ref.read(dashboardControllerProvider.notifier).refresh();
           },
           child: ListView(
@@ -79,6 +82,9 @@ class DashboardScreen extends ConsumerWidget {
               // I…?" guides (docs/day-brief.md). Top of the page on purpose
               // (owner, 2026-10-10); it shows the phone's own plan while the
               // server brief loads or without signal, so it never blocks.
+              // "My day": the daily attendance for payroll (start / end my day,
+              // grace time, weekly off). Hidden when the technician has no shift.
+              const DayCard(),
               const DayBriefCard(),
               const SizedBox(height: 16),
 
@@ -1171,4 +1177,14 @@ class _RadiantSparklePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+
+/// Pulls today's shift and the day record from the server (the card itself reads
+/// only the phone). Offline this quietly does nothing.
+Future<void> _refreshDay(WidgetRef ref) async {
+  final userId = ref.read(sessionUserIdProvider);
+  if (userId == null) return;
+  await ref.read(dayAttendanceRepositoryProvider).loadToday(userId);
+  ref.read(dayTickProvider.notifier).state++;
 }

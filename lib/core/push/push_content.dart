@@ -487,6 +487,9 @@ PushTone pushToneFor(PushData d) {
 String? pushTagFor(PushData d) {
   final kind = pushKindOf(d);
   if (kind == PushKind.digest) return 'digest:${d.group?.wire ?? 'all'}';
+  // A daily-attendance alert shares its id with the reminder the phone drew itself, so it replaces it.
+  final thread = d.threadId;
+  if (thread != null && thread.startsWith('day:')) return thread;
   final id = d.entityId;
   if (kind == PushKind.message || kind == PushKind.mention) {
     return d.notificationId ?? (id == null ? null : '${d.entityType}:$id');
@@ -656,6 +659,10 @@ const pushStringsEn = <String, String>{
   'channel.schedules_desc': 'Your reminders and scheduled checks.',
   'channel.system_desc': 'Certification reminders and everything else.',
   'summary.more': '+%n more',
+  'day.grace_title': "You haven't checked in",
+  'day.grace_body': 'Your grace time has ended. Start your day now.',
+  'day.end_title': 'Your shift has ended',
+  'day.end_body': 'End your day in the app.',
   'result.accepted': 'Job accepted. Opening it now.',
   'result.accepted_offline': 'Accepted offline. It will be sent when you are back online.',
   'result.accept_failed': 'That did not send. Please answer the invite here.',
@@ -713,6 +720,10 @@ const pushStringsAr = <String, String>{
   'channel.schedules_desc': 'تذكيراتك وفحوصاتك المجدولة.',
   'channel.system_desc': 'تذكيرات الشهادات وكل ما عدا ذلك.',
   'summary.more': '+%n أخرى',
+  'day.grace_title': 'لم تسجّل حضورك',
+  'day.grace_body': 'انتهت فترة السماح. ابدأ يومك الآن.',
+  'day.end_title': 'انتهت مناوبتك',
+  'day.end_body': 'أنهِ يومك في التطبيق.',
   'result.accepted': 'تم قبول المهمة. جارٍ فتحها الآن.',
   'result.accepted_offline': 'تم القبول دون اتصال. سيتم الإرسال عند عودة الاتصال.',
   'result.accept_failed': 'لم يتم الإرسال. يرجى الرد على الدعوة هنا.',

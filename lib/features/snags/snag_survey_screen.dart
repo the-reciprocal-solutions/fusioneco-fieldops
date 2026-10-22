@@ -38,7 +38,7 @@ class SnagSurveyScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !context.mounted) return;
     await ref.read(snagRepositoryProvider).completeSurvey(survey);
     bumpSnags(ref);
   }

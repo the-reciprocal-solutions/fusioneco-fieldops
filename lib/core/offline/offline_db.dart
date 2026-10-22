@@ -670,6 +670,17 @@ abstract interface class ArPackStore {
   Future<void> setArPref(String key, String? value);
 }
 
+/// Daily attendance (docs/daily-attendance-shift-plan.md). One row per user and
+/// key: `rec:<date>` is the technician's own start / end of that day, written at
+/// the tap before any network; `today` is the server's last description of
+/// today (the shift and the moments the card counts to), cached so the card is
+/// right with no signal. The row holds the whole thing as JSON.
+abstract interface class DayAttendanceStore {
+  Future<void> putDayRow(String userId, String key, Map<String, dynamic> json);
+
+  Future<Map<String, dynamic>?> getDayRow(String userId, String key);
+}
+
 class OfflineDb
     implements
         C2oAssetCache,
@@ -679,6 +690,7 @@ class OfflineDb
         SnagStore,
         ArPackStore,
         ScanHistoryStore,
+        DayAttendanceStore,
         WipeExecutor {
   OfflineDb._(this._db);
 
@@ -763,6 +775,52 @@ class OfflineDb
   Future<void> clearScans(String userId) async {
     await _ensureScanHistory();
     await _db.delete('scan_history', where: 'user_id = ?', whereArgs: [userId]);
+  }
+
+  // ------------------------------------------------------- daily attendance
+  //
+  // Added 2026-10-22 WITHOUT a schema version bump, exactly like `scan_history`:
+  // created on first use with IF NOT EXISTS. Kept on sign-out (a start of day
+  // that has not reached the server is payroll evidence); every row carries its
+  // user id and every read filters on it.
+  static const _createDayAttendanceSql = '''
+    CREATE TABLE IF NOT EXISTS day_attendance (
+      user_id TEXT NOT NULL,
+      row_key TEXT NOT NULL,
+      json TEXT NOT NULL,
+      PRIMARY KEY (user_id, row_key)
+    )
+  ''';
+  Future<void>? _dayAttendanceReady;
+
+  Future<void> _ensureDayAttendance() => _dayAttendanceReady ??= () async {
+        await _db.execute(_createDayAttendanceSql);
+        // The per-job visit table of the first build (removed 2026-10-22): nothing reads it any more.
+        await _db.execute('DROP TABLE IF EXISTS job_visits');
+      }();
+
+  @override
+  Future<void> putDayRow(String userId, String key, Map<String, dynamic> json) async {
+    await _ensureDayAttendance();
+    await _db.insert('day_attendance', {
+      'user_id': userId,
+      'row_key': key,
+      'json': jsonEncode(json),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getDayRow(String userId, String key) async {
+    await _ensureDayAttendance();
+    final rows = await _db.query(
+      'day_attendance',
+      columns: ['json'],
+      where: 'user_id = ? AND row_key = ?',
+      whereArgs: [userId, key],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return jsonDecode(rows.first['json'] as String) as Map<String, dynamic>;
   }
 
   /// The schema version [open] creates or upgrades to.

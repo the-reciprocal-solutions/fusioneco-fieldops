@@ -214,6 +214,10 @@ The server rejects every **mutating** request from a technician whose last GPS f
 3. [LocationCheckInGate](../lib/widgets/location_checkin_gate.dart#L21) wraps **every route** (mounted in `MaterialApp.router`'s `builder`). While the gate is `required`, the UI is `AbsorbPointer`'d under a non-dismissible card.
 4. `checkIn()` gets a medium-accuracy fix (10s, falls back to the last known position) → `POST /api/fm/technicians/me/location` → clears the flag → **resumes `flushQueue`**, which had stopped on the 428.
 
+## Daily attendance (start / end of day)
+
+The technician starts and ends their day in the app ("Start my day" / "End my day"): a selfie and a position, saved on the phone first and sent by the offline queue (`DayIn` / `DayOut`, both in `kKeepOnServerErrorEntityTypes`). Plan and rules: [daily-attendance-shift-plan.md](daily-attendance-shift-plan.md); server contract: `fusion-eco-server/documentation/daily-attendance.md`. Per-job site visits (check in / out of each job) were built on 2026-10-21 and removed on 2026-10-22 by owner decision.
+
 ## Push and realtime
 
 - **FCM** ([push_service.dart](../lib/core/push/push_service.dart)): server pushes are **data-only**, so the app draws every notification itself ([local_notifications.dart](../lib/core/push/local_notifications.dart), channel `fcm_default_channel`, custom `notification_ting` sound). The background handler is a top-level `@pragma('vm:entry-point')` function that re-inits Firebase. Listeners attach once per process; the device token is sent (`POST /api/notifications/register-device`, server upserts) on login, on every cold start with a session, and on every app resume (`PushService.syncToken`), so a missed first attempt (iOS APNs token not ready, offline) or a second user on the same phone heals itself. It is **deliberately not unregistered on logout**: phones are personally issued, so an overnight assignment should still ring.

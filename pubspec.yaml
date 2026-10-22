@@ -62,6 +62,7 @@ dependencies:
   firebase_core: ^4.14.0
   firebase_messaging: ^16.6.0
   flutter_local_notifications: ^22.3.0
+  timezone: ^0.11.1
 
   # on-device nameplate OCR (FR-1.5) — pre-fills observation fields, never
   # auto-submits; see lib/core/ocr/nameplate_ocr.dart

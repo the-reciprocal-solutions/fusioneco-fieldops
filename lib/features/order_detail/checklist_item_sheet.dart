@@ -93,6 +93,7 @@ class _ChecklistItemSheetState extends ConsumerState<ChecklistItemSheet> {
 
   Future<void> _toggleTimer(ChecklistItem item) async {
     final mode = item.isRunning ? VerificationMode.end : VerificationMode.start;
+
     final verification = await _verify(mode);
     if (verification == null) return;
 

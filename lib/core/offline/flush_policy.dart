@@ -28,7 +28,17 @@ enum FlushOutcome {
 /// the Android background engine, which builds its own [SyncClient], applies
 /// the same rule. Must match `SnagRepository.entityType`/`surveyEntityType`
 /// (test/snag_outbox_test.dart checks).
-const kKeepOnServerErrorEntityTypes = <String>{'Snag', 'SnagSurvey'};
+///
+/// The start / end of the day (2026-10-22) are the same kind of write: the only
+/// copy of when a technician was on duty. A short server outage must not drop
+/// them. A 4xx is still a real refusal (month locked, no shift) and drops
+/// to the conflict log, with the day marked "Not sent" on the phone.
+const kKeepOnServerErrorEntityTypes = <String>{
+  'Snag',
+  'SnagSurvey',
+  'DayIn',
+  'DayOut',
+};
 
 FlushOutcome classifyFlushFailure({
   required int status,

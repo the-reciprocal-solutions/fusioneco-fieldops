@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import '../../state/day_attendance_controller.dart';
+import '../attendance/day_banner.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -56,7 +58,26 @@ class _TechnicianShellState extends ConsumerState<TechnicianShell>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(syncClientProvider).startAutoFlush();
+      unawaited(_refreshAttendance());
     });
+  }
+
+  /// Settles anything the Android background engine sent while the app was
+  /// closed, then refreshes the day.
+  Future<void> _refreshAttendance() async {
+    final userId = ref.read(sessionUserIdProvider);
+    if (userId == null) return;
+    await _refreshDay(userId);
+  }
+
+  /// Daily attendance: settle a start / end the background engine sent while the
+  /// app was closed, and pick up today's shift (and the server's judgement of
+  /// the day). Offline this quietly does nothing; the cached shift is right.
+  Future<void> _refreshDay(String userId) async {
+    final repo = ref.read(dayAttendanceRepositoryProvider);
+    await repo.reconcile(userId);
+    await repo.loadToday(userId);
+    if (mounted) ref.read(dayTickProvider.notifier).state++;
   }
 
   @override
@@ -73,6 +94,7 @@ class _TechnicianShellState extends ConsumerState<TechnicianShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(ref.read(syncClientProvider).flushQueue());
+      unawaited(_refreshAttendance());
       // Backstop for anything the socket missed while backgrounded (agent
       // replies, schedule started/done/failed): FCM draws the tray banner,
       // but the bell and an already-open list only learn of it here.
@@ -128,7 +150,7 @@ class _TechnicianShellState extends ConsumerState<TechnicianShell>
       // so the banner is never drawn under the clock, and the branch
       // screens' own SafeArea doesn't add a second gap below it.
       body: TopChromeLayout(
-        top: const [OfflineBanner(), SyncConflictPanel()],
+        top: const [OfflineBanner(), SyncConflictPanel(), DayBanner()],
         body: widget.navigationShell,
       ),
       bottomNavigationBar: _BottomNav(

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:technician_portal/state/day_attendance_controller.dart' show sessionUserIdProvider;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -92,6 +93,8 @@ final _survey = SnagSurvey(
 List<Override> _overrides() => [
   snagActorProvider.overrideWithValue(const SnagActor(id: 'me', name: 'Me')),
   snagBuildingIdProvider.overrideWith(_FixedBuilding.new),
+  // The survey screen carries the site-attendance card, which reads the signed-in user (nobody here).
+  sessionUserIdProvider.overrideWithValue(null),
   snagSyncProvider.overrideWith(_IdleSync.new),
   snagQueueFlushingProvider.overrideWithValue(false),
   snagBuildingsProvider.overrideWith((ref) async => const [SnagBuilding(id: 'b1', name: 'Tower A')]),

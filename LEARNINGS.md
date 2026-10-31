@@ -75,6 +75,9 @@ Entries marked **Source:** were carried over on 2026-09-25 from `fusion-eco-serv
 
 ## Auth, session and location gate
 
+### Two sign-ins in one app: keep keystore names apart, and only fall through on "not a technician" (2026-10-31)
+**What happened:** the admin app moved into FieldOps (docs/admin-side.md). Both apps stored their tokens as `token` / `refresh_token`. **Cause/risk:** with both sides in one process, FieldOps' background sync (WorkManager, its own `ApiClient`) would find an admin's refresh token and send it to `/api/auth/technician-refresh`. The server refuses it, and since refresh tokens rotate on every use, a refused or reused token can end the admin's session. **Fix:** the admin `SecureStore` uses `admin_token` / `admin_refresh_token`. The sign-in screen tries the admin login only on `400 "Technician not found"`, so a technician's wrong password never adds a failed "user" login to the audit log. **What to watch:** any new store or provider shared by the two sides needs its own key names. Example: a second `session` prefs key would make `AppRoot` think the wrong side is signed in. The server message "Technician not found" is now a contract (authController.ts `TechnicianLogin`); don't reword it. **State:** built, tests pass, phone run owed (P-035).
+
 ### Widget tests cannot do real file IO: the test hangs for minutes, it does not fail (2026-10-21)
 **What happened:** the first start-of-day sheet test sat in `pumpAndSettle` until the 4-minute test timeout. **Cause:** `testWidgets` runs in a fake-async zone; `File.writeAsBytes` completes on the real event loop, so the `await` never resumes. **Fix:** the widget tests use a `VisitMedia` subclass that returns the path without touching disk; the disk path is covered by plain `test()`s in `job_visit_repository_test.dart`. **What to watch:** a widget test that "hangs" is almost always real IO or a real timer, not a slow test. **Where:** `test/visit_sheet_test.dart` (`_NoDiskMedia`).
 
@@ -135,6 +138,9 @@ Entries marked **Source:** were carried over on 2026-09-25 from `fusion-eco-serv
 ---
 
 ## Maintenance orders: checklists, close, invites, AI chat
+
+### A work order with no asset fails on the live DB although the model allows it (2026-10-31)
+**What happened:** Raise work order from Building Efficiency (admin side) failed with a generic "couldn't be prepared". **Cause:** for a finding with no matched asset the server saves `relatedAssetId: null`. The Sequelize model says `allowNull: true`, but the live column `work_orders."relatedAssetId"` is still `NOT NULL` (the model changed, the table never did). **Fix:** owed. It needs `DROP NOT NULL` on the shared DB, with the owner's OK. **What to watch:** when a server error is generic, check the real column with `information_schema.columns`, not the model. A guess from the code ("no technician matched") was wrong here: the read-only `/work-order/preview` showed a technician was found. Snag "Raise work order" saves a null asset the same way. **State:** A-016 in docs/admin/PENDING.md.
 
 ### The server removed the reactive and annual write routes; the app still calls them (2026-09-12, open here)
 **What happened (server):** Annual Maintenance became a read-only view of PM plans (`/analytics`, `/building-compliance`, `/`, `/:id` only). Reactive tickets now generate a work order (`sourceRmId`), and RM `/checklist`, `/time-tracking` and `/status` were deleted. **What to watch (here):** `OrderType.reactive`/`annual` still point `checklistPath`/`completePath` at those routes. Online they 404; offline they queue and are later dropped. `listInvites` still requests `/api/fm/annual-maintenance/technician/:id`, and the 404 is swallowed. Lists, dashboard and calendar already follow the change (work orders only). Before deleting a per-id screen, grep **every** inbound link: notification routing, push routing, QR payloads, invites.

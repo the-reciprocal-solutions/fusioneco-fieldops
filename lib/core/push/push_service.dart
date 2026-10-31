@@ -6,6 +6,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../admin/core/push/local_notifications.dart' as admin;
+import '../../admin/core/storage/session_store.dart' as admin;
 import '../../app/router.dart';
 import '../../domain/conversation.dart';
 import '../../state/conversation_controller.dart';
@@ -36,6 +38,10 @@ import 'push_content.dart';
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  // One app, two sides (lib/app/app_root.dart): whoever is signed in on the
+  // phone decides how the push is drawn, so its tap lands on that side's
+  // handler (only the signed-in side initialises its LocalNotifications).
+  if (await admin.SessionStore.signedInOnDevice()) return admin.LocalNotifications.show(message);
   await LocalNotifications.show(message);
 }
 

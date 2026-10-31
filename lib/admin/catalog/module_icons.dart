@@ -1,0 +1,55 @@
+import 'package:flutter/widgets.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+
+/// Catalog `icon` (lucide name, kebab-case — server src/mobile/moduleCatalog.ts)
+/// → the Flutter icon. Unknown names fall back to a neutral grid, so a new
+/// server icon never breaks an older app build.
+IconData moduleIcon(String name) => _icons[name] ?? LucideIcons.layoutGrid;
+
+const _icons = <String, IconData>{
+  'layout-dashboard': LucideIcons.layoutDashboard,
+  'gauge': LucideIcons.gauge,
+  'bell': LucideIcons.bell,
+  'bell-ring': LucideIcons.bellRing,
+  'wrench': LucideIcons.wrench,
+  'shield-check': LucideIcons.shieldCheck,
+  'shield-alert': LucideIcons.shieldAlert,
+  'map-pin-check': LucideIcons.mapPinCheck,
+  'clipboard-list': LucideIcons.clipboardList,
+  'clipboard-check': LucideIcons.clipboardCheck,
+  'calendar': LucideIcons.calendar,
+  'calendar-check': LucideIcons.calendarCheck,
+  'calendar-range': LucideIcons.calendarRange,
+  'triangle-alert': LucideIcons.triangleAlert,
+  'file-check-2': LucideIcons.fileCheck2,
+  'file-text': LucideIcons.fileText,
+  'package': LucideIcons.package,
+  'receipt': LucideIcons.receipt,
+  'chart-column': LucideIcons.chartColumn,
+  'history': LucideIcons.history,
+  'factory': LucideIcons.factory,
+  'building-2': LucideIcons.building2,
+  'zap': LucideIcons.zap,
+  'fuel': LucideIcons.fuel,
+  'battery-charging': LucideIcons.batteryCharging,
+  'sun': LucideIcons.sun,
+  'droplets': LucideIcons.droplets,
+  'container': LucideIcons.container,
+  'thermometer-sun': LucideIcons.thermometerSun,
+  'wind': LucideIcons.wind,
+  'flame': LucideIcons.flame,
+  'camera': LucideIcons.camera,
+  'arrow-up-down': LucideIcons.arrowUpDown,
+  'server': LucideIcons.server,
+  'compass': LucideIcons.compass,
+  'map': LucideIcons.map,
+  'air-vent': LucideIcons.airVent,
+  'users': LucideIcons.users,
+  'aperture': LucideIcons.aperture,
+  'box': LucideIcons.box,
+  'hard-hat': LucideIcons.hardHat,
+  'brain-circuit': LucideIcons.brainCircuit,
+  'leaf': LucideIcons.leaf,
+  'bot': LucideIcons.bot,
+  'cpu': LucideIcons.cpu,
+};

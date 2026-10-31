@@ -23,9 +23,18 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-035**
+Next number: **P-036**
 
 ## Open
+
+### P-035 · Admin screens moved into FieldOps (one app): built and tested, not yet run on a phone with an admin
+- **Status:** needs verification · **Priority:** P1 · **Area:** sign-in, push, `lib/admin/`
+- **Found:** 2026-10-31 (owner: "there will be one and only technician portal… if the admin logins we use the admin screens… if the tech logins we use the existing tech screens")
+- **Done so far:** the admin app's `lib/` copied to `lib/admin/` (login screen dropped), `AppRoot` switch, two-step sign-in, admin keystore names `admin_token`/`admin_refresh_token`, one push background handler choosing the side, admin translations appended, `share_plus` added, tests moved to `test/admin/` + `unified_login_test.dart`. `flutter analyze` 0 errors (30 old infos); `flutter test` 1400+ pass on Flutter 3.47.2. The one failure, `snag_outbox_test` "iOS container move", is old (Windows `\` in a path) and not part of this change. See [docs/admin-side.md](docs/admin-side.md).
+- **Phone-tested 2026-10-31 (CPH2667, live server):** technician side unchanged (Balaji's dashboard, live data); admin wrong password → "Invalid Credentials"; admin sign-in (Ragul, demo@admin.com) → admin Home, Efficiency, Alerts, Operations, More with live data; admin push registered (phone token `ejdK7g9…`), real alert pushes drawn in the background on the admin channels, a tap opens the admin side (Notifications list: escalation bells carry no alert key, same as before the move); admin sign-out → FieldOps sign-in and the push registration removed. Not yet: signing Balaji back in through the app (left to the owner), the PDF share, Raise work order (A-016). Seen: a "Critical alert" bell push lands on the `fe_alerts` channel, not `fe_alerts_critical` (old admin behaviour, not the move).
+- **Left (original list):** on the phone with the server up: (1) technician sign-in still lands on FieldOps' dashboard; (2) admin sign-in (e.g. Ragul) lands on the admin Home; (3) admin sign-out → FieldOps sign-in; (4) admin wrong password shows "Invalid Credentials"; (5) admin alert push in background, tap opens the alert (first end-to-end push for the admin side, A-020); (6) the efficiency PDF share. Then the admin open items in [docs/admin/PENDING.md](docs/admin/PENDING.md) (A-005…A-020; A-016 Raise work order from Efficiency failed, probably `TECHNICIAN_NEEDED`).
+- **2026-10-31:** sign-in wording made neutral ("Fusion Eco FieldOps", "Facility operations for technicians and admins", "SIGN IN TO YOUR ACCOUNT", "Username or email", building icon; the stale "24 hours" lines now say "until you sign out"). Checked by test (unified_login_test.dart), not seen on the phone (Balaji signed in).
+- **Known gaps:** a device a technician signed out of keeps their push token (by design, `logout()`), so an admin signing in on that phone means both get its pushes; theme/widgets are duplicated in `lib/admin/` (fine for now, could be shared later).
 
 ### P-034 · Daily attendance for payroll (shifts, grace time, Sundays): built and unit-tested, not yet run on a phone
 - **Status:** needs verification · **Priority:** P1 · **Area:** attendance, payroll

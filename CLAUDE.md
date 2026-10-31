@@ -9,6 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. **Maintenance (CMMS):** work orders, invites, checklists with photo/voice/signature, downtime, close with RCA, inspections, and an AI Order Assistant.
 2. **C2O field verification:** scan asset tags, verify against the handover register, walk downloaded route packs.
 
+**Admin side (since 2026-10-31):** the same app also serves admin-panel users (Admin/Vendor/Tenant). `lib/app/app_root.dart` shows the admin screens in [`lib/admin/`](lib/admin/) (a self-contained sub-app: own router, client, session, tokens) when an admin is signed in; the one sign-in screen tries the technician login, then the admin login on `400 "Technician not found"`. **Read [docs/admin-side.md](docs/admin-side.md) before touching sign-in, push, `main.dart` or `lib/admin/`.**
+
 It is the mobile port of the web technician portal (`../fusion-eco-client/app/technician/*`) and calls the same API (`../fusion-eco-server`, Express on `:5002`). Comments that say "mirrors the web…" mean behaviour is deliberately kept in step with that portal.
 
 Branches: `main` (active), `origin/dev`. Only Android ships. iOS (bundle `com.fusionapps.fieldops`, same as Android) builds on the `a2251` Mac since 2026-10-05 and reaches the login screen in the simulator. It has no Firebase plist yet (push off) and has never run on a device or TestFlight (PENDING P-028).
@@ -79,6 +81,8 @@ Deep dive: [docs/architecture.md](docs/architecture.md).
 - **Known open risks — read before relying on the queue:** `logout()` (including a refused refresh) keeps a non-empty queue (NFR-1). Since 2026-09-27 (P-002), an empty queue no longer means everything goes either: `OfflineDb.wipeForSignOut()` clears server copies only and keeps unsent work (local-only snags/surveys/AR markers, pending AR progress, drafts, tag reports, the conflict log). The rule is in [sign_out_wipe.dart](lib/core/offline/sign_out_wipe.dart), and a test fails on any unclassified table. **Still open:** a different user signing in replays the previous user's queue with their own token (improvements #11), and a 5xx on one item lets later dependent items replay first. Details and 40 more items, prioritised: [docs/improvements.md](docs/improvements.md).
 
 ## Detail files (load on demand)
+
+- [docs/admin-side.md](docs/admin-side.md): **one app for technicians and admins** (2026-10-31): `AppRoot` switch, two-step sign-in, separate admin keystore names, the shared push background handler, what is and isn't shared. Admin-side history and open items (A-numbers): [docs/admin/](docs/admin/).
 
 - [docs/day-brief.md](docs/day-brief.md): home "Your day" card (server day-brief endpoint, rule order + grounded AI text, offline planner `lib/core/day/day_planner.dart`, process guides `lib/core/day/process_guides.dart`).
 - [docs/architecture.md](docs/architecture.md): core engine (bootstrap, DI, network, offline sync, DB schema, session, location gate, push, routing, i18n). **Read before touching `lib/core/` or `lib/state/providers.dart`.**

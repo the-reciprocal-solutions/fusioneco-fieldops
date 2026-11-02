@@ -1,5 +1,6 @@
 // ignore_for_file: prefer_initializing_formals — named params cannot be private
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
@@ -123,6 +124,19 @@ class ApiClient {
   Future<dynamic> post(String path, {Object? body}) =>
       _send(() => _dio.post(path, data: body));
 
+  /// A POST answered with Server-Sent Events (`data: {json}` blocks, ending
+  /// `data: [DONE]`): each event's JSON, as it arrives. Errors before the
+  /// first byte are [ApiFailure]s, like [post].
+  Stream<Map<String, dynamic>> postEvents(String path, {Object? body, Duration timeout = const Duration(minutes: 3)}) async* {
+    final res = await _send(() => _dio.post<ResponseBody>(
+          path,
+          data: body,
+          options: Options(responseType: ResponseType.stream, receiveTimeout: timeout, headers: {'Accept': 'text/event-stream'}),
+        ));
+    if (res is! ResponseBody) throw const UnknownFailure('Unexpected answer');
+    yield* sseEvents(res.stream);
+  }
+
   /// `POST /api/upload/file` (multipart) → the stored file's URL.
   Future<String> uploadFile(List<int> bytes, String fileName) async {
     final res = await _send(() => _dio.post('/api/upload/file', data: FormData.fromMap({'file': MultipartFile.fromBytes(bytes, filename: fileName)}), options: Options(receiveTimeout: Env.uploadTimeout)));
@@ -139,5 +153,34 @@ class ApiClient {
     } catch (e) {
       throw UnknownFailure(e.toString());
     }
+  }
+}
+
+/// Server-Sent Events → each `data:` block's JSON object. Lines may arrive
+/// split across chunks; `[DONE]` ends the stream; comments and non-JSON
+/// blocks are skipped. Pure, so it is unit-tested.
+Stream<Map<String, dynamic>> sseEvents(Stream<List<int>> bytes) async* {
+  final data = StringBuffer();
+  await for (final line in bytes.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter())) {
+    if (line.isEmpty) {
+      final block = data.toString();
+      data.clear();
+      if (block == '[DONE]') return;
+      if (block.isEmpty) continue;
+      try {
+        final j = jsonDecode(block);
+        if (j is Map<String, dynamic>) yield j;
+      } catch (_) {}
+    } else if (line.startsWith('data:')) {
+      if (data.isNotEmpty) data.write('\n');
+      data.write(line.substring(5).trimLeft());
+    }
+  }
+  final rest = data.toString();
+  if (rest.isNotEmpty && rest != '[DONE]') {
+    try {
+      final j = jsonDecode(rest);
+      if (j is Map<String, dynamic>) yield j;
+    } catch (_) {}
   }
 }

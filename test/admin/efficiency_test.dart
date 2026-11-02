@@ -68,6 +68,26 @@ class _FakeApi extends ApiClient {
   @override
   Future<dynamic> post(String path, {Object? body}) async {
     posts.add((path, body));
+    if (path.endsWith('/preview')) {
+      // No asset matched (the live FCU corridor case): the server lists some to pick.
+      return {
+        'success': true,
+        'data': {
+          'title': 'Fix FAHU-03',
+          'asset': null,
+          'assetCandidates': [
+            {'id': 'a1', 'name': 'FAHU-03', 'reference': 'AST301'},
+            {'id': 'a2', 'name': 'FCU 5th-Floor', 'reference': 'AST302'},
+          ],
+          'technician': {'id': 't1', 'name': 'Anita'},
+          'technicians': [
+            {'id': 't1', 'name': 'Anita'},
+            {'id': 't2', 'name': 'Balaji'},
+          ],
+          'existing': null,
+        },
+      };
+    }
     return {'success': true, 'data': {'workOrderId': 'WO-900'}};
   }
 }
@@ -151,12 +171,25 @@ void main() {
 
     await tester.tap(find.text('Raise work order'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Raise work order').last); // confirm
+    expect(api.posts.single.$1, '/api/fm/hvac-efficiency/work-order/preview');
+    // No asset matched: Raise stays off until one is picked (a work order needs one).
+    final raise = find.widgetWithText(TextButton, 'Raise work order');
+    expect(tester.widget<TextButton>(raise).onPressed, isNull);
+    expect(find.text('Anita'), findsOneWidget); // best technician pre-picked
+
+    await tester.tap(find.text('Pick the asset'));
     await tester.pumpAndSettle();
-    final (path, body) = api.posts.single;
+    await tester.tap(find.text('FCU 5th-Floor · AST302').last);
+    await tester.pumpAndSettle();
+    await tester.tap(raise);
+    await tester.pumpAndSettle();
+
+    final (path, body) = api.posts.last;
     expect(path, '/api/fm/hvac-efficiency/work-order');
     expect(body, containsPair('findingId', 'valve_saturated:fahu:3'));
     expect(body, containsPair('site', 'bacnet_gw_02'));
+    expect(body, containsPair('assetId', 'a2'));
+    expect(body, containsPair('technicianId', 't1'));
     expect((body as Map)['requestId'], isA<String>());
     // The button is now done: a second tap can't create another.
     expect(find.text('Work order WO-900 raised'), findsWidgets);
@@ -167,5 +200,21 @@ void main() {
     await tester.tap(find.text('Smoke fan not ready'));
     await tester.pumpAndSettle();
     expect(find.text('Raise work order'), findsNothing);
+  });
+
+  test('preview: a matched asset comes first and is not listed twice', () {
+    final p = WoPreview.fromJson({
+      'asset': {'id': 'a1', 'name': 'AHU-01', 'reference': 'AST1', 'match': 'point-mapping'},
+      'assetCandidates': [
+        {'id': 'a1', 'name': 'AHU-01', 'reference': 'AST1'},
+        {'id': 'a3', 'name': 'AHU-02'},
+      ],
+      'technicians': <dynamic>[],
+      'existing': {'workOrderId': 'WO-12'},
+    });
+    expect(p.assetId, 'a1');
+    expect(p.assets, [('a1', 'AHU-01 · AST1'), ('a3', 'AHU-02')]);
+    expect(p.technicianId, isNull);
+    expect(p.existing, 'WO-12');
   });
 }

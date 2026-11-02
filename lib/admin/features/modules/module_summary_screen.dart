@@ -17,6 +17,7 @@ import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../../widgets/open_on_web.dart';
 import 'module_spec.dart';
+import 'scan_screen.dart';
 
 const _pageSize = 20;
 
@@ -45,6 +46,7 @@ class _ModuleSummaryScreenState extends ConsumerState<ModuleSummaryScreen> {
   bool _loadingList = false;
   bool _done = false;
   String _search = '';
+  final _searchText = TextEditingController();
   Timer? _debounce;
 
   ListSpec? get _list => widget.spec.list;
@@ -58,6 +60,7 @@ class _ModuleSummaryScreenState extends ConsumerState<ModuleSummaryScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _searchText.dispose();
     super.dispose();
   }
 
@@ -118,20 +121,38 @@ class _ModuleSummaryScreenState extends ConsumerState<ModuleSummaryScreen> {
     });
   }
 
-  Future<void> _open(Json row) async {
-    final r = _list!.row(row);
+  Future<void> _open(Json row) => _openId(_list!.row(row).id, row);
+
+  Future<void> _openId(String recordId, [Json? row]) async {
     // A page spec ("facility_ops:visitors") keeps its page in the record path.
     final id = widget.spec.moduleId;
     final page = id.contains(':') ? id.substring(id.indexOf(':') + 1) : null;
-    final changed = await context.push<bool>(recordPath(widget.module.id, r.id, page: page), extra: row);
+    final changed = await context.push<bool>(recordPath(widget.module.id, recordId, page: page), extra: row);
     if (changed == true) _refresh();
+  }
+
+  /// A code with the record's id opens it; anything else is searched for,
+  /// and a single match opens.
+  Future<void> _scan() async {
+    final raw = await ref.read(scanCodeProvider)(context);
+    if (raw == null || !mounted) return;
+    final id = _list!.scanId!(raw);
+    if (id != null) return _openId(id);
+    _debounce?.cancel();
+    _searchText.text = raw;
+    _search = raw;
+    await _loadList(reset: true);
+    if (mounted && _listError == null && _rows.length == 1) await _open(_rows.single);
   }
 
   @override
   Widget build(BuildContext context) {
     final list = _list;
     return Scaffold(
-      appBar: FeHeader(title: widget.title ?? widget.module.label, actions: [OpenOnWebButton(path: widget.module.webPath)]),
+      appBar: FeHeader(
+        title: widget.title ?? widget.module.label,
+        actions: [...?widget.spec.headerActions?.call(context, widget.module)],
+      ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: NotificationListener<ScrollNotification>(
@@ -147,14 +168,22 @@ class _ModuleSummaryScreenState extends ConsumerState<ModuleSummaryScreen> {
                 _KpiGrid(kpis: _kpis, error: _kpiError),
                 const SizedBox(height: 16),
               ],
+              if (widget.spec.desktopNote case final note?) ...[
+                DesktopNote(textKey: note),
+                const SizedBox(height: 16),
+              ],
               if (list != null) ...[
                 if (list.searchParam != null) ...[
                   TextField(
+                    controller: _searchText,
                     onChanged: _onSearch,
                     textInputAction: TextInputAction.search,
                     decoration: InputDecoration(
                       hintText: 'common.search'.getString(context),
                       prefixIcon: const Icon(LucideIcons.search, size: 18),
+                      suffixIcon: list.scanId == null
+                          ? null
+                          : IconButton(icon: const Icon(LucideIcons.scanLine, size: 20), tooltip: 'scan.title'.getString(context), onPressed: _scan),
                     ),
                   ),
                   const SizedBox(height: 12),

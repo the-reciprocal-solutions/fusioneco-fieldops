@@ -16,7 +16,7 @@ import '../../widgets/fe_header.dart';
 import 'alert_widgets.dart';
 
 /// Alert Center on the phone (FE-mobile.md Phase 2): counts, severity /
-/// status / mine filters, worst-first list. Live: the socket's
+/// building / status / mine filters, worst-first list. Live: the socket's
 /// `alerts:changed` refetches it. Long-press starts a selection for bulk
 /// acknowledge / resolve. Rules, teams and the simulator stay on the web.
 class AlertsScreen extends ConsumerStatefulWidget {
@@ -78,7 +78,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
           children: [
             _SummaryRow(summary: list.valueOrNull?.summary),
             const SizedBox(height: 12),
-            _FilterBar(filters: filters),
+            _FilterBar(filters: filters, buildings: list.valueOrNull?.summary.buildings ?? const []),
             const SizedBox(height: 12),
             ...list.when(
               skipLoadingOnRefresh: true,
@@ -111,11 +111,19 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                             onLongPress: () => _toggle(a.key),
                           ),
                         ),
-                      if (page.total > page.rows.length)
+                      if (page.total > page.rows.length) ...[
                         AppText.bodySmall(
                           context.formatString('alerts.showing'.getString(context), [page.rows.length, page.total]),
                           align: TextAlign.center,
                         ),
+                        const SizedBox(height: 8),
+                        Center(
+                          child: OutlinedButton(
+                            onPressed: list.isLoading ? null : () => ref.read(alertPageCountProvider.notifier).state++,
+                            child: AppText('alerts.load_more'.getString(context)),
+                          ),
+                        ),
+                      ],
                     ],
             ),
           ],
@@ -159,8 +167,22 @@ class _SummaryRow extends StatelessWidget {
 }
 
 class _FilterBar extends ConsumerWidget {
-  const _FilterBar({required this.filters});
+  const _FilterBar({required this.filters, required this.buildings});
   final AlertFilters filters;
+
+  /// The summary's building facet (counted without the building filter, so
+  /// every choice stays listed while one is picked).
+  final List<BuildingCount> buildings;
+
+  String _buildingLabel(BuildContext context) {
+    if (filters.buildings.isEmpty) return 'alerts.filter_building'.getString(context);
+    if (filters.buildings.length > 1) {
+      return context.formatString('alerts.filter_buildings_n'.getString(context), [filters.buildings.length]);
+    }
+    final id = filters.buildings.single;
+    final b = buildings.where((b) => b.id == id).firstOrNull;
+    return b == null ? 'alerts.filter_building'.getString(context) : _name(context, b);
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -178,6 +200,25 @@ class _FilterBar extends ConsumerWidget {
                 label: AppText.caption('alerts.severity_$sev'.getString(context)),
                 selected: filters.severity.contains(sev),
                 onSelected: (on) => set(filters.copyWith(severity: on ? {...filters.severity, sev} : ({...filters.severity}..remove(sev)))),
+              ),
+            ),
+          // Shown once the list knows its buildings, or while one is picked.
+          if (buildings.length > 1 || filters.buildings.isNotEmpty)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 8),
+              child: FilterChip(
+                avatar: const Icon(LucideIcons.building2, size: 14),
+                label: AppText.caption(_buildingLabel(context)),
+                selected: filters.buildings.isNotEmpty,
+                onSelected: (_) async {
+                  final picked = await showModalBottomSheet<Set<String>>(
+                    context: context,
+                    isScrollControlled: true,
+                    showDragHandle: true,
+                    builder: (_) => _BuildingSheet(buildings: buildings, selected: filters.buildings),
+                  );
+                  if (picked != null) set(filters.copyWith(buildings: picked));
+                },
               ),
             ),
           Padding(
@@ -200,6 +241,72 @@ class _FilterBar extends ConsumerWidget {
       ),
     );
   }
+}
+
+String _name(BuildContext context, BuildingCount b) =>
+    b.id == 'none' ? 'alerts.no_building'.getString(context) : b.name;
+
+/// Tick buildings; pops the new set (empty = every building).
+class _BuildingSheet extends StatefulWidget {
+  const _BuildingSheet({required this.buildings, required this.selected});
+  final List<BuildingCount> buildings;
+  final Set<String> selected;
+
+  @override
+  State<_BuildingSheet> createState() => _BuildingSheetState();
+}
+
+class _BuildingSheetState extends State<_BuildingSheet> {
+  late final _picked = {...widget.selected};
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.7),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 8, 0),
+                child: Row(
+                  children: [
+                    Expanded(child: AppText.titleSmall('alerts.filter_building'.getString(context))),
+                    TextButton(
+                      onPressed: _picked.isEmpty ? null : () => setState(_picked.clear),
+                      child: AppText('alerts.filter_all_buildings'.getString(context)),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final b in widget.buildings)
+                      CheckboxListTile(
+                        dense: true,
+                        value: _picked.contains(b.id),
+                        title: AppText(_name(context, b)),
+                        secondary: AppText.caption('${b.count}'),
+                        onChanged: (on) => setState(() => on == true ? _picked.add(b.id) : _picked.remove(b.id)),
+                      ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context, _picked),
+                    child: AppText('alerts.filter_apply'.getString(context)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 class _AlertCard extends StatelessWidget {

@@ -48,6 +48,11 @@ PushTarget pushTargetOf(Map<String, dynamic> data) {
   return const NotificationsTarget();
 }
 
+/// Alert pushes (raised, escalated, "assigned to you") get an Acknowledge
+/// button. The server answers 409 for one acknowledged meanwhile; the alert
+/// then opens showing its real status.
+bool canAckFromTray(Map<String, dynamic> data) => pushTargetOf(data) is AlertTarget;
+
 /// Alerts get their own channels (critical ones louder); the rest is "Updates".
 /// The alert fan-out says `severity`; routing's bell push ("Critical alert: …")
 /// has no severity, only `type`, which is `error` for a critical alert

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:technician_portal/admin/core/network/api_client.dart';
+import 'package:technician_portal/admin/core/network/api_exception.dart';
 import 'package:technician_portal/admin/core/storage/secure_store.dart';
 import 'package:technician_portal/admin/domain/mobile_catalog.dart';
 import 'package:technician_portal/admin/features/modules/specs.dart';
@@ -45,10 +46,27 @@ final _live = {
   },
 };
 
+/// Shaped like `/api/fm/plant-layouts/:id/live` (server plantRoomLive.ts, 2026-11-02):
+/// the pump tripped, the chiller in hand (warn), the device-bound tower read
+/// from its own device, the AHU with nothing bound.
+final _verdicts = {
+  'layoutId': 'room-1',
+  'counts': {'critical': 1, 'warn': 1, 'ok': 1, 'nodata': 1},
+  'machines': {
+    'i1': {'level': 'critical', 'severity': 'critical', 'role': 'fault', 'headline': null, 'source': 'asset', 'readings': [{'key': 'trip', 'label': 'Trip', 'value': 'trip', 'unit': null}]},
+    'i2': {'level': 'warn', 'severity': 'warn', 'role': 'duty', 'headline': {'label': 'CHW Supply', 'value': '6.8', 'unit': '°C'}, 'source': 'asset', 'readings': <Object>[]},
+    'i3': {'level': 'ok', 'severity': 'ok', 'role': 'duty', 'headline': {'label': 'Fan', 'value': '82', 'unit': '%'}, 'source': 'device', 'readings': [{'key': 'cwSupply', 'label': 'CW Supply', 'value': 29.5, 'unit': '°C'}]},
+    'i4': {'level': 'nodata', 'severity': null, 'role': null, 'headline': null, 'source': null, 'readings': <Object>[]},
+  },
+};
+
 class _FakeApi extends ApiClient {
-  _FakeApi() : super(secureStore: SecureStore());
+  _FakeApi({this.roomLive = false}) : super(secureStore: SecureStore());
   final gets = <String>[];
   Duration? liveTimeout;
+
+  /// false = an older server without `/:id/live` (404).
+  final bool roomLive;
 
   @override
   Future<dynamic> get(String path, {Map<String, dynamic>? query, Duration? timeout}) async {
@@ -60,6 +78,11 @@ class _FakeApi extends ApiClient {
       return {'success': true, 'data': _live};
     }
     if (path == '/api/fm/plant-layouts/room-1') return {'success': true, 'data': _room};
+    if (path == '/api/fm/plant-layouts/room-1/live') {
+      liveTimeout = timeout;
+      if (!roomLive) throw const HttpFailure(status: 404, message: 'Not found');
+      return {'success': true, 'data': _verdicts};
+    }
     throw StateError('unexpected GET $path');
   }
 }
@@ -76,8 +99,8 @@ final _boot = MobileBootstrap(
   catalogVersion: 1,
 );
 
-Future<_FakeApi> _pump(WidgetTester tester, {MobileBootstrap? boot}) async {
-  final api = _FakeApi();
+Future<_FakeApi> _pump(WidgetTester tester, {MobileBootstrap? boot, bool roomLive = false}) async {
+  final api = _FakeApi(roomLive: roomLive);
   final b = boot ?? _boot;
   final localization = FlutterLocalization.instance;
   await tester.pumpWidget(ProviderScope(
@@ -125,7 +148,29 @@ void main() {
     expect(sorted.first.id, 'i1');
   });
 
-  testWidgets('list → room: cards with live values and an alarm', (tester) async {
+  test('server verdicts: warn and device-bound machines too, worst first', () {
+    final m = [for (final i in _room['instances'] as List) PlantMachine.fromJson(i as Map).withVerdict(_verdicts['machines'] as Map)];
+    expect(m.map((x) => x.level), ['critical', 'warn', 'ok', 'nodata']);
+    expect(m[2].feed, PlantFeed.live); // the device-bound tower now has readings
+    expect(m[1].headline?.display, '6.8 °C');
+    expect(sortMachines([m[3], m[2], m[1], m[0]]).map((x) => x.id), ['i1', 'i2', 'i3', 'i4']);
+  });
+
+  testWidgets('room on a current server: amber and red from the server, device readings shown', (tester) async {
+    final api = await _pump(tester, roomLive: true);
+    await tester.tap(find.text('Basement plant'));
+    await tester.pumpAndSettle();
+    expect(api.gets, isNot(contains('/api/fm/plant-layouts/live')));
+    expect(find.text('CW Supply'), findsOneWidget);
+    expect(find.text('29.50 °C'), findsNothing);
+    expect(find.text('29.5 °C'), findsOneWidget);
+    expect(find.text('6.8 °C'), findsOneWidget);
+    expect(find.text('Warnings'), findsOneWidget);
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('list → room (older server): cards with live values and an alarm', (tester) async {
     final api = await _pump(tester);
     expect(find.text('Basement plant'), findsOneWidget);
     await tester.tap(find.text('Basement plant'));
@@ -134,7 +179,8 @@ void main() {
     expect(find.text('CHW pump 1'), findsOneWidget);
     expect(find.text('TRIPPED'), findsOneWidget);
     expect(find.text('Points not mapped (Device Mapping)'), findsOneWidget);
-    expect(find.text('Live readings on the web'), findsOneWidget);
+    expect(find.text('For the 3D plant room, use the web admin panel on a desktop.'), findsOneWidget);
+    expect(find.text('Bound to a building-system device'), findsOneWidget);
     expect(find.text('Not connected'), findsOneWidget);
     expect(api.liveTimeout, const Duration(seconds: 60));
 

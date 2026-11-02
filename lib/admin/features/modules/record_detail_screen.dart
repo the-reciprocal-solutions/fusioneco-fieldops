@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/media/photo_picker.dart';
 import '../../core/network/api_exception.dart';
+import '../../state/auth_controller.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
 import '../../theme/theme_extensions.dart';
@@ -45,10 +46,20 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
   }
 
   Future<void> _reload() async {
-    final path = widget.spec.list?.detailPath;
+    final list = widget.spec.list;
+    final path = list?.detailPath;
     if (path == null) return;
+    final api = ref.read(apiClientProvider);
     try {
-      final rec = recordOf(await ref.read(apiClientProvider).get(path(widget.recordId)));
+      final extras = {
+        for (final e in list!.detailExtras.entries)
+          e.key: api.get(e.value(widget.recordId)).then<List<Json>?>(rowsOf).catchError((Object _) => null),
+      };
+      final rec = recordOf(await api.get(path(widget.recordId)));
+      for (final e in extras.entries) {
+        final rows = await e.value;
+        if (rows != null) rec[e.key] = rows;
+      }
       // Merged over the list row: some detail endpoints (energy summary) omit
       // the fields the row already shows, such as the name.
       if (mounted && rec.isNotEmpty) setState(() => (_record = {...?_record, ...rec}, _error = null));
@@ -60,7 +71,10 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
 
   Future<void> _run(RecordAction a) async {
     String? text;
-    if (a.ask != TextAsk.none) {
+    if (a.choices.isNotEmpty) {
+      text = await _askChoice(a);
+      if (text == null) return;
+    } else if (a.ask != TextAsk.none) {
       text = await _askText(a);
       if (text == null) return;
       if (a.ask == TextAsk.required && text.trim().isEmpty) return;
@@ -94,6 +108,21 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
     }
   }
 
+  Future<String?> _askChoice(RecordAction a) => showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: AppText.title(a.label.getString(ctx)),
+          children: [
+            for (final (value, key) in a.choices)
+              SimpleDialogOption(
+                onPressed: () => Navigator.of(ctx).pop(value),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                child: AppText(key.getString(ctx)),
+              ),
+          ],
+        ),
+      );
+
   Future<String?> _askText(RecordAction a) =>
       promptText(context, title: a.label.getString(context), hint: (a.ask == TextAsk.required ? 'module.text_required' : 'module.text_optional').getString(context));
 
@@ -117,7 +146,7 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
         if (!didPop) Navigator.of(context).pop(_changed);
       },
       child: Scaffold(
-        appBar: FeHeader(title: row?.ref ?? row?.title ?? ''),
+        appBar: FeHeader(title: (row?.refInHeader ?? true ? row?.ref : null) ?? row?.title ?? ''),
         body: rec == null
             ? (_error == null
                   ? const TechSpinner()
@@ -134,7 +163,10 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
 
   Widget _body(BuildContext context, Json rec, RecordRow? row) {
     final facts = (widget.spec.facts?.call(rec) ?? const []).where((f) => f.$2 != null && f.$2!.isNotEmpty).toList();
-    final actions = widget.spec.actions?.call(rec) ?? const <RecordAction>[];
+    // `_me`: who is signed in, for rules that depend on it (a snag can't be
+    // verified by whoever marked it ready; only Admin may waive).
+    final me = ref.read(authControllerProvider).user;
+    final actions = widget.spec.actions?.call({...rec, if (me != null) '_me': {'id': me.id, 'role': me.role}}) ?? const <RecordAction>[];
     final url = widget.spec.open?.call(rec);
 
     // RowGroup brings its own 16px side inset; the header card and buttons
@@ -184,7 +216,7 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
           RowGroup(
             label: 'module.details'.getString(context),
             dividerIndent: 16,
-            rows: [for (final (label, value) in facts) ListTile(dense: true, title: AppText.caption(label.getString(context)), subtitle: AppText.body(value!))],
+            rows: [for (final (label, value) in facts) ListTile(dense: true, title: AppText.caption(label.getString(context)), subtitle: AppText.body(factText(context, value!)))],
           ),
         ],
         ...?widget.spec.extra?.call(context, rec),

@@ -24,7 +24,7 @@ import '../modules/record_detail_screen.dart';
 /// Photo Twin on the phone (FE-mobile.md Phase 2). The Gaussian-splat viewer
 /// stays on the web (phones vary too much for it in v1). The phone has:
 ///   - snag counts + the open snags, each with its moves (snag_actions.dart)
-///   - the photo scans of each building, opening the web viewer on that scan
+///   - the photo scans of each building (the 3D viewer is on the desktop)
 ///   - Report issue → a reactive ticket, as the web's Report sheet does
 /// Calls (live sizes 2026-10-30):
 ///   GET /api/snags/summary · GET /api/snags?view=list (13 KB / 10 snags)
@@ -128,7 +128,7 @@ class _PhotoTwinScreenState extends ConsumerState<PhotoTwinScreen> {
     final snags = _snags;
     final sum = _summary;
     return Scaffold(
-      appBar: FeHeader(title: widget.module.label, actions: [OpenOnWebButton(path: widget.module.webPath)]),
+      appBar: FeHeader(title: widget.module.label),
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: FeColors.primary,
         foregroundColor: Colors.white,
@@ -153,6 +153,7 @@ class _PhotoTwinScreenState extends ConsumerState<PhotoTwinScreen> {
                 Padding(padding: const EdgeInsets.only(bottom: 10), child: RecordCard(row: snagsSpec.list!.row(r), onTap: () => _openSnag(r))),
               _heading(context, 'twin.scans'),
               if (_scans.isEmpty) AppText.bodySmall('twin.no_scans'.getString(context)),
+              if (_scans.isNotEmpty) const Padding(padding: EdgeInsets.only(bottom: 10), child: DesktopNote(textKey: 'desktop.twin_scans')),
               for (final b in _buildings)
                 if (_scans[b['id']] case final scans?) ...[
                   Padding(padding: const EdgeInsets.only(left: 4, bottom: 8), child: AppText.titleSmall(s(b['name']) ?? '–')),
@@ -202,7 +203,6 @@ class _ScanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => TechCard(
         padding: const EdgeInsets.all(10),
-        onTap: () => openOnWeb(context, photoTwinWebPath(scan.buildingId, scan.modelId)),
         child: Row(
           children: [
             ClipRRect(
@@ -221,7 +221,6 @@ class _ScanCard extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(LucideIcons.externalLink, size: 16, color: FeColors.ink2),
           ],
         ),
       );

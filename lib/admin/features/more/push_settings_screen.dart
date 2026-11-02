@@ -13,10 +13,23 @@ import '../../widgets/fe_header.dart';
 
 const pushSeverities = ['critical', 'high', 'medium', 'low'];
 
+/// The i18n key that explains a test push's outcome (server notificationController.testPush).
+String testPushMessage({required bool configured, required int devices, required int sent}) {
+  if (!configured) return 'push.test_off';
+  if (devices == 0) return 'push.test_no_device';
+  if (sent == 0) return 'push.test_failed';
+  return 'push.test_sent';
+}
+
 /// The user's own alert-push settings: on/off and the lowest severity that
 /// buzzes the phone. Saved to their config (`POST /api/auth/config`; these
 /// keys are not `is*`, so anyone may change their own). The server reads them
 /// when it fans an alert out (services/alerts/mobilePush.ts).
+///
+/// "Send a test notification" asks the server to push to this user's own
+/// devices (`POST /api/notifications/test-push` → {configured, devices, sent})
+/// and says what happened, so a missing push can be told apart from a
+/// missing device registration or a server without Firebase.
 class PushSettingsScreen extends ConsumerStatefulWidget {
   const PushSettingsScreen({super.key});
 
@@ -28,6 +41,7 @@ class _PushSettingsScreenState extends ConsumerState<PushSettingsScreen> {
   bool? _on;
   String? _min;
   bool _saving = false;
+  bool _testing = false;
 
   Future<void> _save({bool? on, String? min}) async {
     final boot = ref.read(loadedCatalogProvider);
@@ -46,6 +60,29 @@ class _PushSettingsScreenState extends ConsumerState<PushSettingsScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _test() async {
+    setState(() => _testing = true);
+    final messenger = ScaffoldMessenger.of(context);
+    String key;
+    var args = <Object>[];
+    try {
+      final body = await ref.read(apiClientProvider).post('/api/notifications/test-push');
+      final d = body is Map && body['data'] is Map ? body['data'] as Map : const {};
+      final devices = (d['devices'] as num?)?.toInt() ?? 0;
+      final sent = (d['sent'] as num?)?.toInt() ?? 0;
+      key = testPushMessage(configured: d['configured'] != false, devices: devices, sent: sent);
+      args = [sent];
+    } on HttpFailure catch (e) {
+      key = e.status == 404 ? 'push.test_old' : 'push.test_error';
+    } on ApiFailure {
+      key = 'push.test_error';
+    }
+    if (!mounted) return;
+    setState(() => _testing = false);
+    final text = key.getString(context);
+    messenger.showSnackBar(SnackBar(content: AppText(args.isEmpty ? text : context.formatString(text, args))));
   }
 
   @override
@@ -99,6 +136,14 @@ class _PushSettingsScreenState extends ConsumerState<PushSettingsScreen> {
           ),
           const SizedBox(height: 12),
           AppText.caption('push.footer'.getString(context)),
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+            onPressed: _testing ? null : _test,
+            icon: _testing ? const TechSpinner(size: 16) : const Icon(Icons.notifications_active_outlined, size: 18),
+            label: AppText('push.test'.getString(context)),
+          ),
+          const SizedBox(height: 6),
+          AppText.caption('push.test_hint'.getString(context)),
         ],
       ),
     );

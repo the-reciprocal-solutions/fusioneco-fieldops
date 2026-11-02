@@ -1,9 +1,9 @@
+import 'floor_plan_screen.dart';
 import 'module_spec.dart';
 import 'utility_screens.dart';
 
 /// Phase 3b — Building Performance (FE-mobile.md). Endpoints checked against
-/// the live server 2026-10-30. Floor Plan (image view) has no spec yet: it
-/// opens the placeholder (PENDING).
+/// the live server 2026-10-30. Floor Plan: floor_plan_screen.dart (2026-11-01).
 
 /// Utility module id → its Dashboard tab switch, as the web reads it
 /// (`permissions?.isDg_Dashboard` in DGMscPage). HVAC types have none.
@@ -24,14 +24,37 @@ const _dashboardTab = <String, String>{
   'it_rack': 'isItRack_Dashboard',
 };
 
+/// Utilities whose web page has a Trends tab, and its switch (the MSC pages:
+/// DGMscPage `permissions?.isDg_Trends`, …). Solar, Intrusion, CCTV and IT
+/// rack have none there. HVAC pages always have Trends.
+const _trendsTab = <String, String>{
+  'energy': 'isEnergy_Trends',
+  'dg': 'isDg_Trends',
+  'ups': 'isUps_Trends',
+  'water_meter': 'isWaterMeter_Trends',
+  'tank_level': 'isTankLevel_Trends',
+  'pump': 'isPump_Trends',
+  'feel_temperature': 'isFeelTemperature_Trends',
+  'co2': 'isCo2_Trends',
+  'fire': 'isFire_Trends',
+  'lift': 'isLift_Trends',
+};
+
 final _utilitySpecs = [
   for (final e in utilityTags.entries)
     ModuleSpec(
       moduleId: e.key,
-      screen: (m) => UtilityScreen(module: m, tag: e.value, dashboardTab: _dashboardTab[e.key]),
+      screen: (m) => UtilityScreen(
+        module: m,
+        tag: e.value,
+        dashboardTab: _dashboardTab[e.key],
+        trendsTab: _trendsTab[e.key],
+        alwaysTrends: e.key.startsWith('hvac_'),
+      ),
     ),
   ModuleSpec(moduleId: 'facility_utilities', screen: (m) => UtilitiesOverviewScreen(module: m)),
   ModuleSpec(moduleId: 'utility_explorer', screen: (m) => UtilityExplorerScreen(module: m)),
+  ModuleSpec(moduleId: 'floor_plan', screen: (m) => FloorPlanScreen(module: m)),
 ];
 
 // ── Energy (telemetry): Building Energy + Energy Analytics ──────────────────
@@ -67,7 +90,7 @@ List<(String, String?)> _energyFacts(Json r) => [
       ('fact.completeness', _ratioPct(r['completeness'])),
       ('fact.meters', s(r['meterCount'])),
       ('fact.main_meters', s(r['mainMeterCount'])),
-      ('fact.energy_status', s(r['status'])),
+      // The status is the header badge (a raw code here read as `no_main_meter`).
     ];
 
 /// Completeness arrives as 0–1; shown as a percentage.

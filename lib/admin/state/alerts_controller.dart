@@ -42,12 +42,30 @@ void _dropPatchesBefore(Ref ref, DateTime started) {
   }
 }
 
+/// Pages of 50 shown ("Load more"); back to 1 when the filters change.
+final alertPageCountProvider = StateProvider.autoDispose<int>((ref) {
+  ref.watch(alertFiltersProvider);
+  return 1;
+});
+
+/// Pages 1..count, joined. A refetch (socket, own action) reloads all of
+/// them, so the list doesn't shrink back to 50 under the user.
 final alertListProvider = FutureProvider.autoDispose<AlertPage>((ref) async {
   ref.watch(alertsTickProvider);
+  final filters = ref.watch(alertFiltersProvider);
+  final count = ref.watch(alertPageCountProvider);
+  final repo = ref.watch(alertsRepositoryProvider);
   final started = DateTime.now();
-  final page = await ref.watch(alertsRepositoryProvider).list(ref.watch(alertFiltersProvider));
+  final pages = await Future.wait([for (var p = 1; p <= count; p++) repo.list(filters, page: p)]);
   _dropPatchesBefore(ref, started);
-  return page;
+  if (pages.length == 1) return pages.single;
+  // The feed can shift between pages (a new alert on top): skip repeats.
+  final seen = <String>{};
+  return AlertPage(
+    rows: [for (final pg in pages) for (final a in pg.rows) if (seen.add(a.key)) a],
+    total: pages.first.total,
+    summary: pages.first.summary,
+  );
 });
 
 final alertDetailProvider = FutureProvider.autoDispose.family<AlertDetail, String>((ref, key) async {
@@ -60,3 +78,8 @@ final alertDetailProvider = FutureProvider.autoDispose.family<AlertDetail, Strin
 
 /// [a] with the phone's own newer change, if any.
 AlertItem patchedAlert(Map<String, AlertPatch> patches, AlertItem a) => patches[a.key]?.item ?? a;
+
+/// Who the alert may be handed to (the Assign sheet).
+final alertAssigneesProvider = FutureProvider.autoDispose.family<List<Assignee>, String>(
+  (ref, key) => ref.watch(alertsRepositoryProvider).assignees(key),
+);

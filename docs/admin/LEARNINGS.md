@@ -55,7 +55,7 @@ Non-obvious lessons, newest last. Same format as technician_portal's LEARNINGS.m
 
 ## 2026-10-30 — Phase 3c: pages, web-only modules, chat
 
-**What.** 17 more specs (lib/features/modules/ops_specs.dart). Facility Ops is a module made of pages. A page has its own spec under `module:page` (`specKey()`), keeps `?page=` in its record path (`recordPath(…, page:)`), and the guard checks the page there too. Modules the plan only asks to "view" (Timeline) get `WebOnlyScreen`. Every summary header has an "open on web" button (`Env.webBaseUrl + module.webPath`). Ask FlowAI uses the web's non-streaming `POST /api/utility/ai/chat-v2 {message, sessionId, env}` with a client-minted v4 session id, as the web does.
+**What.** 17 more specs (lib/features/modules/ops_specs.dart). Facility Ops is a module made of pages. A page has its own spec under `module:page` (`specKey()`), keeps `?page=` in its record path (`recordPath(…, page:)`), and the guard checks the page there too. Modules the plan only asks to "view" (Timeline) get `WebOnlyScreen`. Every summary header has an "open on web" button (`Env.webBaseUrl + module.webPath`). *(2026-11-02: replaced by a summary + `DesktopNote`, PENDING A-025.)* Ask FlowAI uses the web's non-streaming `POST /api/utility/ai/chat-v2 {message, sessionId, env}` with a client-minted v4 session id, as the web does.
 
 **Watch.**
 - **Any screen opened with `Navigator.push`** (the chat) must re-check the catalog itself, the same as go_router-pushed screens.
@@ -116,7 +116,7 @@ Non-obvious lessons, newest last. Same format as technician_portal's LEARNINGS.m
 
 ## 2026-10-30 — 0.6: web pages inside the app, signed in
 
-**What.** `lib/features/web/web_screen.dart`. Every `openOnWeb()` (header buttons, 3D views, Trends, the efficiency PDF report, Plant Room 3D, Photo Twin scans, Timeline) now opens the web page inside the app. The screen loads the web's `/login`, writes the localStorage keys the web's sign-in writes (`webSessionEntries`, app/login/page.tsx), then loads the page. It reuses FieldOps' TwinScreen recipe. Downloads: an injected hook turns an `<a download href="blob:">` click (reportPdf.ts `saveBlob`) into a `FeDownload` channel message; the app writes the file to temp and opens the share sheet (share_plus).
+**What.** *(2026-11-02: only the alert's new-work-order form still opens this way; the rest show a summary + `DesktopNote`, PENDING A-025.)* `lib/features/web/web_screen.dart`. Every `openOnWeb()` (header buttons, 3D views, Trends, the efficiency PDF report, Plant Room 3D, Photo Twin scans, Timeline) now opens the web page inside the app. The screen loads the web's `/login`, writes the localStorage keys the web's sign-in writes (`webSessionEntries`, app/login/page.tsx), then loads the page. It reuses FieldOps' TwinScreen recipe. Downloads: an injected hook turns an `<a download href="blob:">` click (reportPdf.ts `saveBlob`) into a `FeDownload` channel message; the app writes the file to temp and opens the share sheet (share_plus).
 
 **Watch.**
 - **The token goes in once.** The web can't renew the app's token (1 h for mobile users). `ApiClient.freshToken()` renews it first if it ends within 2 min. If the page signs itself out later (lands on /login), the screen re-seeds and re-asks, capped at 3 tries.

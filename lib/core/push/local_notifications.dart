@@ -114,8 +114,14 @@ class LocalNotifications {
   /// data, JSON-encoded), the button pressed (null for a tap on the body) and
   /// the typed reply, if any — omit it in the background isolate, where there
   /// is no router to hand the result to.
+  ///
+  /// The plugin is one per app and the admin side (lib/admin/core/push) sets
+  /// it up too, taking the tap callback and the iOS categories. So a call
+  /// with [onResponse] always re-claims it (a technician signing in after an
+  /// admin in the same run); the bare call from [show] runs once.
   static Future<void> init({void Function(String? payload, String? actionId, String? input)? onResponse}) async {
-    if (_initialized) return;
+    if (_initialized && onResponse == null) return;
+    final first = !_initialized;
     _initialized = true;
 
     await _plugin.initialize(
@@ -140,7 +146,7 @@ class LocalNotifications {
       onDidReceiveBackgroundNotificationResponse: onBackgroundNotificationAction,
     );
     final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-    if (android != null) {
+    if (first && android != null) {
       final lang = await _language();
       for (final c in _channels(lang)) {
         // Re-creating updates the name/description (a language switch) but

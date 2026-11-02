@@ -123,4 +123,13 @@ void main() {
     expect(jwtSecondsLeft(_jwt(2000), now: DateTime.fromMillisecondsSinceEpoch(1000 * 1000)), 1000);
     expect(jwtSecondsLeft('not-a-jwt'), isNull);
   });
+
+  test('no answer → plain words, never Dio developer text', () {
+    final o = RequestOptions(path: '/api/x');
+    final slow = mapDioException(DioException(requestOptions: o, type: DioExceptionType.receiveTimeout, message: 'The request took longer than 0:00:30.000000'));
+    expect(slow.message, 'The server took too long to answer. Please try again in a moment.');
+    final down = mapDioException(DioException(requestOptions: o, type: DioExceptionType.connectionError, message: 'SocketException: errno 111'));
+    expect(down, isA<NetworkFailure>());
+    expect(down.message, 'Could not reach the server. Check your connection and try again.');
+  });
 }

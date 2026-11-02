@@ -185,6 +185,10 @@ class _WebScreenState extends ConsumerState<WebScreen> {
   Future<void> _saveDownload(String message) async {
     final messenger = ScaffoldMessenger.of(context);
     final failed = 'web.download_failed'.getString(context);
+    // iPad shows the share sheet as a popover and needs an anchor, or
+    // share_plus fails there; iPhone and Android ignore it.
+    final box = context.findRenderObject() as RenderBox?;
+    final origin = box == null || !box.hasSize ? null : box.localToGlobal(Offset.zero) & box.size;
     try {
       final m = jsonDecode(message) as Map;
       final dataUrl = '${m['data']}';
@@ -192,7 +196,7 @@ class _WebScreenState extends ConsumerState<WebScreen> {
       final bytes = base64Decode(dataUrl.substring(dataUrl.indexOf(',') + 1));
       final file = File('${(await getTemporaryDirectory()).path}/$name');
       await file.writeAsBytes(bytes);
-      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], title: name));
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], title: name, sharePositionOrigin: origin));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: AppText(failed)));
     }

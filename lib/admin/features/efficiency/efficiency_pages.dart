@@ -20,11 +20,13 @@ import '../module/module_screen.dart';
 import '../modules/chat_screen.dart' show newSessionId;
 import '../modules/module_spec.dart';
 import '../modules/module_summary_screen.dart' show KpiTile, toneColor;
+import 'ask_ai.dart';
 import 'efficiency_data.dart';
 
 /// The 16 Building Efficiency pages (FE-mobile.md Phase 2 table). Each is a
 /// view over the shared summary; Fix tracker and Site settings read their
-/// own small endpoints. 3D views, the PDF report and Trends open on the web.
+/// own small endpoints. 3D views, the PDF report and Trends are summarised,
+/// with a note that the full view is on a desktop.
 
 /// Web route of each page (lib/hvacEfficiencyPages.ts `path` + `tab`).
 const effWebPath = <String, String>{
@@ -117,7 +119,7 @@ class _EffPageScreenState extends ConsumerState<EffPageScreen> {
     }
 
     return Scaffold(
-      appBar: FeHeader(title: _label, actions: [OpenOnWebButton(path: effWebPath[widget.pageId] ?? widget.module.webPath)]),
+      appBar: FeHeader(title: _label),
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(effSummaryProvider);
@@ -346,7 +348,7 @@ final Map<String, _Body> _bodies = {
           ),
         ),
       _gap(),
-      _pad(_WebButton(path: effWebPath['insight']!, label: 'eff.open_3d')),
+      _pad(const DesktopNote(textKey: 'desktop.eff_3d')),
     ];
   },
   'impact': (context, sm, site) {
@@ -384,8 +386,8 @@ final Map<String, _Body> _bodies = {
         _section(context, 'eff.headline'),
         for (final h in (sm['headline'] as List? ?? const [])) _pad(Padding(padding: const EdgeInsets.only(bottom: 8), child: AppText.body('• $h'))),
         _gap(),
-        // The PDF is built in the browser (reportPdf.ts); v1 opens the web page (plan 0.6).
-        _pad(_WebButton(path: effWebPath['report']!, label: 'eff.open_pdf')),
+        // The PDF is built in the browser (reportPdf.ts), so it stays on the desktop.
+        _pad(const DesktopNote(textKey: 'desktop.eff_pdf')),
       ],
   'comfort': (context, sm, site) => [
         _pillarTiles(context, sm, 'comfort', [Kpi('eff.comfort_issues', fmtNum(at(sm, 'kpis.comfortIssues')), tone: Tone.warn)]),
@@ -485,7 +487,18 @@ final Map<String, _Body> _bodies = {
           ],
         ),
         _gap(),
-        _pad(_WebButton(path: effWebPath['live']!, label: 'eff.open_3d')),
+        _pad(const DesktopNote(textKey: 'desktop.eff_3d')),
+      ],
+  // Point-by-point charts need the web's picker; the phone shows where the site stands.
+  'trends': (context, sm, site) => [
+        _tiles([
+          Kpi('eff.score', '${fmtNum(sm['score'])} · ${s(sm['grade']) ?? ''}', tone: _scoreTone(n(sm['score']))),
+          Kpi('eff.data_health', fmtPct(at(sm, 'kpis.dataHealthPct')), tone: _scoreTone(n(at(sm, 'kpis.dataHealthPct')))),
+          Kpi('eff.plant_delta_t', '${_deg(at(sm, 'kpis.plantDeltaT'))} / ${_deg(at(sm, 'kpis.designDeltaT'))}'),
+          Kpi('eff.chillers_running', '${fmtNum(at(sm, 'kpis.chillersRunning'))} / ${fmtNum(at(sm, 'kpis.chillersTotal'))}', tone: Tone.good),
+        ]),
+        _gap(),
+        _pad(const DesktopNote(textKey: 'desktop.eff_trends')),
       ],
   'data': (context, sm, site) {
     final units = rowsOf({'data': at(sm, 'coverage.units')});
@@ -549,7 +562,6 @@ final Map<String, _Body> _bodies = {
 final Map<String, Widget Function(HvacSite site)> _ownBodies = {
   'actions': (site) => _ActionsBody(site: site),
   'settings': (site) => _SettingsBody(site: site),
-  'trends': (site) => const _WebOnlyBody(page: 'trends'),
 };
 
 Widget _pillarTiles(BuildContext context, Json sm, String pillar, List<Kpi> extra) {
@@ -561,37 +573,8 @@ Widget _pillarTiles(BuildContext context, Json sm, String pillar, List<Kpi> extr
   ]);
 }
 
-Widget _webOnly(BuildContext context, String page) => _WebOnlyBody(page: page);
-
-class _WebOnlyBody extends StatelessWidget {
-  const _WebOnlyBody({required this.page});
-  final String page;
-
-  @override
-  Widget build(BuildContext context) => _pad(Column(
-        children: [
-          TechEmptyState(icon: LucideIcons.lineChart, title: 'eff.web_only'.getString(context)),
-          _gap(),
-          _WebButton(path: effWebPath[page] ?? '/hvac/efficiency', label: 'module.open_on_web'),
-        ],
-      ));
-}
-
-class _WebButton extends StatelessWidget {
-  const _WebButton({required this.path, required this.label});
-  final String path;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: () => openOnWeb(context, path),
-          icon: const Icon(LucideIcons.externalLink, size: 16),
-          label: AppText(label.getString(context)),
-        ),
-      );
-}
+/// A page the phone has no body for.
+Widget _webOnly(BuildContext context, String page) => _pad(const DesktopNote(textKey: 'desktop.note'));
 
 // ── Fix tracker (/actions) ──────────────────────────────────────────────────
 
@@ -677,7 +660,7 @@ class _SettingsBody extends ConsumerWidget {
                       ),
                 ],
               ),
-              _pad(AppText.caption('eff.settings_on_web'.getString(context))),
+              _pad(const DesktopNote(textKey: 'eff.settings_on_web')),
             ],
           );
         },
@@ -705,28 +688,27 @@ class _FindingDetailScreenState extends ConsumerState<FindingDetailScreen> {
   /// The server replays the same requestId instead of creating a second WO.
   final _requestId = newSessionId();
 
+  Map<String, dynamic> get _target => {...widget.site.query, 'findingId': widget.finding['id'], 'days': ref.read(effDaysProvider)};
+
+  /// The web's WorkOrderDialog on a phone: the server previews the work order
+  /// (asset, technician), the user confirms or picks, then it is created.
+  /// An asset is required (work_orders.relatedAssetId is NOT NULL on purpose,
+  /// server LEARNINGS 2026-07-30); with no match the preview lists assets to pick.
   Future<void> _raise() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: AppText.title('eff.raise_wo'.getString(ctx)),
-        content: AppText.bodyMedium('eff.raise_wo_confirm'.getString(ctx)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: AppText('common.cancel'.getString(ctx))),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: AppText('eff.raise_wo'.getString(ctx))),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
     setState(() => _busy = true);
     final messenger = ScaffoldMessenger.of(context);
     final raisedText = 'eff.wo_raised'.getString(context);
     try {
-      final body = await ref.read(apiClientProvider).post('/api/fm/hvac-efficiency/work-order', body: {
-        ...widget.site.query,
-        'findingId': widget.finding['id'],
-        'days': ref.read(effDaysProvider),
+      final api = ref.read(apiClientProvider);
+      final preview = WoPreview.fromJson(dataOf(await api.post('/api/fm/hvac-efficiency/work-order/preview', body: _target)));
+      if (!mounted) return;
+      final pick = await showDialog<(String, String)>(context: context, builder: (_) => RaiseWoDialog(preview: preview));
+      if (pick == null || !mounted) return;
+      final body = await api.post('/api/fm/hvac-efficiency/work-order', body: {
+        ..._target,
         'requestId': _requestId,
+        'assetId': pick.$1,
+        'technicianId': pick.$2,
       });
       final d = dataOf(body);
       final ref0 = s(d['workOrderId']) ?? s(at(d, 'workOrder.workOrderId')) ?? s(d['workOrderNumber']);
@@ -806,8 +788,116 @@ class _FindingDetailScreenState extends ConsumerState<FindingDetailScreen> {
                   ),
               ],
             ),
+          // Each question is a paid AI call: nothing runs until one is asked.
+          _pad(AskAiCard(finding: f)),
         ],
       ),
+    );
+  }
+}
+
+/// `POST /api/fm/hvac-efficiency/work-order/preview` (server
+/// hvacEfficiency/workOrder.ts `WoPreview`), the parts the phone uses.
+class WoPreview {
+  const WoPreview({this.title, this.assetId, this.assets = const [], this.technicianId, this.technicians = const [], this.existing});
+
+  final String? title;
+
+  /// The matched asset (BMS point mapping or name), if any.
+  final String? assetId;
+
+  /// (id, label) to pick from: the matched ones, or the site's assets.
+  final List<(String, String)> assets;
+  final String? technicianId;
+  final List<(String, String)> technicians;
+
+  /// Already raised today for this finding: its work order number.
+  final String? existing;
+
+  factory WoPreview.fromJson(Json j) {
+    final asset = j['asset'] is Map ? (j['asset'] as Map).cast<String, dynamic>() : null;
+    String label(Json a) => [s(a['name']), s(a['reference'])].whereType<String>().join(' · ');
+    final matched = s(asset?['id']);
+    return WoPreview(
+      title: s(j['title']),
+      assetId: matched,
+      assets: [
+        if (asset != null && matched != null) (matched, label(asset)),
+        for (final a in rowsOf({'data': j['assetCandidates']}))
+          if (s(a['id']) != null && s(a['id']) != matched) (s(a['id'])!, label(a)),
+      ],
+      technicianId: s(at(j, 'technician.id')),
+      technicians: [
+        for (final t in rowsOf({'data': j['technicians']}))
+          if (s(t['id']) != null) (s(t['id'])!, s(t['name']) ?? '–'),
+      ],
+      existing: s(at(j, 'existing.workOrderId')),
+    );
+  }
+}
+
+/// Pops (assetId, technicianId), or null when cancelled.
+class RaiseWoDialog extends StatefulWidget {
+  const RaiseWoDialog({super.key, required this.preview});
+  final WoPreview preview;
+
+  @override
+  State<RaiseWoDialog> createState() => _RaiseWoDialogState();
+}
+
+class _RaiseWoDialogState extends State<RaiseWoDialog> {
+  late String? _asset = widget.preview.assetId;
+  late String? _tech = widget.preview.technicianId;
+
+  Widget _pick(String labelKey, String hintKey, String? value, List<(String, String)> items, ValueChanged<String?> onChanged) =>
+      DropdownButtonFormField<String>(
+        initialValue: value,
+        isExpanded: true,
+        decoration: InputDecoration(labelText: labelKey.getString(context)),
+        hint: AppText(hintKey.getString(context)),
+        items: [
+          for (final (id, label) in items) DropdownMenuItem(value: id, child: AppText(label, maxLines: 1, overflow: TextOverflow.ellipsis)),
+        ],
+        onChanged: onChanged,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.preview;
+    return AlertDialog(
+      title: AppText.title('eff.raise_wo'.getString(context)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (p.title != null) AppText.bodyMedium(p.title!),
+            if (p.existing != null) ...[
+              const SizedBox(height: 8),
+              AppText.caption(context.formatString('eff.wo_existing'.getString(context), [p.existing!]), color: FeColors.warning),
+            ],
+            const SizedBox(height: 12),
+            _pick('eff.wo_asset', 'eff.wo_pick_asset', _asset, p.assets, (v) => setState(() => _asset = v)),
+            if (p.assetId != null && _asset == p.assetId) ...[
+              const SizedBox(height: 4),
+              AppText.caption('eff.wo_asset_matched'.getString(context)),
+            ],
+            if (p.assets.isEmpty) ...[
+              const SizedBox(height: 4),
+              AppText.caption('eff.wo_no_assets'.getString(context), color: FeColors.danger),
+            ],
+            const SizedBox(height: 12),
+            _pick('eff.wo_technician', 'eff.wo_pick_technician', _tech, p.technicians, (v) => setState(() => _tech = v)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: AppText('common.cancel'.getString(context))),
+        TextButton(
+          onPressed: _asset == null || _tech == null ? null : () => Navigator.pop(context, (_asset!, _tech!)),
+          child: AppText('eff.raise_wo'.getString(context)),
+        ),
+      ],
     );
   }
 }

@@ -9,6 +9,7 @@ import 'package:technician_portal/admin/core/storage/secure_store.dart';
 import 'package:technician_portal/admin/core/storage/session_store.dart';
 import 'package:technician_portal/admin/domain/mobile_catalog.dart';
 import 'package:technician_portal/admin/features/modules/specs.dart';
+import 'package:technician_portal/admin/features/modules/module_spec.dart' show factText, word;
 import 'package:technician_portal/admin/features/photo_twin/photo_twin_screens.dart';
 import 'package:technician_portal/admin/features/photo_twin/snag_actions.dart';
 import 'package:technician_portal/admin/state/catalog_controller.dart';
@@ -136,6 +137,32 @@ void main() {
     expect(labels('open', wo: 'wo-1'), isNot(contains('act.snag_wo')));
     // "Mark fixed" needs a photo; reject / reopen / waive need a reason.
     expect(snagActions({'status': 'open'}).firstWhere((a) => a.label == 'act.snag_ready').photoRun, isNotNull);
+  });
+
+  testWidgets('trade shows in words, unknown trades readable', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      supportedLocales: FlutterLocalization.instance.supportedLocales,
+      localizationsDelegates: FlutterLocalization.instance.localizationsDelegates,
+      home: Builder(
+        builder: (c) => Column(children: [
+          for (final v in [word('snags.trade.', 'finishes')!, word('snags.trade.', 'low-current')!, word('snags.trade.', 'stone_work')!, 'plain'])
+            Text(factText(c, v)),
+        ]),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    for (final t in ['Finishes', 'Low current / ELV', 'stone work', 'plain']) {
+      expect(find.text(t), findsOneWidget);
+    }
+    expect(word('snags.trade.', null), isNull);
+  });
+
+  test("verify is hidden for whoever marked it ready; waive for non-admins", () {
+    List<String> labels(Map<String, Object?> me) =>
+        [for (final a in snagActions({'id': 'x', 'status': 'ready', 'readyBy': 'u1', '_me': me})) a.label];
+    expect(labels({'id': 'u1', 'role': 'Admin'}), ['act.reject', 'act.comment', 'act.add_photo', 'act.snag_wo', 'act.waive']);
+    expect(labels({'id': 'u2', 'role': 'Admin'}), contains('act.verify'));
+    expect(labels({'id': 'u2', 'role': 'Manager'}), allOf(contains('act.verify'), isNot(contains('act.waive'))));
   });
 
   test('scans: photo scans only, of my buildings, thumbs from the web app', () {

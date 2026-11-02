@@ -24,10 +24,13 @@ import '../modules/module_summary_screen.dart';
 /// The 3D studio, the builder and AI generation stay on the web.
 ///   GET /api/fm/plant-layouts?scope=all          rooms (mine + shared to my org)
 ///   GET /api/fm/plant-layouts/:id                one room: instances + connections
-///   GET /api/fm/plant-layouts/live?assetIds=…    mapped live points per FM asset
-/// Live sizes (2026-10-30): /live is 11 KB for 60 assets (the server cap), so
-/// it needs no `?view=mobile`. It is slow, though (about 20 s even for a few
-/// assets, PENDING P-017), hence the long timeout and one poll at a time.
+///   GET /api/fm/plant-layouts/:id/live           every machine's verdict (2026-11-02)
+///   GET /api/fm/plant-layouts/live?assetIds=…    older servers: mapped points per FM asset
+/// `/:id/live` works each machine out on the server with Plant Studio's own
+/// rules (server services/plantRoomLive.ts, shared/plantStudio): level ok /
+/// warn / critical / nodata, headline and readings — for asset-bound AND
+/// device-bound machines, so the phone shows what the web studio shows. One
+/// poll at a time with a long timeout (a cold source can take a while).
 
 const _pollEvery = Duration(seconds: 30);
 const _liveTimeout = Duration(seconds: 60);
@@ -74,8 +77,9 @@ class PlantPoint {
 
 /// Where a machine's numbers come from on the phone.
 /// `live | no-data | unmapped | unbound | not-found` come from the server.
-/// `device`: bound straight to a BMS device, read by the web studio only.
-/// `none`: placed without an asset or device (the web animates a demo).
+/// `device`: bound straight to a BMS device (read by `/:id/live`; an older
+/// server can't, so the phone says so). `none`: placed without an asset or
+/// device (the web animates a demo).
 enum PlantFeed { live, noData, unmapped, unbound, notFound, device, none, waiting }
 
 PlantFeed _feedOf(String? s) => switch (s) {
@@ -89,7 +93,18 @@ PlantFeed _feedOf(String? s) => switch (s) {
 
 /// One machine placed in a room.
 class PlantMachine {
-  const PlantMachine({required this.id, required this.type, required this.label, this.assetId, this.assetName, this.deviceName, this.feed = PlantFeed.waiting, this.points = const []});
+  const PlantMachine({
+    required this.id,
+    required this.type,
+    required this.label,
+    this.assetId,
+    this.assetName,
+    this.deviceName,
+    this.feed = PlantFeed.waiting,
+    this.points = const [],
+    this.verdict,
+    this.headline,
+  });
 
   final String id;
   final String type;
@@ -100,12 +115,41 @@ class PlantMachine {
   final PlantFeed feed;
   final List<PlantPoint> points;
 
-  bool get alarm => points.any((p) => p.isAlarm);
+  /// The server's verdict (`/:id/live`): critical · warn · ok · nodata.
+  final String? verdict;
 
-  /// critical (an alarm point) · ok (live) · nodata (anything else), the
-  /// web's attention levels minus `warn`: that one comes from each machine
-  /// type's own thresholds, which the phone does not copy.
-  String get level => alarm ? 'critical' : (feed == PlantFeed.live ? 'ok' : 'nodata');
+  /// The type's one headline number, e.g. "CHW Supply 6.8 °C".
+  final PlantPoint? headline;
+
+  bool get alarm => level == 'critical';
+
+  /// The server's verdict when there is one. Otherwise (an older server):
+  /// critical (an alarm point) · ok (live) · nodata — no `warn`, which needs
+  /// each type's thresholds.
+  String get level => verdict ?? (points.any((p) => p.isAlarm) ? 'critical' : (feed == PlantFeed.live ? 'ok' : 'nodata'));
+
+  /// Joins the machine with its verdict from `/:id/live`.
+  PlantMachine withVerdict(Map? machines) {
+    final v = machines?[id];
+    if (v is! Map) return this;
+    final h = v['headline'];
+    final source = s(v['source']);
+    return PlantMachine(
+      id: id,
+      type: type,
+      label: label,
+      assetId: assetId,
+      assetName: assetName,
+      deviceName: deviceName,
+      feed: source != null ? PlantFeed.live : (assetId != null || deviceName != null ? PlantFeed.noData : PlantFeed.none),
+      verdict: s(v['level']) ?? 'nodata',
+      headline: h is Map ? PlantPoint(name: s(h['label']) ?? '', value: h['value'], unit: s(h['unit'])) : null,
+      points: [
+        for (final r in v['readings'] is List ? v['readings'] as List : const [])
+          if (r is Map) PlantPoint(name: s(r['label']) ?? '${r['key']}', value: r['value'], unit: s(r['unit'])),
+      ],
+    );
+  }
 
   /// Joins the machine with its asset's live feed from `/live`.
   PlantMachine withLive(Map? live) {
@@ -143,12 +187,12 @@ class PlantMachine {
   }
 }
 
-/// Machines of a room, alarms first, then live, then the rest (stable).
+/// Machines of a room, alarms first, then warnings, then live, then the rest (stable).
 List<PlantMachine> sortMachines(List<PlantMachine> m) {
-  const rank = {'critical': 0, 'ok': 1, 'nodata': 2};
+  const rank = {'critical': 0, 'warn': 1, 'ok': 2, 'nodata': 3};
   final indexed = [for (var i = 0; i < m.length; i++) (i, m[i])];
   indexed.sort((a, b) {
-    final r = rank[a.$2.level]!.compareTo(rank[b.$2.level]!);
+    final r = (rank[a.$2.level] ?? 3).compareTo(rank[b.$2.level] ?? 3);
     return r != 0 ? r : a.$1.compareTo(b.$1);
   });
   return [for (final (_, x) in indexed) x];
@@ -203,7 +247,7 @@ class _PlantRoomListScreenState extends ConsumerState<PlantRoomListScreen> {
   Widget build(BuildContext context) {
     final rooms = _rooms;
     return Scaffold(
-      appBar: FeHeader(title: widget.module.label, actions: [OpenOnWebButton(path: widget.module.webPath)]),
+      appBar: FeHeader(title: widget.module.label),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -261,6 +305,10 @@ class PlantRoomScreen extends ConsumerStatefulWidget {
 class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
   List<PlantMachine>? _machines;
   Map? _live;
+
+  /// `/:id/live` machines; null until it answers (or on an older server).
+  Map? _verdicts;
+  bool _oldServer = false;
   Object? _error;
   DateTime? _liveAt;
   bool _polling = false;
@@ -293,13 +341,28 @@ class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
     }
   }
 
-  /// One `/live` call at a time: it can take longer than the poll interval.
+  /// One live call at a time: it can take longer than the poll interval.
   Future<void> _poll() async {
-    final ids = assetIdsOf(_machines ?? const []);
-    if (_polling || ids.isEmpty) return;
+    final machines = _machines ?? const <PlantMachine>[];
+    if (_polling || machines.isEmpty) return;
     _polling = true;
+    final api = ref.read(apiClientProvider);
     try {
-      final res = await ref.read(apiClientProvider).get('$_base/live', query: {'assetIds': ids.join(',')}, timeout: _liveTimeout);
+      if (!_oldServer) {
+        try {
+          final res = await api.get('$_base/${widget.layoutId}/live', timeout: _liveTimeout);
+          final m = dataOf(res)['machines'];
+          if (mounted) setState(() => (_verdicts = m is Map ? m : const {}, _liveAt = DateTime.now(), _error = null));
+          return;
+        } on HttpFailure catch (e) {
+          // The room was just read, so a 404 here means a server without `/:id/live`.
+          if (e.status != 404) rethrow;
+          _oldServer = true;
+        }
+      }
+      final ids = assetIdsOf(machines);
+      if (ids.isEmpty) return;
+      final res = await api.get('$_base/live', query: {'assetIds': ids.join(',')}, timeout: _liveTimeout);
       final assets = dataOf(res)['assets'];
       if (mounted) setState(() => (_live = assets is Map ? assets : const {}, _liveAt = DateTime.now(), _error = null));
     } catch (e) {
@@ -314,9 +377,9 @@ class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
   Widget build(BuildContext context) {
     if (!_stillVisible(ref)) return const UnavailableScreen();
     final raw = _machines;
-    final machines = raw == null ? null : sortMachines([for (final m in raw) m.withLive(_live)]);
+    final machines = raw == null ? null : sortMachines([for (final m in raw) _verdicts != null ? m.withVerdict(_verdicts) : m.withLive(_live)]);
     return Scaffold(
-      appBar: FeHeader(title: widget.name, actions: [OpenOnWebButton(path: plantRoomWebPath(widget.layoutId))]),
+      appBar: FeHeader(title: widget.name),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -335,11 +398,7 @@ class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
               ),
               _Grid(machines: machines),
               const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: () => openOnWeb(context, plantRoomWebPath(widget.layoutId)),
-                icon: const Icon(LucideIcons.box, size: 16),
-                label: AppText('plant.open_3d'.getString(context)),
-              ),
+              const DesktopNote(textKey: 'desktop.plant_3d'),
             ],
           ],
         ),
@@ -348,7 +407,7 @@ class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
   }
 
   String _status(BuildContext context, List<PlantMachine> m) {
-    if (assetIdsOf(m).isEmpty) return 'plant.no_assets'.getString(context);
+    if (_oldServer && assetIdsOf(m).isEmpty) return 'plant.no_assets'.getString(context);
     final at = _liveAt;
     if (at == null) return (_error == null ? 'plant.loading_live' : 'plant.live_failed').getString(context);
     final hhmm = '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
@@ -363,14 +422,16 @@ class _Kpis extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final alarms = machines.where((m) => m.level == 'critical').length;
+    final warnings = machines.where((m) => m.level == 'warn').length;
     final kpis = [
       Kpi('plant.machines', fmtNum(machines.length)),
       Kpi('plant.alarms', fmtNum(alarms), tone: alarms > 0 ? Tone.bad : Tone.good),
+      Kpi('plant.warnings', fmtNum(warnings), tone: warnings > 0 ? Tone.warn : Tone.good),
       Kpi('plant.live', fmtNum(machines.where((m) => m.feed == PlantFeed.live).length), tone: Tone.info),
     ];
     return LayoutBuilder(
       builder: (context, c) {
-        final w = (c.maxWidth - 20) / 3;
+        final w = (c.maxWidth - 10) / 2;
         return Wrap(spacing: 10, runSpacing: 10, children: [for (final k in kpis) SizedBox(width: w, child: KpiTile(k))]);
       },
     );
@@ -398,8 +459,8 @@ class _MachineCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = switch (m.level) { 'critical' => FeColors.danger, 'ok' => FeColors.success, _ => FeColors.ink2 };
-    final points = [...m.points.where((p) => p.isAlarm), ...m.points.where((p) => !p.isAlarm)];
+    final color = levelColor(m.level);
+    final points = [if (m.headline != null) m.headline!, ...m.points.where((p) => p.isAlarm), ...m.points.where((p) => !p.isAlarm)];
     return TechCard(
       padding: const EdgeInsets.all(12),
       onTap: () => _showMachine(context, m),
@@ -436,6 +497,14 @@ class _MachineCard extends StatelessWidget {
   }
 }
 
+/// The web's statusColor: critical red, warn amber, ok green, no data grey.
+Color levelColor(String level) => switch (level) {
+      'critical' => FeColors.danger,
+      'warn' => FeColors.warning,
+      'ok' => FeColors.success,
+      _ => FeColors.ink2,
+    };
+
 String _feedText(BuildContext context, PlantFeed f) => switch (f) {
       PlantFeed.live => 'plant.feed_live',
       PlantFeed.noData => 'plant.feed_no_data',
@@ -463,9 +532,12 @@ void _showMachine(BuildContext context, PlantMachine m) => showModalBottomSheet<
             AppText.title(m.label),
             if (m.assetName != null || m.deviceName != null) AppText.bodySmall(m.assetName ?? m.deviceName!),
             const SizedBox(height: 4),
-            AppText.caption(_feedText(context, m.feed), color: m.alarm ? FeColors.danger : FeColors.ink2),
+            AppText.caption(
+              m.verdict == null ? _feedText(context, m.feed) : 'plant.level_${m.level}'.getString(context),
+              color: levelColor(m.level),
+            ),
             const SizedBox(height: 16),
-            for (final p in m.points)
+            for (final p in [if (m.headline != null) m.headline!, ...m.points])
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Row(

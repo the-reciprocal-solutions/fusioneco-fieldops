@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:technician_portal/admin/core/network/api_client.dart';
 import 'package:technician_portal/admin/core/storage/secure_store.dart';
+import 'package:technician_portal/admin/core/storage/session_store.dart';
 import 'package:technician_portal/admin/domain/mobile_catalog.dart';
 import 'package:technician_portal/admin/features/modules/performance_specs.dart';
 import 'package:technician_portal/admin/features/modules/record_detail_screen.dart';
@@ -19,11 +20,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 class _FakeApi extends ApiClient {
   _FakeApi() : super(secureStore: SecureStore());
   final queries = <String, Map<String, dynamic>?>{};
+  var deviceCalls = 0;
 
   @override
   Future<dynamic> get(String path, {Map<String, dynamic>? query, Duration? timeout}) async {
     queries[path] = query;
     if (path == '/api/proxy/bacnet/api/devices') {
+      deviceCalls++;
       return [
         {'device_id': 30019, 'name': 'VID-DG-01', 'description': 'Main DG', 'status': 'online', 'utility_tag': 'DG'},
         {'device_id': 30020, 'name': 'VID-DG-02', 'status': 'offline', 'utility_tag': 'DG'},
@@ -52,7 +55,7 @@ Future<_FakeApi> _pump(WidgetTester tester, Widget screen) async {
   final api = _FakeApi();
   final localization = FlutterLocalization.instance;
   await tester.pumpWidget(ProviderScope(
-    overrides: [apiClientProvider.overrideWithValue(api)],
+    overrides: [apiClientProvider.overrideWithValue(api), sessionStoreProvider.overrideWithValue(await SessionStore.open())],
     child: MaterialApp(
       theme: AppTheme.build(),
       supportedLocales: localization.supportedLocales,
@@ -89,10 +92,20 @@ void main() {
     expect(formatPoint(null), '–');
   });
 
+  test('the device list is read once and reused across screens; latest values every time', () async {
+    final api = _FakeApi();
+    await loadMscDevices(api, ['DG']);
+    final again = await loadMscDevices(api, ['UPS']);
+    expect(api.deviceCalls, 1);
+    expect(again, isEmpty); // no UPS in the list: filtered here
+  });
+
   test('devices joined with their latest readings; tags repeated in one call', () async {
     final api = _FakeApi();
     final devices = await loadMscDevices(api, ['DG', 'UPS']);
-    expect(api.queries['/api/proxy/bacnet/api/devices'], {'utility_tag': ['DG', 'UPS']});
+    // The whole list once (filtered here); the latest values per tag.
+    expect(api.queries['/api/proxy/bacnet/api/devices'], isNull);
+    expect(api.queries['/api/proxy/bacnet/api/history/devices/latest'], {'utility_tag': ['DG', 'UPS']});
     expect(devices.length, 2);
     expect(devices.first.points, [('Fuel level', '82'), ('Run hours', '375'), ('Running', 'On')]);
     expect(devices.last.online, isFalse);

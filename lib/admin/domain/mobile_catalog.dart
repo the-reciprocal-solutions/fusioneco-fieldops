@@ -98,8 +98,11 @@ class MobileBootstrap {
     required this.webOnly,
     required this.catalogVersion,
     this.dashboardEnv = 'test',
+    this.utilityProvider = 'bacnet',
     this.pushAlerts = true,
     this.pushMinSeverity = 'high',
+    this.aiCreateAsset = false,
+    this.aiAssetReport = false,
   });
 
   final String role;
@@ -119,10 +122,23 @@ class MobileBootstrap {
   /// Which provider doc Home reads: `/api/dashboard-v3?env=` (server visibility.ts dashboardEnv).
   final String dashboardEnv;
 
+  /// Where Facility Utilities + HVAC read from — the provider chosen for the
+  /// user in Settings (server visibility.ts `utilityProvider`): `bacnet` → the
+  /// building system directly, any other slug (vidyutt-demo, test, …) →
+  /// `GET /api/fm/utilities/live`. Older servers don't send it: BacNet, as before.
+  final String utilityProvider;
+
+  bool get utilitiesOnBacnet => utilityProvider == 'bacnet';
+
   /// The user's own alert-push settings (server ConfigSchema `mobilePushAlerts`,
   /// `mobilePushMinSeverity`), changed from More → Alert notifications.
   final bool pushAlerts;
   final String pushMinSeverity;
+
+  /// Ask FlowAI's "Create asset" / "Inspection report" modes (server prefs
+  /// `aiCreateAsset` / `aiAssetReport`, the web's isCreateAsset / isAssetReport).
+  final bool aiCreateAsset;
+  final bool aiAssetReport;
 
   bool has(String moduleId) => modules.any((m) => m.id == moduleId);
 
@@ -155,8 +171,11 @@ class MobileBootstrap {
       webOnly: (json['webOnly'] as List? ?? const []).map((e) => '$e').toList(),
       catalogVersion: (json['catalogVersion'] as num?)?.toInt() ?? 0,
       dashboardEnv: '${prefs['dashboardEnv'] ?? 'test'}',
+      utilityProvider: '${prefs['utilityProvider'] ?? 'bacnet'}',
       pushAlerts: prefs['mobilePushAlerts'] != false,
       pushMinSeverity: '${prefs['mobilePushMinSeverity'] ?? 'high'}',
+      aiCreateAsset: prefs['aiCreateAsset'] == true,
+      aiAssetReport: prefs['aiAssetReport'] == true,
     );
   }
 }

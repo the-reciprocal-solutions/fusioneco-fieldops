@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:flutter_localization/flutter_localization.dart';
 
 import '../../core/network/api_client.dart';
 import '../../domain/mobile_catalog.dart';
@@ -35,12 +36,16 @@ class SummarySpec {
 
 /// What a list row shows.
 class RecordRow {
-  const RecordRow({required this.id, required this.title, this.ref, this.subtitle, this.status, this.priority, this.date});
+  const RecordRow({required this.id, required this.title, this.ref, this.subtitle, this.status, this.priority, this.date, this.refInHeader = true});
   final String id;
   final String title;
 
   /// Short human reference (WO-762, PTW-0002), shown in the header too.
   final String? ref;
+
+  /// False when [ref] is not a record number (PM Compliance's percentage):
+  /// the detail header then shows [title].
+  final bool refInHeader;
   final String? subtitle;
   final String? status;
   final String? priority;
@@ -55,6 +60,8 @@ class ListSpec {
     this.query = const {},
     this.searchParam,
     this.detailPath,
+    this.detailExtras = const {},
+    this.scanId,
     this.liveQuery,
     this.items,
   });
@@ -79,6 +86,16 @@ class ListSpec {
   /// `GET` for one record (deep links, refresh after an action); null = the
   /// list row is the whole record.
   final String Function(String id)? detailPath;
+
+  /// More `GET`s fetched with [detailPath], each one's list stored on the
+  /// record under its key (e.g. a work order's `/work-log` as `_log`). A
+  /// failed one is left out; the record still shows.
+  final Map<String, String Function(String id)> detailExtras;
+
+  /// Set = a scan button by the search box. Returns the record id a scanned
+  /// code points at, or null: the code is searched for instead (and opened
+  /// when exactly one record matches).
+  final String? Function(String raw)? scanId;
 }
 
 /// When an action asks for text first.
@@ -91,6 +108,7 @@ class RecordAction {
     this.run,
     this.photoRun,
     this.ask = TextAsk.none,
+    this.choices = const [],
     this.primary = false,
     this.danger = false,
   });
@@ -99,6 +117,11 @@ class RecordAction {
   final String label;
   final IconData icon;
   final TextAsk ask;
+
+  /// Set when the server takes one of a fixed list (a work order's
+  /// `holdReason`): the detail screen asks the user to pick one, and passes
+  /// its value to [run] as the text. Each entry is (value sent, i18n key).
+  final List<(String, String)> choices;
   final bool primary;
   final bool danger;
   final Future<void> Function(ApiClient api, Json record, String? text)? run;
@@ -118,9 +141,18 @@ class ModuleSpec {
     this.open,
     this.screen,
     this.extra,
+    this.headerActions,
+    this.desktopNote,
   });
 
   final String moduleId;
+
+  /// i18n key of a [DesktopNote] on the summary screen, for a module whose
+  /// web page has more than the phone (3D, running reports).
+  final String? desktopNote;
+
+  /// Extra header buttons on the summary screen (AMC's calendar).
+  final List<Widget> Function(BuildContext context, MobileModule module)? headerActions;
 
   /// A screen of its own instead of tiles + list (utilities: devices ×
   /// readings). Still opened through the catalog guard.
@@ -131,7 +163,8 @@ class ModuleSpec {
   /// Detail facts: (i18n label key, value). Empty values are dropped.
   final List<(String, String?)> Function(Json r)? facts;
 
-  /// Light actions for a record in its current state.
+  /// Light actions for a record in its current state. The record carries
+  /// `_me: {id, role}` (the signed-in user) for rules that depend on who asks.
   final List<RecordAction> Function(Json r)? actions;
 
   /// A URL to open (documents); null = nothing to open.
@@ -218,6 +251,28 @@ String? fmtMoney(Object? amount, Object? currency) {
   final x = n(amount);
   if (x == null) return null;
   return '${s(currency) ?? ''} ${fmtNum(x, decimals: 2)}'.trim();
+}
+
+/// A server word shown in the user's language: [prefix] + [raw] is looked up
+/// when the fact is drawn (`snags.trade.` + `finishes` → "Finishes"), and the
+/// raw word made readable is the fallback. Facts are built without a
+/// BuildContext, so the lookup waits for [factText].
+String? word(String prefix, Object? raw) {
+  final v = s(raw);
+  return v == null ? null : '$_wordMark$prefix$_wordMark$v';
+}
+
+const _wordMark = '\u{E000}';
+
+/// A fact's text as shown: [word] values translated, others unchanged.
+String factText(BuildContext context, String value) {
+  if (!value.startsWith(_wordMark)) return value;
+  final parts = value.substring(1).split(_wordMark);
+  if (parts.length != 2) return value;
+  final key = '${parts[0]}${parts[1]}';
+  final t = key.getString(context);
+  // flutter_localization answers the key itself (or "<key> not found") when missing.
+  return t == key || t.endsWith(' not found') ? chipLabel(parts[1]) : t;
 }
 
 /// Locale-neutral `2026-10-30`.

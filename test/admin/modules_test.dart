@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:technician_portal/admin/core/media/photo_picker.dart';
 import 'package:technician_portal/admin/core/network/api_client.dart';
 import 'package:technician_portal/admin/core/storage/secure_store.dart';
+import 'package:technician_portal/admin/core/storage/session_store.dart';
 import 'package:technician_portal/admin/domain/mobile_catalog.dart';
 import 'package:technician_portal/admin/features/home/home_screen.dart';
 import 'package:technician_portal/admin/features/modules/fm_specs.dart';
@@ -57,6 +60,24 @@ class _FakeApi extends ApiClient {
         'pagination': {'total': 21, 'page': page, 'limit': 20, 'totalPages': 2},
       };
     }
+    if (path.endsWith('/work-log')) {
+      // Newest first, as the server sends it; a posted comment shows on top.
+      return {
+        'success': true,
+        'data': [
+          for (final (p, b) in posts.reversed)
+            if (p.endsWith('/comments'))
+              {
+                'action': 'comment',
+                'details': (b as Map)['text'] ?? 'Attached 1 file(s)',
+                'user': {'name': 'Ragul'},
+                'createdAt': '2026-10-31T06:00:00.000Z',
+                'metadata': {'kind': 'comment', 'attachments': b['attachments'] ?? const []},
+              },
+          {'action': 'Technician Checked Out', 'details': 'Checked out after 5 min on site', 'user': {'name': 'Balaji'}, 'createdAt': '2026-10-30T10:00:00.000Z'},
+        ],
+      };
+    }
     if (path.startsWith('/api/fm/work-order/')) return {'success': true, 'data': posts.isEmpty ? _woRow : {..._woRow, 'status': 'In Progress'}};
     throw StateError('unexpected GET $path');
   }
@@ -66,6 +87,14 @@ class _FakeApi extends ApiClient {
     posts.add((path, body));
     return {'success': true};
   }
+
+  final uploads = <String>[];
+
+  @override
+  Future<String> uploadFile(List<int> bytes, String fileName) async {
+    uploads.add(fileName);
+    return 'https://files.example.com/wo/$fileName';
+  }
 }
 
 const _module = MobileModule(id: 'work_orders', label: 'Work Orders', group: 'Facility Management', icon: 'wrench', webPath: '/x');
@@ -74,7 +103,11 @@ Future<_FakeApi> _pump(WidgetTester tester, Widget screen) async {
   final api = _FakeApi();
   final localization = FlutterLocalization.instance;
   await tester.pumpWidget(ProviderScope(
-    overrides: [apiClientProvider.overrideWithValue(api)],
+    overrides: [
+      apiClientProvider.overrideWithValue(api),
+      sessionStoreProvider.overrideWithValue(await SessionStore.open()),
+      photoPickerProvider.overrideWithValue((_) async => (bytes: Uint8List(4), name: 'leak.jpg')),
+    ],
     child: MaterialApp(
       theme: AppTheme.build(),
       supportedLocales: localization.supportedLocales,
@@ -124,9 +157,9 @@ void main() {
     List<String> labels(ModuleSpec s, Map<String, dynamic> r) => s.actions!(r).map((a) => a.label).toList();
 
     test('work order', () {
-      expect(labels(workOrdersSpec, {'status': 'Open'}), ['act.start', 'act.hold', 'act.comment']);
-      expect(labels(workOrdersSpec, {'status': 'In Progress'}), ['act.complete', 'act.hold', 'act.comment']);
-      expect(labels(workOrdersSpec, {'status': 'Completed'}), ['act.comment']);
+      expect(labels(workOrdersSpec, {'status': 'Open'}), ['act.start', 'act.hold', 'act.comment', 'act.add_photo']);
+      expect(labels(workOrdersSpec, {'status': 'In Progress'}), ['act.complete', 'act.hold', 'act.comment', 'act.add_photo']);
+      expect(labels(workOrdersSpec, {'status': 'Completed'}), ['act.comment', 'act.add_photo']);
     });
 
     test('permit: approve / reject only while submitted', () {
@@ -192,19 +225,72 @@ void main() {
     expect(find.text('Complete'), findsOneWidget);
   });
 
-  testWidgets('a required-text action does nothing when the text is left empty', (tester) async {
+  testWidgets("hold asks for one of the server's reasons and sends it (free text is refused there)", (tester) async {
     final api = await _pump(tester, RecordDetailScreen(spec: workOrdersSpec, recordId: 'w1', initial: _woRow));
     await tester.tap(find.text('Put on hold'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Save'));
+    for (final r in ['Pending parts', 'Awaiting vendor', 'Customer action required', 'Other']) {
+      expect(find.text(r), findsOneWidget);
+    }
+    await tester.tapAt(const Offset(5, 5)); // dismissed: nothing sent
     await tester.pumpAndSettle();
     expect(api.posts, isEmpty);
 
     await tester.tap(find.text('Put on hold'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Waiting for parts');
+    await tester.tap(find.text('Awaiting vendor'));
+    await tester.pumpAndSettle();
+    expect(api.posts.single.$2, {'status': 'On Hold', 'holdReason': 'Awaiting Vendor'});
+  });
+
+  testWidgets('work order: comments and history listed; a new comment shows at once', (tester) async {
+    final api = await _pump(tester, RecordDetailScreen(spec: workOrdersSpec, recordId: 'w1', initial: _woRow));
+    expect(api.gets, contains('/api/fm/work-order/w1/work-log'));
+    expect(find.text('Technician Checked Out'), findsOneWidget);
+    expect(find.textContaining('Checked out after 5 min on site'), findsOneWidget);
+
+    await tester.tap(find.text('Comment'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Parts ordered');
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
-    expect(api.posts.single.$2, {'status': 'On Hold', 'holdReason': 'Waiting for parts'});
+    expect(api.posts.single.$1, '/api/fm/work-order/w1/comments');
+    expect(api.posts.single.$2, {'text': 'Parts ordered'});
+    await tester.scrollUntilVisible(find.text('Parts ordered'), 200);
+    expect(find.text('Parts ordered'), findsOneWidget);
+  });
+
+  testWidgets('work order: a photo comment uploads, sends the attachment, shows the photo', (tester) async {
+    final api = await _pump(tester, RecordDetailScreen(spec: workOrdersSpec, recordId: 'w1', initial: _woRow));
+    await tester.tap(find.text('Add photo'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Leak under FCU');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(api.uploads, ['leak.jpg']);
+    expect(api.posts.single.$1, '/api/fm/work-order/w1/comments');
+    expect(api.posts.single.$2, {
+      'text': 'Leak under FCU',
+      'attachments': [
+        {'url': 'https://files.example.com/wo/leak.jpg', 'name': 'leak.jpg', 'mime': 'image/jpeg'},
+      ],
+    });
+    await tester.scrollUntilVisible(find.text('Leak under FCU'), 200);
+    expect(find.byWidgetPredicate((w) => w is Image && w.image is NetworkImage && (w.image as NetworkImage).url.endsWith('leak.jpg')), findsOneWidget);
+  });
+
+  test('photo comment helpers: type from the name, images only from the log', () {
+    expect(mimeForName('https://x/a/b.PNG'), 'image/png');
+    expect(mimeForName('photo'), 'image/jpeg');
+    expect(logPhotos({
+      'metadata': {
+        'attachments': [
+          {'url': 'u1', 'mime': 'image/jpeg'},
+          {'url': 'u2', 'mime': 'application/pdf'},
+          {'url': 'u3'},
+        ],
+      },
+    }), ['u1', 'u3']);
+    expect(logPhotos({'metadata': null}), isEmpty);
   });
 }

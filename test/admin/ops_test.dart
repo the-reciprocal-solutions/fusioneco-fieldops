@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:technician_portal/admin/catalog/catalog_guard.dart';
 import 'package:technician_portal/admin/core/network/api_client.dart';
+import 'package:technician_portal/admin/core/network/api_exception.dart';
 import 'package:technician_portal/admin/core/storage/secure_store.dart';
 import 'package:technician_portal/admin/domain/mobile_catalog.dart';
 import 'package:technician_portal/admin/features/modules/chat_screen.dart';
@@ -29,7 +30,7 @@ const _catalogIds = [
 ];
 
 /// Screens of their own (Home, tabs) or not built yet (Phase 2 / PENDING).
-const _notSpecs = {'dashboard', 'efficiency', 'alerts', 'floor_plan'};
+const _notSpecs = {'dashboard', 'efficiency', 'alerts'};
 
 class _ChatApi extends ApiClient {
   _ChatApi() : super(secureStore: SecureStore());
@@ -41,7 +42,21 @@ class _ChatApi extends ApiClient {
   @override
   Future<dynamic> post(String path, {Object? body}) async {
     lastBody = body;
+    paths.add(path);
     return {'content': 'Two DGs are running.', 'messageId': 'm1'};
+  }
+
+  final paths = <String>[];
+
+  /// The stream's events; null = the stream can't start (an older server).
+  List<Map<String, dynamic>>? events;
+
+  @override
+  Stream<Map<String, dynamic>> postEvents(String path, {Object? body, Duration timeout = const Duration(minutes: 3)}) async* {
+    lastBody = body;
+    paths.add(path);
+    if (events == null) throw const HttpFailure(status: 404, message: 'Not found');
+    yield* Stream.fromIterable(events!);
   }
 }
 
@@ -133,15 +148,11 @@ void main() {
     expect(newSessionId(), isNot(id));
   });
 
-  testWidgets('chat: sends message + session + env, shows the answer', (tester) async {
-    final api = _ChatApi();
+  Future<void> pumpChat(WidgetTester tester, _ChatApi api) async {
     const module = MobileModule(id: 'ask_flowai', label: 'Ask FlowAI', group: 'AI', icon: 'bot', webPath: '/fu-agent');
     final localization = FlutterLocalization.instance;
     await tester.pumpWidget(ProviderScope(
-      overrides: [
-        apiClientProvider.overrideWithValue(api),
-        loadedCatalogProvider.overrideWithValue(null),
-      ],
+      overrides: [apiClientProvider.overrideWithValue(api), loadedCatalogProvider.overrideWithValue(null)],
       child: MaterialApp(
         theme: AppTheme.build(),
         supportedLocales: localization.supportedLocales,
@@ -153,9 +164,39 @@ void main() {
     await tester.enterText(find.byType(TextField), 'How many DGs are running?');
     await tester.testTextInput.receiveAction(TextInputAction.send);
     await tester.pumpAndSettle();
+  }
+
+  testWidgets('chat: the streamed answer (after a reset) shows as formatted text', (tester) async {
+    final api = _ChatApi()
+      ..events = [
+        {'type': 'step', 'id': 'understand', 'title': 'Understanding'},
+        {'type': 'delta', 'text': 'Wrong engine'},
+        {'type': 'stream_reset'},
+        {'type': 'delta', 'text': '**Two** DGs'},
+        {'type': 'final', 'content': '**Two** DGs are running.'},
+      ];
+    await pumpChat(tester, api);
+    expect(api.paths, ['/api/utility/ai/chat-v2/stream']);
+    expect(api.lastBody, {'message': 'How many DGs are running?', 'sessionId': 's-1', 'env': 'test'});
+    expect(find.textContaining('Two DGs are running.', findRichText: true), findsOneWidget);
+    expect(find.textContaining('**', findRichText: true), findsNothing); // bold, not stars
+    expect(find.textContaining('Wrong engine', findRichText: true), findsNothing);
+  });
+
+  testWidgets('chat: an error event shows its message', (tester) async {
+    final api = _ChatApi()..events = [{'type': 'error', 'error': 'The AI service is busy'}];
+    await pumpChat(tester, api);
+    expect(api.paths, ['/api/utility/ai/chat-v2/stream']); // heard the server: no second send
+    expect(find.textContaining('The AI service is busy', findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('chat: no stream (older server) → the plain call, answer shown', (tester) async {
+    final api = _ChatApi();
+    await pumpChat(tester, api);
+    expect(api.paths, ['/api/utility/ai/chat-v2/stream', '/api/utility/ai/chat-v2']);
     expect(api.lastBody, {'message': 'How many DGs are running?', 'sessionId': 's-1', 'env': 'test'});
     expect(find.text('How many DGs are running?'), findsOneWidget);
-    expect(find.text('Two DGs are running.'), findsOneWidget);
+    expect(find.textContaining('Two DGs are running.', findRichText: true), findsOneWidget);
   });
 }
 

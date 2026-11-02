@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/router.dart';
 import '../../catalog/catalog_guard.dart';
 import '../../state/alerts_controller.dart';
+import '../../state/auth_controller.dart';
 import '../../state/providers.dart';
 import 'local_notifications.dart';
 import 'push_content.dart';
@@ -37,13 +38,22 @@ class PushService {
   /// phone to whoever signed in last.
   Future<void> init() async {
     if (!available) return;
+    final first = _attached == null;
     final ok = await (_attached ??= _attach());
     if (!ok) {
       _attached = null;
       return;
     }
+    // The notifications plugin is one per app: a technician who signed in
+    // earlier in this run took its tap callback (and, on iOS, its categories).
+    if (!first) await LocalNotifications.init(onTap: respond);
     await _register(await _fcmToken());
   }
+
+  /// The listeners outlive a sign-out (FCM streams can't be detached per
+  /// user), and FieldOps' technician side has its own: only the side that is
+  /// signed in acts (lib/core/push/push_service.dart checks the reverse).
+  bool get _active => _ref.read(authControllerProvider).isAuthenticated;
 
   /// Before sign-out, while the session still works: this phone stops
   /// getting this user's pushes. Best effort, never blocks sign-out long.
@@ -63,19 +73,24 @@ class PushService {
     final settings = await m.requestPermission();
     if (settings.authorizationStatus == AuthorizationStatus.denied) return false;
 
-    await LocalNotifications.init(onTap: _openPayload);
-    m.onTokenRefresh.listen(_register);
+    await LocalNotifications.init(onTap: respond);
+    m.onTokenRefresh.listen((t) {
+      if (_active) _register(t);
+    });
     FirebaseMessaging.onMessage.listen((message) {
+      if (!_active) return;
       LocalNotifications.show(message);
       if (pushTargetOf(message.data) is AlertTarget) _ref.read(alertsTickProvider.notifier).state++;
     });
     // iOS: a tap on the APNs alert iOS drew itself.
-    FirebaseMessaging.onMessageOpenedApp.listen((msg) => open(pushTargetOf(msg.data)));
+    FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+      if (_active) open(pushTargetOf(msg.data));
+    });
     final initial = await m.getInitialMessage();
     if (initial != null) open(pushTargetOf(initial.data));
-    // Android: the tray entry we drew cold-started the app.
-    final launch = await LocalNotifications.launchPayload();
-    if (launch != null) _openPayload(launch);
+    // Android: the tray entry (or its Acknowledge button) cold-started the app.
+    final launch = await LocalNotifications.launchResponse();
+    if (launch != null) await respond(launch.$1, launch.$2);
     return true;
   }
 
@@ -104,11 +119,27 @@ class PushService {
     }
   }
 
-  void _openPayload(String? payload) {
+  /// A tap on a tray entry we drew; [actionId] is the button, if any.
+  /// Acknowledge runs with the live session, then the alert opens either way
+  /// (it shows the new status, or still "active" when the call failed).
+  @visibleForTesting
+  Future<void> respond(String? payload, String? actionId) async {
     if (payload == null) return;
+    final PushTarget target;
     try {
-      open(pushTargetOf((jsonDecode(payload) as Map).cast<String, dynamic>()));
-    } catch (_) {}
+      target = pushTargetOf((jsonDecode(payload) as Map).cast<String, dynamic>());
+    } catch (_) {
+      return;
+    }
+    if (actionId == ackActionId && target is AlertTarget) {
+      try {
+        await _ref.read(alertsRepositoryProvider).act(target.key, 'acknowledge');
+        _ref.read(alertsTickProvider.notifier).state++;
+      } catch (e) {
+        debugPrint('tray acknowledge failed: $e');
+      }
+    }
+    open(target);
   }
 
   /// The catalog guard still decides: an alert opens only if Alerts is on.

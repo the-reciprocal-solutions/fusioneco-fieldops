@@ -7,6 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../theme/fe_colors.dart';
 import 'push_content.dart';
 
+/// The tray button on alert pushes. It opens the app (no background
+/// isolate: the live session does the call), which acknowledges and shows
+/// the alert (PushService.respond).
+const ackActionId = 'fe_alert_ack';
+const _alertCategory = 'fe_alert';
+
 /// Draws pushes in the tray. The server sends data-only messages on Android
 /// (services/push/pushPayload.ts), so without this nothing shows at all; on
 /// iOS the server's APNs alert shows while the app is in the background and
@@ -51,31 +57,49 @@ abstract final class LocalNotifications {
         ),
       ];
 
-  /// [onTap] gets the tapped push's data (JSON). Omit it in the background isolate.
-  static Future<void> init({void Function(String? payload)? onTap}) async {
-    if (_initialized) return;
+  /// [onTap] gets the tapped push's data (JSON) and the button pressed (null
+  /// for the body). Omit it in the background isolate.
+  ///
+  /// The plugin is one per app and FieldOps' technician side sets it up too
+  /// (lib/core/push/local_notifications.dart), taking the tap callback and
+  /// the iOS categories. So a call with [onTap] always re-claims it (an admin
+  /// signing in after a technician in the same run); the bare call from
+  /// [show] runs once.
+  static Future<void> init({void Function(String? payload, String? actionId)? onTap}) async {
+    if (_initialized && onTap == null) return;
+    final first = !_initialized;
     _initialized = true;
+    final ar = await _arabic();
     await _plugin.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      settings: InitializationSettings(
+        android: const AndroidInitializationSettings('@mipmap/ic_launcher'),
         // FirebaseMessaging.requestPermission asks on iOS; don't ask twice.
-        iOS: DarwinInitializationSettings(requestAlertPermission: false, requestBadgePermission: false, requestSoundPermission: false),
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: false,
+          requestBadgePermission: false,
+          requestSoundPermission: false,
+          notificationCategories: [
+            DarwinNotificationCategory(_alertCategory, actions: [
+              DarwinNotificationAction.plain(ackActionId, ar ? 'إقرار' : 'Acknowledge', options: {DarwinNotificationActionOption.foreground}),
+            ]),
+          ],
+        ),
       ),
-      onDidReceiveNotificationResponse: onTap == null ? null : (r) => onTap(r.payload),
+      onDidReceiveNotificationResponse: onTap == null ? null : (r) => onTap(r.payload, r.actionId),
     );
     final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-    if (android != null) {
-      final ar = await _arabic();
+    if (first && android != null) {
       for (final c in _channels(ar)) {
         await android.createNotificationChannel(c);
       }
     }
   }
 
-  /// The tray entry that cold-started the app, if any.
-  static Future<String?> launchPayload() async {
+  /// The tray entry (and button) that cold-started the app, if any.
+  static Future<(String?, String?)?> launchResponse() async {
     final d = await _plugin.getNotificationAppLaunchDetails();
-    return d?.didNotificationLaunchApp == true ? d?.notificationResponse?.payload : null;
+    if (d?.didNotificationLaunchApp != true) return null;
+    return (d?.notificationResponse?.payload, d?.notificationResponse?.actionId);
   }
 
   static Future<void> show(RemoteMessage message) async {
@@ -87,6 +111,7 @@ abstract final class LocalNotifications {
     final ar = await _arabic();
     final channel = _channels(ar).firstWhere((c) => c.id == channelIdFor(data));
     final critical = channel.id == 'fe_alerts_critical';
+    final ackable = canAckFromTray(data);
     // One banner per alert: a re-push (escalation) replaces it.
     final tag = (data['alertKey'] as String?) ?? (data['notificationId'] as String?) ?? message.messageId ?? title;
     await _plugin.show(
@@ -104,8 +129,12 @@ abstract final class LocalNotifications {
           subText: data['location'] as String?,
           color: critical ? FeColors.danger : FeColors.primary,
           category: critical ? AndroidNotificationCategory.alarm : AndroidNotificationCategory.status,
+          actions: [
+            if (ackable)
+              AndroidNotificationAction(ackActionId, ar ? 'إقرار' : 'Acknowledge', showsUserInterface: true, cancelNotification: true),
+          ],
         ),
-        iOS: DarwinNotificationDetails(threadIdentifier: data['threadId'] as String?),
+        iOS: DarwinNotificationDetails(threadIdentifier: data['threadId'] as String?, categoryIdentifier: ackable ? _alertCategory : null),
       ),
       payload: jsonEncode(data),
     );

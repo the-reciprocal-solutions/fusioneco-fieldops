@@ -22,6 +22,7 @@ class _FakeApi extends ApiClient {
   @override
   Future<dynamic> post(String path, {Object? body}) async {
     posts.add((path, body));
+    if (path == '/api/notifications/test-push') return {'success': true, 'data': {'configured': true, 'devices': 2, 'sent': 1}};
     return 'OK';
   }
 }
@@ -95,5 +96,17 @@ void main() {
     await tester.tap(find.byType(Switch));
     await tester.pumpAndSettle();
     expect(api.posts.last.$2, {'mobilePushAlerts': false, 'mobilePushMinSeverity': 'critical'});
+
+    await tester.tap(find.text('Send a test notification'));
+    await tester.pumpAndSettle();
+    expect(api.posts.last.$1, '/api/notifications/test-push');
+    expect(find.text('Sent to 1 device(s). It should arrive in a few seconds.'), findsOneWidget);
+  });
+
+  test('test push: each outcome has its own message', () {
+    expect(testPushMessage(configured: false, devices: 0, sent: 0), 'push.test_off');
+    expect(testPushMessage(configured: true, devices: 0, sent: 0), 'push.test_no_device');
+    expect(testPushMessage(configured: true, devices: 1, sent: 0), 'push.test_failed');
+    expect(testPushMessage(configured: true, devices: 1, sent: 1), 'push.test_sent');
   });
 }

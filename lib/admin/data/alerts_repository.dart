@@ -15,17 +15,29 @@ class AlertsRepository {
     return data;
   }
 
-  Future<AlertPage> list(AlertFilters filters) async =>
-      AlertPage.fromJson(_data(await _api.get('/api/fm/alerts', query: filters.toQuery())));
+  Future<AlertPage> list(AlertFilters filters, {int page = 1}) async =>
+      AlertPage.fromJson(_data(await _api.get('/api/fm/alerts', query: filters.toQuery(page: page))));
 
   Future<AlertDetail> detail(String key) async =>
       AlertDetail.fromJson(_data(await _api.get('/api/fm/alerts/${Uri.encodeComponent(key)}')));
 
-  /// acknowledge | resolve | reopen | note | take — [note] travels with any of them.
-  Future<AlertItem> act(String key, String action, {String? note}) async => AlertItem.fromJson(_data(await _api.post(
+  /// acknowledge | resolve | reopen | note | take | assign | unassign |
+  /// snooze | unsnooze | work_order — [note] travels with any of them;
+  /// [extra] carries `userId` (assign), `minutes` + `reason` (snooze) or
+  /// `workOrderId` (work_order; null unlinks).
+  Future<AlertItem> act(String key, String action, {String? note, Map<String, Object?> extra = const {}}) async =>
+      AlertItem.fromJson(_data(await _api.post(
         '/api/fm/alerts/${Uri.encodeComponent(key)}/$action',
-        body: {if (note != null && note.trim().isNotEmpty) 'note': note.trim()},
+        body: {if (note != null && note.trim().isNotEmpty) 'note': note.trim(), ...extra},
       )));
+
+  /// Who may be handed this alert: the covering teams first (server
+  /// alertCenterController.ts alertAssignees).
+  Future<List<Assignee>> assignees(String key) async {
+    final body = await _api.get('/api/fm/alerts/${Uri.encodeComponent(key)}/assignees');
+    final data = body is Map ? body['data'] : null;
+    return [for (final p in (data as List? ?? const []).whereType<Map<String, dynamic>>()) assigneeFromJson(p)];
+  }
 
   /// acknowledge | resolve several at once. The server answers
   /// `{done: [keys], skipped: [{key, reason}]}` (services/alerts/actions.ts bulkAct).

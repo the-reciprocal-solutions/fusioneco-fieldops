@@ -37,7 +37,15 @@ class UnknownFailure extends ApiFailure {
 ApiFailure mapDioException(DioException e) {
   final response = e.response;
   if (response == null) {
-    return NetworkFailure(e.message ?? 'No connection');
+    // Never Dio's own text: it is written for developers ("took longer than
+    // 0:00:30.000000 … raise RequestOptions.receiveTimeout").
+    return NetworkFailure(switch (e.type) {
+      DioExceptionType.connectionTimeout ||
+      DioExceptionType.sendTimeout ||
+      DioExceptionType.receiveTimeout =>
+        'The server took too long to answer. Please try again in a moment.',
+      _ => 'Could not reach the server. Check your connection and try again.',
+    });
   }
   final data = response.data;
   final status = response.statusCode ?? 0;

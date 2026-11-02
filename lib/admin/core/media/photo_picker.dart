@@ -14,7 +14,7 @@ typedef PickedPhoto = ({Uint8List bytes, String name});
 /// Overridden in tests (no platform channel there).
 final photoPickerProvider = Provider<Future<PickedPhoto?> Function(BuildContext context)>((ref) => pickPhoto);
 
-Future<PickedPhoto?> pickPhoto(BuildContext context) async {
+Future<PickedPhoto?> pickPhoto(BuildContext context, {double maxWidth = 1600}) async {
   final source = await showModalBottomSheet<ImageSource>(
     context: context,
     builder: (ctx) => SafeArea(
@@ -29,7 +29,7 @@ Future<PickedPhoto?> pickPhoto(BuildContext context) async {
   );
   if (source == null) return null;
   // Same size as FieldOps' snag photos: plenty for evidence, small to upload.
-  final x = await ImagePicker().pickImage(source: source, maxWidth: 1600, imageQuality: 80);
+  final x = await ImagePicker().pickImage(source: source, maxWidth: maxWidth, maxHeight: maxWidth, imageQuality: 80);
   if (x == null) return null;
   return (bytes: await x.readAsBytes(), name: x.name);
 }

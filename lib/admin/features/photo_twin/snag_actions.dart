@@ -16,10 +16,10 @@ import '../modules/module_spec.dart';
 ///
 ///   start   open → in-progress
 ///   ready   open | in-progress → ready     needs an after photo
-///   verify  ready → closed                 not by whoever marked it ready
+///   verify  ready → closed                 not by whoever marked it ready (hidden for them)
 ///   reject  ready → open                   reason
 ///   reopen  closed → open                  reason
-///   waive   anything not closed/waived     reason, Admin only
+///   waive   anything not closed/waived     reason, Admin only (hidden for others)
 
 Future<void> _transition(dynamic api, Json r, String action, {String? reason, String? afterPhoto}) => api.post('/api/snags/${r['id']}/transition', body: {
       'action': action,
@@ -46,6 +46,12 @@ final _woRequestIds = <String, String>{};
 List<RecordAction> snagActions(Json r) {
   final st = s(r['status']) ?? '';
   final active = st != 'closed' && st != 'waived';
+  // Who asks (`_me`, from the detail screen). Unknown → offer it and let the
+  // server answer, as before.
+  final meId = s(at(r, '_me.id'));
+  final meRole = s(at(r, '_me.role'));
+  final markedReadyByMe = meId != null && s(r['readyBy']) == meId;
+  final mayWaive = meRole == null || meRole == 'Admin';
   return [
     if (st == 'open') _move('act.start', 'start', LucideIcons.play, primary: true),
     if (st == 'open' || st == 'in-progress')
@@ -55,7 +61,7 @@ List<RecordAction> snagActions(Json r) {
         primary: st == 'in-progress',
         photoRun: (api, r, text, url) => _transition(api, r, 'ready', afterPhoto: url),
       ),
-    if (st == 'ready') _move('act.verify', 'verify', LucideIcons.badgeCheck, primary: true),
+    if (st == 'ready' && !markedReadyByMe) _move('act.verify', 'verify', LucideIcons.badgeCheck, primary: true),
     if (st == 'ready') _move('act.reject', 'reject', LucideIcons.x, danger: true, ask: TextAsk.required),
     if (st == 'closed') _move('act.reopen', 'reopen', LucideIcons.rotateCcw, ask: TextAsk.required),
     RecordAction(label: 'act.comment', icon: LucideIcons.messageSquare, ask: TextAsk.required, run: (api, r, text) => api.post('/api/snags/${r['id']}/comments', body: {'note': text})),
@@ -75,7 +81,7 @@ List<RecordAction> snagActions(Json r) {
         icon: LucideIcons.wrench,
         run: (api, r, text) => api.post('/api/snags/${r['id']}/work-order', body: {'requestId': _woRequestIds.putIfAbsent('${r['id']}', newSessionId)}),
       ),
-    if (active) _move('act.waive', 'waive', LucideIcons.ban, danger: true, ask: TextAsk.required),
+    if (active && mayWaive) _move('act.waive', 'waive', LucideIcons.ban, danger: true, ask: TextAsk.required),
   ];
 }
 

@@ -1,8 +1,15 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_localization/flutter_localization.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../theme/fe_colors.dart';
+import '../../widgets/app_text.dart';
+import '../../widgets/catalog_view.dart';
 import '../photo_twin/snag_actions.dart';
 import 'module_spec.dart';
+import 'pm_report_screen.dart';
+import 'scan_screen.dart';
 
 /// Phase 3a — Facility Management summary screens (FE-mobile.md). Endpoint
 /// shapes checked against the live server 2026-10-30; field names are the
@@ -21,12 +28,21 @@ String? _join(Iterable<Object?> parts) {
 
 // ── Work orders ─────────────────────────────────────────────────────────────
 
-RecordAction _woStatus(String label, String status, IconData icon, {bool primary = false, TextAsk ask = TextAsk.none}) =>
+/// The server's `HOLD_REASONS` (workOrderController.ts, SLA v2): any other
+/// text is refused with 400 "Invalid holdReason".
+const woHoldReasons = [
+  ('Pending Parts', 'hold.pending_parts'),
+  ('Awaiting Vendor', 'hold.awaiting_vendor'),
+  ('Customer Action Required', 'hold.customer_action'),
+  ('Other', 'hold.other'),
+];
+
+RecordAction _woStatus(String label, String status, IconData icon, {bool primary = false, List<(String, String)> choices = const []}) =>
     RecordAction(
       label: label,
       icon: icon,
       primary: primary,
-      ask: ask,
+      choices: choices,
       run: (api, r, text) => api.post('/api/fm/work-order/${r['id']}/status', body: {
         'status': status,
         if (status == 'On Hold' && text != null) 'holdReason': text,
@@ -39,6 +55,40 @@ final _comment = RecordAction(
   ask: TextAsk.required,
   run: (api, r, text) => api.post('/api/fm/work-order/${r['id']}/comments', body: {'text': text}),
 );
+
+/// A comment with a photo (FE-mobile.md Phase 3a "comment + photo"): the
+/// caption is optional; the server keeps the file in the log's
+/// `metadata.attachments` (workOrderController.ts addWorkOrderComment).
+final _commentPhoto = RecordAction(
+  label: 'act.add_photo',
+  icon: LucideIcons.camera,
+  ask: TextAsk.optional,
+  photoRun: (api, r, text, url) => api.post('/api/fm/work-order/${r['id']}/comments', body: {
+    'text': ?text,
+    'attachments': [
+      {'url': url, 'name': Uri.tryParse(url)?.pathSegments.lastOrNull ?? 'photo.jpg', 'mime': mimeForName(url)},
+    ],
+  }),
+);
+
+/// Image type from a file name or URL ending; JPEG when unknown (the picker
+/// saves JPEG).
+String mimeForName(String name) {
+  final ext = name.split('?').first.split('.').last.toLowerCase();
+  return switch (ext) {
+    'png' => 'image/png',
+    'webp' => 'image/webp',
+    'heic' => 'image/heic',
+    'gif' => 'image/gif',
+    _ => 'image/jpeg',
+  };
+}
+
+/// Image attachments of one work-log entry (`metadata.attachments`).
+List<String> logPhotos(Map e) => [
+      for (final f in (at(e, 'metadata.attachments') is List ? at(e, 'metadata.attachments') as List : const []))
+        if (f is Map && s(f['url']) != null && (s(f['mime'])?.startsWith('image/') ?? true)) s(f['url'])!,
+    ];
 
 final workOrdersSpec = ModuleSpec(
   moduleId: 'work_orders',
@@ -55,6 +105,7 @@ final workOrdersSpec = ModuleSpec(
     pageQuery: _pages,
     searchParam: 'search',
     detailPath: (id) => '/api/fm/work-order/$id',
+    detailExtras: {'_log': (id) => '/api/fm/work-order/$id/work-log'},
     row: (r) => RecordRow(
       id: '${r['id']}',
       ref: s(r['workOrderId']),
@@ -81,11 +132,48 @@ final workOrdersSpec = ModuleSpec(
     return [
       if (st == 'Open' || st == 'On Hold') _woStatus('act.start', 'In Progress', LucideIcons.play, primary: true),
       if (st == 'In Progress') _woStatus('act.complete', 'Completed', LucideIcons.check, primary: true),
-      if (st == 'Open' || st == 'In Progress') _woStatus('act.hold', 'On Hold', LucideIcons.pause, ask: TextAsk.required),
+      if (st == 'Open' || st == 'In Progress') _woStatus('act.hold', 'On Hold', LucideIcons.pause, choices: woHoldReasons),
       _comment,
+      _commentPhoto,
     ];
   },
+  extra: woSections,
 );
+
+/// Comments and history (`GET /:id/work-log`, newest first as sent).
+List<Widget> woSections(BuildContext context, Json r) {
+  final log = [for (final e in (r['_log'] is List ? r['_log'] as List : const [])) if (e is Map) e];
+  if (log.isEmpty) return const [];
+  return [
+    const SizedBox(height: 16),
+    RowGroup(
+      label: 'wo.history'.getString(context),
+      dividerIndent: 16,
+      rows: [
+        for (final e in log)
+          ListTile(
+            dense: true,
+            leading: Icon(s(e['action']) == 'comment' ? LucideIcons.messageSquare : LucideIcons.history, size: 18),
+            title: AppText.body(s(e['action']) == 'comment' ? (s(e['details']) ?? '') : (s(e['action']) ?? '–')),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AppText.caption(_join([
+                  at(e, 'user.name'),
+                  fmtDate(e['createdAt']),
+                  if (s(e['action']) != 'comment' && s(e['details']) != s(e['action'])) e['details'],
+                ]) ?? ''),
+                if (logPhotos(e).isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 6, children: [for (final u in logPhotos(e)) _LogPhoto(u)]),
+                ],
+              ],
+            ),
+          ),
+      ],
+    ),
+  ];
+}
 
 // ── Permit to Work ──────────────────────────────────────────────────────────
 
@@ -193,7 +281,7 @@ final snagsSpec = ModuleSpec(
     ),
   ),
   facts: (r) => [
-    ('fact.trade', s(r['trade'])),
+    ('fact.trade', word('snags.trade.', r['trade'])),
     ('fact.location', s(r['locationLabel']) ?? s(r['locationText'])),
     ('fact.asset', s(r['assetName'])),
     ('fact.assignee', s(r['assigneeName'])),
@@ -346,7 +434,44 @@ final pmComplianceSpec = ModuleSpec(
       ];
     }),
   ],
+  // Per building (the web's "Compliance by building" card): PM cycles done
+  // of those due, from preventiveMaintenanceController.ts
+  // getBuildingComplianceOverview — {id, name, sub, total, done, open, cov}.
+  list: ListSpec(
+    path: '/api/fm/preventive-maintenance/building-compliance',
+    row: (r) => RecordRow(
+      id: '${r['id']}',
+      title: s(r['name']) ?? '–',
+      // No PM due there: no percentage (0% would read as a failure).
+      ref: (n(r['total']) ?? 0) > 0 ? fmtPct(r['cov']) : null,
+      refInHeader: false,
+      subtitle: _join([s(r['sub']), if ((n(r['total']) ?? 0) > 0) pmDoneText(r)]),
+    ),
+  ),
+  facts: (r) => [
+    ('fact.location', s(r['sub'])),
+    ('fact.coverage', (n(r['total']) ?? 0) > 0 ? fmtPct(r['cov']) : null),
+    ('fact.done', fmtNum(r['done'])),
+    ('fact.open', fmtNum(r['open'])),
+    ('fact.total', fmtNum(r['total'])),
+  ],
+  // The web's yearly compliance report for this building (year + category).
+  extra: (context, r) => [
+    Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: OutlinedButton.icon(
+        icon: const Icon(LucideIcons.fileChartColumn, size: 16),
+        label: AppText('pmr.open'.getString(context)),
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => PmReportScreen(buildingId: '${r['id']}', buildingName: s(r['name']) ?? '–')),
+        ),
+      ),
+    ),
+  ],
 );
+
+/// "12 / 15 ✓" for a building's PM cycles (done of due).
+String? pmDoneText(Json r) => n(r['done']) == null || n(r['total']) == null ? null : '${fmtNum(r['done'])} / ${fmtNum(r['total'])} ✓';
 
 // ── Assets, documents ───────────────────────────────────────────────────────
 
@@ -365,6 +490,8 @@ final assetsSpec = ModuleSpec(
     pageQuery: _pages,
     searchParam: 'search',
     detailPath: (id) => '/api/fm/assets/$id',
+    // Stickers carry the id; older barcode plates the reference (search finds it).
+    scanId: assetIdFromScan,
     row: (r) => RecordRow(
       id: '${r['id']}',
       ref: s(r['assetReferenceId']),
@@ -402,6 +529,9 @@ final documentsSpec = ModuleSpec(
   ],
   list: ListSpec(
     path: '/api/fm/document',
+    // Opt-in paging (server documentController.ts, 2026-11-02); an older
+    // server ignores it and sends every row with `total`, which ends the list.
+    pageQuery: _pages,
     searchParam: 'search',
     row: (r) => RecordRow(
       id: '${r['id']}',
@@ -588,3 +718,29 @@ final fmSpecs = <String, ModuleSpec>{
   ])
     spec.moduleId: spec,
 };
+
+/// A comment's photo; a tap opens it full size outside the app.
+class _LogPhoto extends StatelessWidget {
+  const _LogPhoto(this.url);
+  final String url;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        onTap: () {
+          final uri = Uri.tryParse(url);
+          if (uri != null) launchUrl(uri, mode: LaunchMode.externalApplication);
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            url,
+            width: 72,
+            height: 72,
+            fit: BoxFit.cover,
+            // Storage the phone can't reach (a LAN-only file server) → a tile, not a crash.
+            errorBuilder: (_, _, _) => Container(width: 72, height: 72, color: FeColors.line, child: const Icon(LucideIcons.imageOff, color: FeColors.ink2)),
+          ),
+        ),
+      );
+}

@@ -562,12 +562,16 @@ class _CloseSheetState extends ConsumerState<CloseSheet> {
                       const SizedBox(height: 6),
                       Row(
                         children: [
+                          // Only while the pad is empty: once a stroke is
+                          // drawn the "required" hint read as still missing.
                           Expanded(
-                            child: AppText.caption(
-                              'order_detail.signature_required'
-                                  .getString(context),
-                              color: FeColors.ink2,
-                            ),
+                            child: signaturePending
+                                ? AppText.caption(
+                                    'order_detail.signature_required'
+                                        .getString(context),
+                                    color: FeColors.ink2,
+                                  )
+                                : const SizedBox.shrink(),
                           ),
                           TextButton.icon(
                             onPressed: _submitting

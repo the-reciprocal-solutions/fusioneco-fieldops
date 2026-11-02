@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:technician_portal/core/capture/capture_services.dart';
 import 'package:technician_portal/core/network/api_client.dart';
 import 'package:technician_portal/core/network/api_exception.dart';
@@ -464,7 +465,8 @@ void main() {
     test('iOS container move: a stored absolute path is re-rooted on snag_media/', () {
       const old = '/var/mobile/Containers/Data/Application/AAAA-1111/Documents/snag_media/own/s1/e1.jpg';
       const now = '/var/mobile/Containers/Data/Application/BBBB-2222/Documents/snag_media';
-      expect(SnagMedia.reroot(old, now), '$now/own/s1/e1.jpg');
+      // Joined with the platform's separator (the phone's is '/'; Windows test runs use '\').
+      expect(SnagMedia.reroot(old, now), p.joinAll([now, 'own', 's1', 'e1.jpg']));
       expect(SnagMedia.reroot('/tmp/elsewhere/x.jpg', now), isNull);
     });
 

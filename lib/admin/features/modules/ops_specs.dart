@@ -1,14 +1,16 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_localization/flutter_localization.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'amc_calendar_screen.dart';
 import 'chat_screen.dart';
 import 'module_spec.dart';
 import 'simple_screens.dart';
+import 'timeline_summary_screen.dart';
 
 /// Phase 3c — everything else (FE-mobile.md). Endpoints checked against the
-/// live server 2026-10-30. Modules the plan only asks to "view" open on the
-/// web from the phone (WebOnlyScreen); every summary screen also has an
-/// "open on web" button in its header.
+/// live server 2026-10-30. Where the web has more (3D, running a report),
+/// the phone shows the summary and a note that the full view is on a desktop.
 
 Map<String, dynamic> _pages(int page, int size) => {'page': '$page', 'limit': '$size'};
 Map<String, dynamic> _offset(int page, int size) => {'limit': '$size', 'offset': '${(page - 1) * size}'};
@@ -151,7 +153,8 @@ final purchaseOrdersSpec = ModuleSpec(
       id: '${r['id']}',
       ref: s(r['poNumber']),
       title: fmtMoney(r['totalValue'], r['currency']) ?? s(r['poNumber']) ?? '–',
-      subtitle: s(r['vendorResponse']),
+      // The vendor; its reply is in the facts (a bare "pending" under CLOSED read as the PO's state).
+      subtitle: s(at(r, 'vendor.name')),
       status: s(r['status']),
       priority: r['isEmergency'] == true ? 'critical' : null,
       date: d(r['expectedDate']) ?? d(r['createdAt']),
@@ -159,6 +162,7 @@ final purchaseOrdersSpec = ModuleSpec(
   ),
   facts: (r) => [
     ('fact.total', fmtMoney(r['totalValue'], r['currency'])),
+    ('fact.vendor', s(at(r, 'vendor.name'))),
     ('fact.vendor_response', s(r['vendorResponse'])),
     ('fact.expected', fmtDate(r['expectedDate'])),
     ('fact.approved', fmtDate(r['approvedAt'])),
@@ -171,6 +175,13 @@ final purchaseOrdersSpec = ModuleSpec(
 
 final amcSpec = ModuleSpec(
   moduleId: 'amc',
+  headerActions: (context, m) => [
+    IconButton(
+      icon: const Icon(LucideIcons.calendarDays, size: 20),
+      tooltip: 'amc.calendar'.getString(context),
+      onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AmcCalendarScreen(module: m))),
+    ),
+  ],
   summaries: [
     SummarySpec('/api/fm/schedule-management/analytics', (j) => [
           Kpi('kpi.scheduled', fmtNum(at(j, 'summary.totalScheduled'))),
@@ -206,7 +217,8 @@ final amcSpec = ModuleSpec(
 
 final digitalTwinSpec = ModuleSpec(
   moduleId: 'digital_twin',
-  // The buildings that carry the twin; 3D itself opens on the web.
+  // The buildings that carry the twin; the 3D view is on the desktop.
+  desktopNote: 'desktop.twin',
   list: ListSpec(
     path: '/api/fm/bs/building-systems',
     pageQuery: _pages,
@@ -227,7 +239,7 @@ final digitalTwinSpec = ModuleSpec(
   ],
 );
 
-final timelineSpec = ModuleSpec(moduleId: 'timeline_revisit', screen: (m) => WebOnlyScreen(module: m, hintKey: 'web.timeline'));
+final timelineSpec = ModuleSpec(moduleId: 'timeline_revisit', screen: (m) => TimelineSummaryScreen(module: m));
 
 final handoverSpec = ModuleSpec(
   moduleId: 'handover',
@@ -262,6 +274,7 @@ final constructionProgressSpec = ModuleSpec(
 
 final reportsSpec = ModuleSpec(
   moduleId: 'reports',
+  desktopNote: 'desktop.reports',
   list: ListSpec(
     path: '/api/reports/definitions',
     items: (body) => rowsOf({'data': body is Map ? body['reports'] : null}),

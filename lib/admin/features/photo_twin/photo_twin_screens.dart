@@ -80,6 +80,10 @@ class PhotoTwinScreen extends ConsumerStatefulWidget {
 class _PhotoTwinScreenState extends ConsumerState<PhotoTwinScreen> {
   Json? _summary;
   List<Json>? _snags;
+
+  /// The last few closed / waived snags, so a closed one can be opened and
+  /// reopened (the open list never shows them; found 2026-11-03).
+  List<Json> _closed = const [];
   List<Json> _buildings = const [];
   Map<String, List<TwinScan>> _scans = const {};
   Object? _error;
@@ -98,12 +102,14 @@ class _PhotoTwinScreenState extends ConsumerState<PhotoTwinScreen> {
         api.get('/api/snags', query: {'view': 'list', 'status': 'open,in-progress,ready', 'limit': '50'}),
         api.get('/api/snags/locations/buildings'),
         api.get('/api/fm/bs/3d-models'),
+        api.get('/api/snags', query: {'view': 'list', 'status': 'closed,waived', 'limit': '5'}),
       ]);
       final buildings = rowsOf(r[2]);
       if (!mounted) return;
       setState(() {
         _summary = dataOf(r[0]);
         _snags = rowsOf(r[1]);
+        _closed = rowsOf(r[4]);
         _buildings = buildings;
         _scans = scansByBuilding(rowsOf(r[3]), {for (final b in buildings) '${b['id']}'});
         _error = null;
@@ -151,6 +157,11 @@ class _PhotoTwinScreenState extends ConsumerState<PhotoTwinScreen> {
               if (snags.isEmpty) AppText.bodySmall('twin.no_open_snags'.getString(context)),
               for (final r in snags)
                 Padding(padding: const EdgeInsets.only(bottom: 10), child: RecordCard(row: snagsSpec.list!.row(r), onTap: () => _openSnag(r))),
+              if (_closed.isNotEmpty) ...[
+                _heading(context, 'twin.recently_closed'),
+                for (final r in _closed)
+                  Padding(padding: const EdgeInsets.only(bottom: 10), child: RecordCard(row: snagsSpec.list!.row(r), onTap: () => _openSnag(r))),
+              ],
               _heading(context, 'twin.scans'),
               if (_scans.isEmpty) AppText.bodySmall('twin.no_scans'.getString(context)),
               if (_scans.isNotEmpty) const Padding(padding: EdgeInsets.only(bottom: 10), child: DesktopNote(textKey: 'desktop.twin_scans')),

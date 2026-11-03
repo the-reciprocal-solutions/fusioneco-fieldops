@@ -179,7 +179,7 @@ class _SiteBar extends ConsumerWidget {
             const SizedBox(height: 8),
             SegmentedButton<int>(
               showSelectedIcon: false,
-              segments: [for (final d in const [1, 7, 30]) ButtonSegment(value: d, label: AppText.caption('${d}d'))],
+              segments: [for (final d in const [1, 7, 30]) ButtonSegment(value: d, label: AppText('${d}d', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)))],
               selected: {days},
               onSelectionChanged: (s) => ref.read(effDaysProvider.notifier).state = s.first,
             ),

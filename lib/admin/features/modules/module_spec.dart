@@ -15,10 +15,13 @@ enum Tone { neutral, good, warn, bad, info }
 
 /// One summary tile. [label] is an i18n key.
 class Kpi {
-  const Kpi(this.label, this.value, {this.tone = Tone.neutral});
+  const Kpi(this.label, this.value, {this.tone = Tone.neutral, this.icon});
   final String label;
   final String value;
   final Tone tone;
+
+  /// The tile's icon; null = picked from the label (see `kpiIcon`).
+  final IconData? icon;
 }
 
 /// One summary request and how to read tiles from its body.

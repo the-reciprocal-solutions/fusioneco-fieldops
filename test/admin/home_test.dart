@@ -44,6 +44,6 @@ void main() {
     ));
     await tester.pumpAndSettle();
     expect(api.gets, contains('/api/dashboard-v3'));
-    expect(find.text('Home'), findsOneWidget);
+    expect(find.text('Facility Dashboard'), findsOneWidget);
   });
 }

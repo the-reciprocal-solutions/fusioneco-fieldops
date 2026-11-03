@@ -10,6 +10,7 @@ import '../../core/utils/time_ago.dart';
 import '../../domain/alert.dart';
 import '../../state/alerts_controller.dart';
 import '../../theme/fe_colors.dart';
+import '../../theme/theme_extensions.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
@@ -62,6 +63,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
         title: selecting
             ? context.formatString('alerts.selected'.getString(context), [_selected.length])
             : 'nav.alerts'.getString(context),
+        subtitle: selecting ? null : 'nav.alerts_sub'.getString(context),
         leading: selecting
             ? IconButton(icon: const Icon(LucideIcons.x), onPressed: () => setState(_selected.clear))
             : null,
@@ -140,12 +142,15 @@ class _SummaryRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = summary;
-    Widget tile(String key, int? n, Color color) => Expanded(
+    Widget tile(String key, int? n, Color color, IconData icon) => Expanded(
           child: TechCard(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            radius: 16,
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
             child: Column(
               children: [
-                AppText.titleMedium(n == null ? '–' : '$n', color: color),
+                IconBadge(icon: icon, style: FeBadgeStyle.of(color), size: 30, iconSize: 16),
+                const SizedBox(height: 6),
+                FittedBox(fit: BoxFit.scaleDown, child: AppText.titleMedium(n == null ? '–' : '$n', color: color == FeColors.primary ? FeColors.ink : color)),
                 const SizedBox(height: 2),
                 FittedBox(fit: BoxFit.scaleDown, child: AppText.caption(key.getString(context), maxLines: 1)),
               ],
@@ -154,13 +159,13 @@ class _SummaryRow extends StatelessWidget {
         );
     return Row(
       children: [
-        tile('alerts.sum_open', s?.open, FeColors.ink),
+        tile('alerts.sum_open', s?.open, FeColors.primary, LucideIcons.bell),
         const SizedBox(width: 8),
-        tile('alerts.sum_critical', s?.critical, FeColors.danger),
+        tile('alerts.sum_critical', s?.critical, FeColors.danger, LucideIcons.triangleAlert),
         const SizedBox(width: 8),
-        tile('alerts.sum_unack', s?.unacknowledged, FeColors.warning),
+        tile('alerts.sum_unack', s?.unacknowledged, FeColors.high, LucideIcons.clockAlert),
         const SizedBox(width: 8),
-        tile('alerts.sum_mine', s?.mine, FeColors.primary),
+        tile('alerts.sum_mine', s?.mine, FeColors.secondary, LucideIcons.user),
       ],
     );
   }
@@ -197,7 +202,10 @@ class _FilterBar extends ConsumerWidget {
             Padding(
               padding: const EdgeInsetsDirectional.only(end: 8),
               child: FilterChip(
-                label: AppText.caption('alerts.severity_$sev'.getString(context)),
+                label: AppText.caption('alerts.severity_$sev'.getString(context), color: severityHue(sev), weight: FontWeight.w700),
+                backgroundColor: severityHue(sev).withValues(alpha: 0.08),
+                selectedColor: severityHue(sev).withValues(alpha: 0.22),
+                side: BorderSide(color: severityHue(sev).withValues(alpha: filters.severity.contains(sev) ? 0.7 : 0.25)),
                 selected: filters.severity.contains(sev),
                 onSelected: (on) => set(filters.copyWith(severity: on ? {...filters.severity, sev} : ({...filters.severity}..remove(sev)))),
               ),
@@ -208,7 +216,7 @@ class _FilterBar extends ConsumerWidget {
               padding: const EdgeInsetsDirectional.only(end: 8),
               child: FilterChip(
                 avatar: const Icon(LucideIcons.building2, size: 14),
-                label: AppText.caption(_buildingLabel(context)),
+                label: AppText(_buildingLabel(context), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                 selected: filters.buildings.isNotEmpty,
                 onSelected: (_) async {
                   final picked = await showModalBottomSheet<Set<String>>(
@@ -225,13 +233,13 @@ class _FilterBar extends ConsumerWidget {
             padding: const EdgeInsetsDirectional.only(end: 8),
             child: FilterChip(
               avatar: const Icon(LucideIcons.user, size: 14),
-              label: AppText.caption('alerts.filter_mine'.getString(context)),
+              label: AppText('alerts.filter_mine'.getString(context), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
               selected: filters.mineOnly,
               onSelected: (on) => set(filters.copyWith(mineOnly: on)),
             ),
           ),
           FilterChip(
-            label: AppText.caption('alerts.filter_resolved'.getString(context)),
+            label: AppText('alerts.filter_resolved'.getString(context), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
             selected: showResolved,
             onSelected: (on) => set(filters.copyWith(
               status: on ? {...alertStatuses} : {'active', 'acknowledged'},
@@ -323,40 +331,56 @@ class _AlertCard extends StatelessWidget {
     return GestureDetector(
       onLongPress: onLongPress,
       child: TechCard(
-        accentTop: severityHue(a.severity),
+        accentLeft: severityHue(a.severity),
         borderColor: selected ? FeColors.primary : null,
+        radius: 16,
+        padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
         onTap: onTap,
-        child: Column(
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                SeverityChip(a.severity),
-                const SizedBox(width: 6),
-                AlertStatusChip(a.status),
-                const Spacer(),
-                if (selected) const Icon(LucideIcons.circleCheck, size: 18, color: FeColors.primary),
-                if (!selected) AppText.caption(timeAgo(context, a.lastAt)),
-              ],
+            IconBadge(
+              icon: a.severity == 'critical' || a.severity == 'high' ? LucideIcons.siren : LucideIcons.bellRing,
+              style: FeBadgeStyle.of(severityHue(a.severity)),
+              size: 38,
+              iconSize: 18,
             ),
-            const SizedBox(height: 10),
-            AppText.titleSmall(a.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-            if (a.where.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              AppText.bodySmall(a.where, maxLines: 1, overflow: TextOverflow.ellipsis),
-            ],
-            if (a.readingText != null || a.ackOverdue || a.assigneeName != null) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 12,
-                runSpacing: 4,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (a.readingText != null) _Meta(LucideIcons.activity, a.readingText!),
-                  if (a.assigneeName != null) _Meta(LucideIcons.user, a.assigneeName!),
-                  if (a.ackOverdue) _Meta(LucideIcons.clockAlert, 'alerts.ack_overdue'.getString(context), color: FeColors.danger),
+                  Row(
+                    children: [
+                      SeverityChip(a.severity),
+                      const SizedBox(width: 6),
+                      AlertStatusChip(a.status),
+                      const Spacer(),
+                      if (selected) const Icon(LucideIcons.circleCheck, size: 18, color: FeColors.primary),
+                      if (!selected) AppText.caption(timeAgo(context, a.lastAt)),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  AppText.titleSmall(a.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  if (a.where.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    AppText.bodySmall(a.where, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ],
+                  if (a.readingText != null || a.ackOverdue || a.assigneeName != null) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 4,
+                      children: [
+                        if (a.readingText != null) _Meta(LucideIcons.activity, a.readingText!),
+                        if (a.assigneeName != null) _Meta(LucideIcons.user, a.assigneeName!),
+                        if (a.ackOverdue) _Meta(LucideIcons.clockAlert, 'alerts.ack_overdue'.getString(context), color: FeColors.danger),
+                      ],
+                    ),
+                  ],
                 ],
               ),
-            ],
+            ),
           ],
         ),
       ),

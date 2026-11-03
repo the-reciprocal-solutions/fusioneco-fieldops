@@ -23,6 +23,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const _b1 = 'b-1';
 
+final _closedSnag = {'id': 's-9', 'reference': 'SN-00008', 'title': 'Touch-up paint', 'status': 'closed', 'priority': 'minor', 'trade': 'finishes'};
+
 /// Shaped like the live `/api/snags` rows (2026-10-30).
 final _snag = {
   'id': 's-1',
@@ -57,6 +59,8 @@ class _FakeApi extends ApiClient {
       case '/api/snags/summary':
         return {'success': true, 'data': {'byStatus': {'open': 4, 'in-progress': 1, 'ready': 0}, 'overdue': 2}};
       case '/api/snags':
+        // The home asks twice: the open ones, and the last few closed / waived.
+        if (query?['status'] == 'closed,waived') return {'success': true, 'data': {'items': [_closedSnag], 'total': 1}};
         return {'success': true, 'data': {'items': [_snag], 'total': 1}};
       case '/api/snags/locations/buildings':
         return {'success': true, 'data': [{'id': _b1, 'name': 'Tower A'}]};
@@ -183,11 +187,24 @@ void main() {
   });
 
   testWidgets('home: counts, open snags, scans of my buildings', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(420, 2400)); // the whole list on one screen
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await _pump(tester);
     expect(find.text('Ceiling tile stained'), findsOneWidget);
     expect(find.text('BMS Room · 360° scan'), findsOneWidget);
     expect(find.text('Clinic HVAC'), findsNothing); // a design model, not a photo scan
     expect(find.text('Other site scan'), findsNothing); // not my building
+    // A closed snag is reachable (to reopen it) under its own heading.
+    expect(find.text('RECENTLY CLOSED'), findsOneWidget);
+    expect(find.text('Touch-up paint'), findsOneWidget);
+  });
+
+  test('every snag history type the server writes has a label', () {
+    final en = jsonDecode(File('assets/i18n/en.json').readAsStringSync()) as Map<String, dynamic>;
+    // services/snag activity `type`s (server, 2026-11-03).
+    for (final t in ['raised', 'started', 'ready', 'verified', 'rejected', 'reopened', 'waived', 'comment', 'evidence', 'work-order-linked', 'materials-requested', 'quote-drafted']) {
+      expect(en['snag.ev_${t.replaceAll('-', '_')}'], isNotNull, reason: t);
+    }
   });
 
   testWidgets('snag: mark fixed uploads the after photo and sends it with ready', (tester) async {

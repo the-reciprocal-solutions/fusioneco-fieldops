@@ -13,9 +13,9 @@ class OperationsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: FeHeader(title: 'nav.operations'.getString(context)),
+      appBar: FeHeader(title: 'nav.operations'.getString(context), subtitle: 'nav.operations_sub'.getString(context)),
       body: CatalogView(
-        builder: (context, boot) => ModuleGroupList(modules: boot.forTab(NavTab.operations)),
+        builder: (context, boot) => ModuleGroupList(modules: boot.forTab(NavTab.operations), grid: true),
       ),
     );
   }

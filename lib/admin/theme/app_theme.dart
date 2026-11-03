@@ -5,7 +5,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'fe_colors.dart';
 import 'theme_extensions.dart';
 
-/// Light-only, matching the "Navy Professional" web redesign direction.
+/// Light-only. 2026-11-03: the owner's colourful redesign (brand blue
+/// #2563EB + violet, Inter, soft gradient headers, coloured icon tiles).
 /// It ships no dark variant.
 abstract final class AppTheme {
   static ThemeData build() {
@@ -26,7 +27,7 @@ abstract final class AppTheme {
       onPrimaryContainer: FeColors.primary,
       // A muted neutral, not a second "dark chrome" surface — the header no
       // longer paints a dark bar by default, see FeHeader.
-      secondary: FeColors.ink2,
+      secondary: FeColors.secondary,
       onSecondary: Colors.white,
       secondaryContainer: secondaryContainer,
       onSecondaryContainer: FeColors.ink,
@@ -67,15 +68,14 @@ abstract final class AppTheme {
       // FeHeader itself always sets its own colors explicitly and never
       // reads this. See widgets/fe_header.dart.
       appBarTheme: AppBarTheme(
-        backgroundColor: FeColors.panel,
+        backgroundColor: FeColors.headerTop,
         foregroundColor: FeColors.ink,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        toolbarHeight: 53,
+        toolbarHeight: 56,
         centerTitle: false,
         titleTextStyle: text.titleMedium?.copyWith(color: FeColors.ink),
-        shape: Border(bottom: BorderSide(color: FeColors.line)),
         systemOverlayStyle: SystemUiOverlayStyle.dark,
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
@@ -88,7 +88,7 @@ abstract final class AppTheme {
           minimumSize: const Size(0, 40),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
           ),
           textStyle: text.labelLarge,
           animationDuration: const Duration(milliseconds: 120),
@@ -97,12 +97,12 @@ abstract final class AppTheme {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           backgroundColor: FeColors.panel,
-          foregroundColor: FeColors.ink2,
+          foregroundColor: FeColors.ink,
           minimumSize: const Size(0, 40),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           side: BorderSide(color: FeColors.line),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
           ),
           textStyle: text.labelLarge,
           animationDuration: const Duration(milliseconds: 120),
@@ -124,23 +124,23 @@ abstract final class AppTheme {
         ),
         hintStyle: text.bodyMedium?.copyWith(color: FeColors.ink2),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: FeColors.line),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: FeColors.line),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: FeColors.primary, width: 2),
         ),
         errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: FeColors.danger),
         ),
         focusedErrorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: FeColors.danger, width: 2),
         ),
       ),
@@ -160,6 +160,33 @@ abstract final class AppTheme {
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: FeColors.panel,
+        selectedColor: const Color(0xFFDBEAFE),
+        checkmarkColor: FeColors.primary,
+        showCheckmark: false,
+        side: BorderSide(color: FeColors.line),
+        shape: const StadiumBorder(),
+        labelStyle: text.labelLarge?.copyWith(color: FeColors.ink),
+        secondaryLabelStyle: text.labelLarge?.copyWith(color: FeColors.primary),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      ),
+      // Selected = soft blue tint + blue text (like the filter chips), not a
+      // solid fill: a label that sets its own colour stays readable on it.
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: SegmentedButton.styleFrom(
+          backgroundColor: FeColors.panel,
+          foregroundColor: FeColors.ink,
+          selectedBackgroundColor: const Color(0xFFDBEAFE),
+          selectedForegroundColor: FeColors.primary,
+          side: BorderSide(color: FeColors.line),
+          textStyle: text.labelLarge?.copyWith(fontWeight: FontWeight.w600),
+        ),
+      ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: FeColors.primary,
+        foregroundColor: Colors.white,
       ),
       dividerTheme: DividerThemeData(
         color: FeColors.line,
@@ -205,14 +232,15 @@ abstract final class AppTheme {
         color: onSurface,
       ),
       headlineMedium: const TextStyle(
-        fontSize: 30,
-        height: 36 / 30,
-        fontWeight: FontWeight.w900,
+        fontSize: 28,
+        height: 36 / 28,
+        fontWeight: FontWeight.w800,
+        letterSpacing: -0.4,
         color: onSurface,
       ),
       headlineSmall: const TextStyle(
-        fontSize: 24,
-        height: 32 / 24,
+        fontSize: 22,
+        height: 30 / 22,
         fontWeight: FontWeight.w700,
         color: onSurface,
       ),
@@ -224,7 +252,7 @@ abstract final class AppTheme {
       ),
       titleMedium: const TextStyle(
         fontSize: 18,
-        height: 28 / 18,
+        height: 26 / 18,
         fontWeight: FontWeight.w700,
         color: onSurface,
       ),
@@ -249,7 +277,7 @@ abstract final class AppTheme {
       bodySmall: const TextStyle(
         fontSize: 12,
         height: 16 / 12,
-        fontWeight: FontWeight.w400,
+        fontWeight: FontWeight.w500,
         color: onSurfaceMuted,
       ),
       labelLarge: const TextStyle(
@@ -272,6 +300,6 @@ abstract final class AppTheme {
         color: onSurfaceMuted,
       ),
     );
-    return GoogleFonts.poppinsTextTheme(base);
+    return GoogleFonts.interTextTheme(base);
   }
 }

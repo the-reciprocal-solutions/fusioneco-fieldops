@@ -31,6 +31,7 @@ class TechCard extends StatelessWidget {
     this.borderColor,
     this.onTap,
     this.accentTop,
+    this.accentLeft,
     this.dark = false,
     this.tint,
     this.radius,
@@ -41,6 +42,9 @@ class TechCard extends StatelessWidget {
   final Color? borderColor;
   final VoidCallback? onTap;
   final Color? accentTop;
+
+  /// A coloured strip down the start edge (alert / record severity).
+  final Color? accentLeft;
   final bool dark;
   final Color? tint;
   final double? radius;
@@ -64,7 +68,7 @@ class TechCard extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: r,
-        child: Column(
+        child: _withLeft(Column(
           mainAxisSize: MainAxisSize.min,
           // Children fill the card's width, as they did when the padding was
           // the decorated box itself.
@@ -74,7 +78,7 @@ class TechCard extends StatelessWidget {
               SizedBox(height: 4, child: ColoredBox(color: accentTop!)),
             Padding(padding: padding, child: child),
           ],
-        ),
+        )),
       ),
     );
 
@@ -86,6 +90,17 @@ class TechCard extends StatelessWidget {
       ),
     );
   }
+}
+
+extension on TechCard {
+  Widget _withLeft(Widget body) => accentLeft == null
+      ? body
+      : IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [SizedBox(width: 4, child: ColoredBox(color: accentLeft!)), Expanded(child: body)],
+          ),
+        );
 }
 
 /// The portal's universal technician loader.
@@ -210,7 +225,7 @@ class TechChip extends StatelessWidget {
   );
 }
 
-/// A small icon inside a soft-tinted circle — the "leading badge" pattern
+/// A small icon inside a soft-tinted rounded square — the "leading badge" pattern
 /// used on list rows (order type, checklist state) and dashboard counters.
 class IconBadge extends StatelessWidget {
   const IconBadge({
@@ -231,7 +246,7 @@ class IconBadge extends StatelessWidget {
     height: size,
     width: size,
     alignment: Alignment.center,
-    decoration: BoxDecoration(color: style.background, shape: BoxShape.circle),
+    decoration: BoxDecoration(color: style.background, borderRadius: BorderRadius.circular(size * 0.3)),
     child: Icon(icon, size: iconSize, color: style.foreground),
   );
 }
@@ -261,4 +276,71 @@ class PhasePlaceholder extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// A coloured hero card (brand blue → violet gradient) — the More tab's
+/// profile card and other "headline" panels of the redesign.
+class GradientCard extends StatelessWidget {
+  const GradientCard({super.key, required this.child, this.colors = const [FeColors.primary, FeColors.secondary], this.padding = const EdgeInsets.all(16), this.onTap});
+
+  final Widget child;
+  final List<Color> colors;
+  final EdgeInsets padding;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final r = BorderRadius.circular(context.radii.xl);
+    final card = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        borderRadius: r,
+        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
+        boxShadow: FeElevation.tinted(colors.first),
+      ),
+      child: child,
+    );
+    if (onTap == null) return card;
+    return PressableScale(child: Material(color: Colors.transparent, child: InkWell(borderRadius: r, onTap: onTap, child: card)));
+  }
+}
+
+/// A square-ish menu tile: coloured icon tile + label — the Operations grid.
+class MenuTile extends StatelessWidget {
+  const MenuTile({super.key, required this.label, required this.icon, required this.color, required this.onTap});
+
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => TechCard(
+        onTap: onTap,
+        radius: 16,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        child: Row(
+          children: [
+            IconBadge(icon: icon, style: FeBadgeStyle.of(color), size: 40, iconSize: 19),
+            const SizedBox(width: 10),
+            Expanded(child: AppText.titleSmall(label, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontSize: 14, height: 18 / 14))),
+          ],
+        ),
+      );
+}
+
+/// Two-up grid of equal-width children (Operations tiles, KPI tiles).
+class TwoUpGrid extends StatelessWidget {
+  const TwoUpGrid({super.key, required this.children, this.gap = 10, this.columns = 2});
+  final List<Widget> children;
+  final double gap;
+  final int columns;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, c) {
+          final w = (c.maxWidth - gap * (columns - 1)) / columns;
+          return Wrap(spacing: gap, runSpacing: gap, children: [for (final ch in children) SizedBox(width: w, child: ch)]);
+        },
+      );
 }

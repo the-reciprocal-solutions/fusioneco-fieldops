@@ -88,8 +88,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(api.asked.single, {'buildingId': 'b1', 'year': '2026', 'pmCategory': 'regulatory,oem'});
     expect(find.text('33.3%'), findsOneWidget);
-    expect(find.text('JANUARY 2026'), findsOneWidget);
-    expect(find.text('APRIL 2026'), findsOneWidget);
+    expect(find.text('January 2026'), findsOneWidget);
+    expect(find.text('April 2026'), findsOneWidget);
     expect(find.text('AHU-01'), findsNWidgets(2));
 
     await tester.tap(find.text('OEM only'));

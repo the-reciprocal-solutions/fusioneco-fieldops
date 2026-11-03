@@ -397,6 +397,9 @@ class FeOrderTypeColors extends ThemeExtension<FeOrderTypeColors> {
 class FeBadgeStyle {
   const FeBadgeStyle({required this.background, required this.foreground});
 
+  /// A soft tile of one colour: 12% tint behind the full-strength icon.
+  factory FeBadgeStyle.of(Color c) => FeBadgeStyle(background: c.withValues(alpha: 0.12), foreground: c);
+
   final Color background;
   final Color foreground;
 }

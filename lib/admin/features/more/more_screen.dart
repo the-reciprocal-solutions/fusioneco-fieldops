@@ -33,7 +33,7 @@ class MoreScreen extends ConsumerWidget {
     final language = ref.watch(localeControllerProvider);
 
     return Scaffold(
-      appBar: FeHeader(title: 'nav.more'.getString(context)),
+      appBar: FeHeader(title: 'nav.more'.getString(context), subtitle: 'nav.more_sub'.getString(context)),
       body: CatalogView(
         builder: (context, boot) => ModuleGroupList(
           // The catalog's "Account" modules (Notifications) join this
@@ -42,18 +42,17 @@ class MoreScreen extends ConsumerWidget {
           header: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: TechCard(
-                dark: true,
+              child: GradientCard(
                 child: Row(
                   children: [
-                    const CircleAvatar(radius: 22, backgroundColor: FeColors.primary, foregroundColor: Colors.white, child: Icon(LucideIcons.user, size: 20)),
+                    CircleAvatar(radius: 22, backgroundColor: Colors.white.withValues(alpha: 0.22), foregroundColor: Colors.white, child: const Icon(LucideIcons.user, size: 20)),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           AppText.titleSmall(user?.name ?? '', color: Colors.white, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          AppText.bodySmall([user?.role, user?.email].whereType<String>().join(' · '), color: Colors.white70, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          AppText.bodySmall([user?.role, user?.email].whereType<String>().join(' · '), color: Colors.white.withValues(alpha: 0.85), maxLines: 1, overflow: TextOverflow.ellipsis),
                         ],
                       ),
                     ),
@@ -79,7 +78,7 @@ class MoreScreen extends ConsumerWidget {
                   title: AppText.body('common.language'.getString(context)),
                   trailing: SegmentedButton<String>(
                     showSelectedIcon: false,
-                    segments: [for (final e in AppLocales.languageNames.entries) ButtonSegment(value: e.key, label: AppText.caption(e.value))],
+                    segments: [for (final e in AppLocales.languageNames.entries) ButtonSegment(value: e.key, label: AppText(e.value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)))],
                     selected: {language},
                     onSelectionChanged: (s) => ref.read(localeControllerProvider.notifier).choose(s.first),
                   ),

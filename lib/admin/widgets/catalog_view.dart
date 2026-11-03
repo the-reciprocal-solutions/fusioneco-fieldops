@@ -127,21 +127,24 @@ class RowGroup extends StatelessWidget {
 
 /// One tappable row: optional leading icon badge, title, optional subtitle.
 class NavRow extends StatelessWidget {
-  const NavRow({super.key, required this.title, this.subtitle, this.icon, this.badge, this.onTap});
+  const NavRow({super.key, required this.title, this.subtitle, this.icon, this.badge, this.color, this.onTap});
 
   final String title;
   final String? subtitle;
   final IconData? icon;
 
-  /// Badge colours; defaults to the blue accent.
+  /// Badge colours; defaults to [color]'s tile, else the blue accent.
   final FeBadgeStyle? badge;
+
+  /// The icon tile's colour (the redesign gives each row its own).
+  final Color? color;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        leading: icon == null ? null : IconBadge(icon: icon!, style: badge ?? context.accents.blue, size: 36, iconSize: 16),
-        title: AppText.body(title),
+        leading: icon == null ? null : IconBadge(icon: icon!, style: badge ?? (color == null ? FeBadgeStyle.of(FeColors.primary) : FeBadgeStyle.of(color!)), size: 38, iconSize: 18),
+        title: AppText.body(title, weight: FontWeight.w600),
         subtitle: subtitle == null ? null : AppText.bodySmall(subtitle!),
         trailing: onTap == null ? null : const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
         onTap: onTap,
@@ -150,11 +153,14 @@ class NavRow extends StatelessWidget {
 
 /// Modules grouped like the web sidebar, each opening its module screen.
 class ModuleGroupList extends StatelessWidget {
-  const ModuleGroupList({super.key, required this.modules, this.header = const [], this.footer = const []});
+  const ModuleGroupList({super.key, required this.modules, this.header = const [], this.footer = const [], this.grid = false});
 
   final List<MobileModule> modules;
   final List<Widget> header;
   final List<Widget> footer;
+
+  /// Two-up coloured tiles (Operations) instead of rows (More).
+  final bool grid;
 
   @override
   Widget build(BuildContext context) {
@@ -168,13 +174,28 @@ class ModuleGroupList extends StatelessWidget {
       children: [
         ...header,
         for (final g in groups.entries)
-          RowGroup(
-            label: g.key,
-            rows: [
-              for (final m in g.value)
-                NavRow(title: m.label, icon: moduleIcon(m.icon), onTap: () => context.push(modulePath(m.id))),
-            ],
-          ),
+          if (grid)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SectionLabel(g.key),
+                  TwoUpGrid(children: [
+                    for (var i = 0; i < g.value.length; i++)
+                      MenuTile(label: g.value[i].label, icon: moduleIcon(g.value[i].icon), color: FeColors.tile(i), onTap: () => context.push(modulePath(g.value[i].id))),
+                  ]),
+                ],
+              ),
+            )
+          else
+            RowGroup(
+              label: g.key,
+              rows: [
+                for (var i = 0; i < g.value.length; i++)
+                  NavRow(title: g.value[i].label, icon: moduleIcon(g.value[i].icon), color: FeColors.tile(i), onTap: () => context.push(modulePath(g.value[i].id))),
+              ],
+            ),
         ...footer,
       ],
     );
@@ -187,7 +208,7 @@ class SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-        child: AppText.labelMedium(label.toUpperCase()),
+        padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+        child: AppText.titleSmall(label),
       );
 }

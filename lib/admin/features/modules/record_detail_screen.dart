@@ -181,6 +181,8 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
             children: [
               if (row != null)
                 TechCard(
+                  radius: 16,
+                  accentLeft: row.priority != null ? context.chips.priority(row.priority).foreground : (row.status != null ? context.chips.status(row.status).foreground : null),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -193,7 +195,17 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
                       ),
                       if (row.status != null || row.priority != null) const SizedBox(height: 12),
                       AppText.title(row.title),
-                      if (row.subtitle != null) ...[const SizedBox(height: 4), AppText.bodyMedium(row.subtitle!)],
+                      if (row.subtitle != null) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Padding(padding: EdgeInsets.only(top: 3), child: Icon(LucideIcons.mapPin, size: 14, color: FeColors.ink2)),
+                            const SizedBox(width: 6),
+                            Expanded(child: AppText.bodyMedium(row.subtitle!)),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -216,7 +228,7 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
           RowGroup(
             label: 'module.details'.getString(context),
             dividerIndent: 16,
-            rows: [for (final (label, value) in facts) ListTile(dense: true, title: AppText.caption(label.getString(context)), subtitle: AppText.body(factText(context, value!)))],
+            rows: [for (final (label, value) in facts) _FactRow(label: label, value: factText(context, value!))],
           ),
         ],
         ...?widget.spec.extra?.call(context, rec),
@@ -249,4 +261,45 @@ class _ActionButton extends StatelessWidget {
       child: child,
     );
   }
+}
+
+/// Fact label key → icon, from words in the key.
+IconData factIcon(String key) {
+  final k = key.toLowerCase();
+  bool has(List<String> w) => w.any(k.contains);
+  if (has(['category', 'type', 'kind'])) return LucideIcons.tag;
+  if (has(['location', 'building', 'floor', 'site', 'zone', 'room', 'space'])) return LucideIcons.mapPin;
+  if (has(['asset', 'equipment', 'device'])) return LucideIcons.box;
+  if (has(['technician', 'assignee', 'assigned', 'owner', 'by', 'user', 'contact', 'host', 'visitor', 'name'])) return LucideIcons.user;
+  if (has(['date', 'due', 'time', 'created', 'updated', 'start', 'end', 'expir', 'valid'])) return LucideIcons.calendar;
+  if (has(['cost', 'amount', 'price', 'total', 'value', 'budget'])) return LucideIcons.wallet;
+  if (has(['priority', 'severity', 'risk'])) return LucideIcons.flag;
+  if (has(['status', 'state'])) return LucideIcons.circleDot;
+  if (has(['phone', 'mobile'])) return LucideIcons.phone;
+  if (has(['email', 'mail'])) return LucideIcons.mail;
+  if (has(['vendor', 'supplier', 'company'])) return LucideIcons.building2;
+  if (has(['note', 'description', 'remark', 'comment', 'reason'])) return LucideIcons.fileText;
+  return LucideIcons.info;
+}
+
+/// One fact: icon, label on the left, value on the right.
+class _FactRow extends StatelessWidget {
+  const _FactRow({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(factIcon(label), size: 16, color: FeColors.ink2),
+            const SizedBox(width: 10),
+            Expanded(flex: 2, child: AppText.bodySmall(label.getString(context))),
+            const SizedBox(width: 8),
+            Expanded(flex: 3, child: AppText.body(value, weight: FontWeight.w600)),
+          ],
+        ),
+      );
 }

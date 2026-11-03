@@ -31,6 +31,7 @@ class FeHeader extends StatelessWidget implements PreferredSizeWidget {
     this.leading,
     this.actions = const [],
     this.bottom,
+    this.subtitle,
   }) : _showBack = showBack, // ignore: prefer_initializing_formals — public `showBack` name must stay, field is deliberately private
        assert(
          title != null || titleWidget != null,
@@ -57,11 +58,16 @@ class FeHeader extends StatelessWidget implements PreferredSizeWidget {
   final List<Widget> actions;
   final PreferredSizeWidget? bottom;
 
-  static const _height = 53.0;
+  /// A second, smaller line under the title — the tab screens' large header
+  /// ("Operations" / "Manage facility operations").
+  final String? subtitle;
+
+  static const _height = 56.0;
+  static const _tallHeight = 76.0;
 
   @override
-  Size get preferredSize =>
-      Size.fromHeight(_height + (bottom?.preferredSize.height ?? 0));
+  Size get preferredSize => Size.fromHeight(
+      (subtitle == null ? _height : _tallHeight) + (bottom?.preferredSize.height ?? 0));
 
   @override
   Widget build(BuildContext context) {
@@ -70,15 +76,43 @@ class FeHeader extends StatelessWidget implements PreferredSizeWidget {
     final foreground = immersive ? Colors.white : FeColors.ink;
     final showBack = _showBack ?? Navigator.of(context).canPop();
 
+    final theme = Theme.of(context).textTheme;
+    final tall = subtitle != null && !immersive;
+    final Widget titleChild = titleWidget ??
+        (tall
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AppText(title!, maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.headlineSmall?.copyWith(fontWeight: FontWeight.w800, color: foreground)),
+                  const SizedBox(height: 2),
+                  AppText.bodySmall(subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis),
+                ],
+              )
+            : AppText(title!, overflow: TextOverflow.ellipsis));
+
     return AppBar(
-      toolbarHeight: _height,
-      backgroundColor: background,
+      toolbarHeight: tall ? _tallHeight : _height,
+      backgroundColor: immersive ? background : Colors.transparent,
+      // The soft blue → lavender wash of the redesign (2026-11-03).
+      flexibleSpace: immersive
+          ? null
+          : const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [FeColors.headerTop, FeColors.headerBottom],
+                ),
+              ),
+            ),
       foregroundColor: foreground,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
       automaticallyImplyLeading: false,
+      titleSpacing: showBack || leading != null ? 0 : 20,
       leading: leading ??
           (showBack
               ? IconButton(
@@ -87,14 +121,9 @@ class FeHeader extends StatelessWidget implements PreferredSizeWidget {
                   onPressed: () => context.pop(),
                 )
               : null),
-      title: titleWidget ?? AppText(title!, overflow: TextOverflow.ellipsis),
-      titleTextStyle: Theme.of(
-        context,
-      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700, color: foreground),
-      actions: actions,
-      shape: Border(
-        bottom: BorderSide(color: immersive ? Colors.transparent : FeColors.line),
-      ),
+      title: titleChild,
+      titleTextStyle: theme.titleLarge?.copyWith(fontWeight: FontWeight.w800, color: foreground),
+      actions: [...actions, if (actions.isNotEmpty) const SizedBox(width: 8)],
       systemOverlayStyle: immersive
           ? SystemUiOverlayStyle.light
           : SystemUiOverlayStyle.dark,

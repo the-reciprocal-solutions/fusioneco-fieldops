@@ -323,7 +323,7 @@ class _FloorPlanScreenState extends ConsumerState<FloorPlanScreen> {
                         Padding(
                           padding: const EdgeInsetsDirectional.only(end: 8),
                           child: ChoiceChip(
-                            label: AppText.caption(manyBuildings && f.building != null ? '${f.name} · ${f.building}' : f.name),
+                            label: AppText(manyBuildings && f.building != null ? '${f.name} · ${f.building}' : f.name, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                             selected: f.id == floor.id,
                             onSelected: (_) => setState(() => _picked = f.id),
                           ),

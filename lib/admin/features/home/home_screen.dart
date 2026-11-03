@@ -1,13 +1,17 @@
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../app/router.dart';
 import '../../core/network/api_exception.dart';
 import '../../state/catalog_controller.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
+import '../../widgets/catalog_view.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../modules/module_spec.dart';
@@ -29,12 +33,12 @@ List<(String, List<Kpi>)> dashboardSections(Json d) {
 
   return [
     ('home.site', [
-      Kpi('home.sites', fmtNum(at(d, 'total_sq_ft.curr_site_count'))),
-      Kpi('home.area_sqft', fmtNum(at(d, 'total_sq_ft.curr_total_sq_ft'))),
-      Kpi('home.floors', fmtNum(at(d, 'center.floors'))),
-      Kpi('home.occupancy', '${fmtNum(at(d, 'center.occupancy'))} / ${fmtNum(at(d, 'center.capacity'))}', tone: Tone.info),
-      Kpi('home.operational', fmtPct(at(d, 'operational.pct')), tone: Tone.good),
-      Kpi('home.avg_temp', at(d, 'avg_temp.value') == null ? '–' : '${fmtNum(at(d, 'avg_temp.value'), decimals: 1)} °C'),
+      Kpi('home.sites', fmtNum(at(d, 'total_sq_ft.curr_site_count')), icon: LucideIcons.building2),
+      Kpi('home.area_sqft', fmtNum(at(d, 'total_sq_ft.curr_total_sq_ft')), icon: LucideIcons.scan),
+      Kpi('home.floors', fmtNum(at(d, 'center.floors')), icon: LucideIcons.layers),
+      Kpi('home.occupancy', '${fmtNum(at(d, 'center.occupancy'))} / ${fmtNum(at(d, 'center.capacity'))}', tone: Tone.info, icon: LucideIcons.users),
+      Kpi('home.operational', fmtPct(at(d, 'operational.pct')), tone: Tone.good, icon: LucideIcons.settings),
+      Kpi('home.avg_temp', at(d, 'avg_temp.value') == null ? '–' : '${fmtNum(at(d, 'avg_temp.value'), decimals: 1)} °C', icon: LucideIcons.thermometer),
     ]),
     ('home.assets', [
       Kpi('home.assets_total', fmtNum(at(d, 'asset_health.total'))),
@@ -49,10 +53,10 @@ List<(String, List<Kpi>)> dashboardSections(Json d) {
       Kpi('home.risk_low', fmtNum(count('maintenance_risk.breakdown', 'low', 'level')), tone: Tone.good),
     ]),
     ('home.energy', [
-      Kpi('home.energy_month_kwh', fmtNum(month['total_units_kwh'])),
-      Kpi('home.peak_kw', fmtNum(month['peak_demand_kw'])),
-      Kpi('home.carbon_saved', at(d, 'carbon.value') == null ? '–' : '${fmtNum(at(d, 'carbon.value'))} ${s(at(d, 'carbon.unit')) ?? ''}'.trim(), tone: Tone.good),
-      Kpi('home.epi', fmtNum(at(d, 'epi.value'), decimals: 2)),
+      Kpi('home.energy_month_kwh', fmtNum(month['total_units_kwh']), icon: LucideIcons.zap),
+      Kpi('home.peak_kw', fmtNum(month['peak_demand_kw']), icon: LucideIcons.gauge),
+      Kpi('home.carbon_saved', at(d, 'carbon.value') == null ? '–' : '${fmtNum(at(d, 'carbon.value'))} ${s(at(d, 'carbon.unit')) ?? ''}'.trim(), tone: Tone.good, icon: LucideIcons.leaf),
+      Kpi('home.epi', fmtNum(at(d, 'epi.value'), decimals: 2), icon: LucideIcons.chartColumn),
     ]),
   ];
 }
@@ -64,7 +68,18 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final boot = ref.watch(loadedCatalogProvider);
     return Scaffold(
-      appBar: FeHeader(title: 'nav.home'.getString(context)),
+      appBar: FeHeader(
+        title: 'nav.home_title'.getString(context),
+        subtitle: _greeting(context),
+        actions: [
+          IconButton.filledTonal(
+            style: IconButton.styleFrom(backgroundColor: Colors.white.withValues(alpha: 0.8)),
+            icon: const Icon(LucideIcons.bell, size: 20),
+            tooltip: 'nav.alerts'.getString(context),
+            onPressed: () => context.go(Routes.alerts),
+          ),
+        ],
+      ),
       // Owner's decision (2026-10-30, P-003): the app always shows Home and its
       // tiles, whether or not the web's Dashboard switch is on for this user.
       body: boot == null ? const TechSpinner() : _Dashboard(env: boot.dashboardEnv),
@@ -96,20 +111,94 @@ class _Dashboard extends ConsumerWidget {
           ],
           data: (d) => [
             for (final (title, kpis) in dashboardSections(d)) ...[
-              Padding(
-                padding: const EdgeInsets.only(left: 4, bottom: 8, top: 8),
-                child: AppText.label(title.getString(context).toUpperCase(), color: FeColors.ink2),
-              ),
-              LayoutBuilder(
-                builder: (context, c) {
-                  final w = (c.maxWidth - 10) / 2;
-                  return Wrap(spacing: 10, runSpacing: 10, children: [for (final k in kpis) SizedBox(width: w, child: KpiTile(k))]);
-                },
-              ),
-              const SizedBox(height: 8),
+              Padding(padding: const EdgeInsets.only(top: 6), child: SectionLabel(title.getString(context))),
+              if (title == 'home.assets' && kpis.length == 4)
+                _AssetHealthCard(kpis: kpis)
+              else
+                TwoUpGrid(children: [for (var i = 0; i < kpis.length; i++) KpiTile(kpis[i], color: FeColors.tile(i))]),
+              const SizedBox(height: 14),
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+String _greeting(BuildContext context) {
+  final h = DateTime.now().hour;
+  final key = h < 12 ? 'dashboard.greeting_morning' : (h < 17 ? 'dashboard.greeting_afternoon' : 'dashboard.greeting_evening');
+  return key.getString(context);
+}
+
+/// "141 assets" as a ring split good / fair / poor, with its legend.
+class _AssetHealthCard extends StatelessWidget {
+  const _AssetHealthCard({required this.kpis});
+
+  /// total, good, fair, poor — in that order (see [dashboardSections]).
+  final List<Kpi> kpis;
+
+  static double _n(String v) {
+    final t = v.replaceAll(',', '').trim().toLowerCase();
+    final k = t.endsWith('k');
+    final n = double.tryParse(k ? t.substring(0, t.length - 1) : t) ?? 0;
+    return k ? n * 1000 : n;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = [(kpis[1], FeColors.success), (kpis[2], FeColors.medium), (kpis[3], FeColors.danger)];
+    final sum = parts.fold<double>(0, (a, p) => a + _n(p.$1.value));
+    return TechCard(
+      radius: 16,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 116,
+            height: 116,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                PieChart(
+                  PieChartData(
+                    startDegreeOffset: -90,
+                    sectionsSpace: 2,
+                    centerSpaceRadius: 40,
+                    sections: sum == 0
+                        ? [PieChartSectionData(value: 1, color: FeColors.line, radius: 14, showTitle: false)]
+                        : [for (final (k, c) in parts) PieChartSectionData(value: _n(k.value), color: c, radius: 14, showTitle: false)],
+                  ),
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AppText.titleMedium(kpis[0].value, maxLines: 1),
+                    AppText.caption(kpiLabel(context, kpis[0].label), maxLines: 1),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              children: [
+                for (final (k, c) in parts)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      children: [
+                        Container(width: 10, height: 10, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+                        const SizedBox(width: 8),
+                        SizedBox(width: 40, child: AppText.titleSmall(k.value, maxLines: 1)),
+                        Expanded(child: AppText.bodySmall(kpiLabel(context, k.label), maxLines: 2, overflow: TextOverflow.ellipsis)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

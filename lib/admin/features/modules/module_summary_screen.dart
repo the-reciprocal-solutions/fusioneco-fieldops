@@ -247,16 +247,10 @@ class _KpiGrid extends StatelessWidget {
     }
     final k = kpis;
     if (k == null) return const SizedBox(height: 80, child: TechSpinner(size: 24));
-    return LayoutBuilder(
-      builder: (context, c) {
-        final w = (c.maxWidth - 10) / 2;
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [for (final kpi in k) SizedBox(width: w, child: KpiTile(kpi))],
-        );
-      },
-    );
+    // Four tiles sit in one row (the redesign's Work Orders strip); other
+    // counts keep the roomier two-up grid.
+    if (k.length == 4) return TwoUpGrid(columns: 4, gap: 8, children: [for (var i = 0; i < k.length; i++) KpiTile(k[i], compact: true, color: FeColors.tile(i))]);
+    return TwoUpGrid(children: [for (var i = 0; i < k.length; i++) KpiTile(k[i], color: FeColors.tile(i))]);
   }
 }
 
@@ -275,22 +269,78 @@ String kpiLabel(BuildContext context, String label) {
   return t.endsWith(' not found') ? label : t;
 }
 
+/// The colour a tile is painted in: its tone, or brand blue for a plain count.
+Color tileColor(Tone t) => t == Tone.neutral ? FeColors.primary : toneColor(t);
+
+/// An icon for a tile without one, from words in its label key.
+IconData kpiIcon(Kpi k) {
+  if (k.icon != null) return k.icon!;
+  final l = k.label.toLowerCase();
+  bool has(List<String> w) => w.any(l.contains);
+  if (has(['overdue', 'critical', 'breach', 'risk', 'fail', 'expired', 'reject'])) return LucideIcons.triangleAlert;
+  if (has(['progress', 'running', 'active'])) return LucideIcons.loader;
+  if (has(['on_time', 'ontime', 'complet', 'done', 'closed', 'resolved', 'approved', 'verified', 'good', 'ok'])) return LucideIcons.circleCheck;
+  if (has(['pending', 'wait', 'hold', 'scheduled', 'due', 'upcoming'])) return LucideIcons.clock;
+  if (has(['open', 'new'])) return LucideIcons.clipboardList;
+  if (has(['cost', 'spend', 'value', 'amount', 'budget', 'saving'])) return LucideIcons.wallet;
+  if (has(['energy', 'kwh', 'power', 'kw'])) return LucideIcons.zap;
+  if (has(['temp'])) return LucideIcons.thermometer;
+  if (has(['visitor', 'people', 'staff', 'user', 'occup'])) return LucideIcons.users;
+  if (has(['asset', 'device', 'equipment'])) return LucideIcons.box;
+  if (has(['total', 'count', 'all'])) return LucideIcons.layers;
+  return switch (k.tone) {
+    Tone.good => LucideIcons.circleCheck,
+    Tone.warn => LucideIcons.clock,
+    Tone.bad => LucideIcons.triangleAlert,
+    Tone.info => LucideIcons.activity,
+    Tone.neutral => LucideIcons.chartColumn,
+  };
+}
+
 class KpiTile extends StatelessWidget {
-  const KpiTile(this.kpi, {super.key});
+  const KpiTile(this.kpi, {super.key, this.compact = false, this.color});
   final Kpi kpi;
 
+  /// The icon colour of a plain (neutral) tile — grids cycle a palette so
+  /// neighbouring tiles differ, as in the redesign. Toned tiles keep theirs.
+  final Color? color;
+
+  /// Four-across: icon above the number (Work Orders' summary row).
+  final bool compact;
+
   @override
-  Widget build(BuildContext context) => TechCard(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+  Widget build(BuildContext context) {
+    final c = kpi.tone == Tone.neutral ? (color ?? FeColors.primary) : toneColor(kpi.tone);
+    final badge = IconBadge(icon: kpiIcon(kpi), style: FeBadgeStyle.of(c), size: compact ? 30 : 40, iconSize: compact ? 15 : 19);
+    final value = AppText.titleMedium(kpi.value, color: kpi.tone == Tone.neutral ? FeColors.ink : c, maxLines: 1);
+    final label = AppText.caption(kpiLabel(context, kpi.label), maxLines: 2, overflow: TextOverflow.ellipsis);
+    if (compact) {
+      return TechCard(
+        radius: 16,
+        padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            AppText.titleMedium(kpi.value, color: toneColor(kpi.tone), maxLines: 1),
-            const SizedBox(height: 2),
-            AppText.caption(kpiLabel(context, kpi.label), maxLines: 2, overflow: TextOverflow.ellipsis),
-          ],
+          children: [badge, const SizedBox(height: 6), FittedBox(fit: BoxFit.scaleDown, alignment: AlignmentDirectional.centerStart, child: value), label],
         ),
       );
+    }
+    return TechCard(
+      radius: 16,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      child: Row(
+        children: [
+          badge,
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [FittedBox(fit: BoxFit.scaleDown, alignment: AlignmentDirectional.centerStart, child: value), label],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class RecordCard extends StatelessWidget {
@@ -301,8 +351,14 @@ class RecordCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final r = row;
+    final accent = r.priority != null
+        ? context.chips.priority(r.priority).foreground
+        : (r.status != null ? context.chips.status(r.status).foreground : null);
     return TechCard(
       onTap: onTap,
+      radius: 16,
+      accentLeft: accent,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -312,21 +368,25 @@ class RecordCard extends StatelessWidget {
               if (r.status != null && r.priority != null) const SizedBox(width: 6),
               if (r.priority != null) TechChip(label: chipLabel(r.priority!), style: context.chips.priority(r.priority)),
               const Spacer(),
-              if (r.ref != null) AppText.caption(r.ref!),
+              if (r.ref != null) AppText.caption(r.ref!, weight: FontWeight.w700),
             ],
           ),
           if (r.status != null || r.priority != null || r.ref != null) const SizedBox(height: 8),
           AppText.titleSmall(r.title, maxLines: 2, overflow: TextOverflow.ellipsis),
           if (r.subtitle != null || r.date != null) ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             Row(
               children: [
-                if (r.subtitle != null)
-                  Expanded(child: AppText.bodySmall(r.subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis))
-                else
+                if (r.subtitle != null) ...[
+                  const Icon(LucideIcons.mapPin, size: 13, color: FeColors.ink2),
+                  const SizedBox(width: 4),
+                  Expanded(child: AppText.bodySmall(r.subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                ] else
                   const Spacer(),
                 if (r.date != null) ...[
                   const SizedBox(width: 8),
+                  const Icon(LucideIcons.calendar, size: 13, color: FeColors.ink2),
+                  const SizedBox(width: 4),
                   AppText.caption(fmtDate(r.date)!),
                 ],
               ],

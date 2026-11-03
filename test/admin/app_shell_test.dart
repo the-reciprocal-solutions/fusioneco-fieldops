@@ -286,7 +286,7 @@ void main() {
     await _pump(tester, savedUser: _user);
     await tester.tap(_tab('Efficiency'));
     await tester.pumpAndSettle();
-    expect(find.text('TODAY'), findsOneWidget);
+    expect(find.text('Today'), findsOneWidget);
     expect(find.text('Building health'), findsOneWidget);
     expect(find.text('Comfort & air'), findsOneWidget);
     expect(find.text('Savings'), findsNothing);

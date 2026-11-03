@@ -127,7 +127,8 @@ List<Widget> snagSections(BuildContext context, Json r) {
 String _eventLabel(BuildContext context, String type) {
   final key = 'snag.ev_${type.replaceAll('-', '_')}';
   final v = key.getString(context);
-  return v == key ? chipLabel(type) : v;
+  // A missing key comes back as "<key> not found" (flutter_localization), not the key.
+  return v == key || v.startsWith('$key ') ? chipLabel(type) : v;
 }
 
 class _Photo extends StatelessWidget {

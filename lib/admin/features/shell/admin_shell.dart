@@ -155,10 +155,11 @@ class _NavButton extends StatelessWidget {
               curve: context.motion.spring,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
               decoration: BoxDecoration(
-                color: active ? const Color(0xFFE0F2FE) : Colors.transparent,
+                gradient: active ? const LinearGradient(colors: [FeColors.primaryLight, FeColors.primary]) : null,
                 borderRadius: BorderRadius.circular(16),
+                boxShadow: active ? FeElevation.tinted(FeColors.primary) : null,
               ),
-              child: Icon(item.icon, size: 20, color: active ? const Color(0xFF0284C7) : FeColors.ink2),
+              child: Icon(item.icon, size: 20, color: active ? Colors.white : FeColors.ink2),
             ),
             const SizedBox(height: 4),
             // Scale the label down rather than wrap or ellipsize: "Operations"
@@ -168,7 +169,7 @@ class _NavButton extends StatelessWidget {
               child: AnimatedDefaultTextStyle(
                 duration: context.motion.press,
                 style: Theme.of(context).textTheme.labelSmall!.copyWith(
-                      color: active ? const Color(0xFF0284C7) : FeColors.ink2,
+                      color: active ? FeColors.primary : FeColors.ink2,
                       fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                       letterSpacing: 0.25,
                     ),

@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,187 +17,40 @@ import '../module/module_screen.dart';
 import '../modules/module_spec.dart';
 import '../modules/module_summary_screen.dart';
 
-/// Plant Room on the phone (FE-mobile.md Phase 2): the saved Plant Studio
-/// rooms, then one room as a 2D card grid of its machines with live values.
-/// The 3D studio, the builder and AI generation stay on the web.
-///   GET /api/fm/plant-layouts?scope=all          rooms (mine + shared to my org)
-///   GET /api/fm/plant-layouts/:id                one room: instances + connections
-///   GET /api/fm/plant-layouts/:id/live           every machine's verdict (2026-11-02)
-///   GET /api/fm/plant-layouts/live?assetIds=…    older servers: mapped points per FM asset
-/// `/:id/live` works each machine out on the server with Plant Studio's own
-/// rules (server services/plantRoomLive.ts, shared/plantStudio): level ok /
-/// warn / critical / nodata, headline and readings — for asset-bound AND
-/// device-bound machines, so the phone shows what the web studio shows. One
-/// poll at a time with a long timeout (a cold source can take a while).
-
-const _pollEvery = Duration(seconds: 30);
-const _liveTimeout = Duration(seconds: 60);
+/// Plant Room on the phone: a summary only (owner, 2026-11-03 — "recommend
+/// the web for the plant room; simple summary data is enough"). The saved
+/// Plant Studio rooms, then one room's machines counted and grouped by type,
+/// with the "use a desktop" note. Live values, alarm colours, the 3D studio,
+/// the builder and AI generation are on the web.
+///   GET /api/fm/plant-layouts?scope=all   rooms (mine + shared to my org)
+///   GET /api/fm/plant-layouts/:id         one room: its placed machines
 const _base = '/api/fm/plant-layouts';
 
-/// The web studio's room URL (app/facility-utilities/plant-room/[layoutId]).
-String plantRoomWebPath(String id) => '/facility-utilities/plant-room/$id';
-
-// ── pure helpers (unit-tested) ─────────────────────────────────────────────
-
-/// Port of the web's `toAlarmState` (fusion-eco-client
-/// components/hvac/ahu-visualizer/model/ahuParameters.ts). CHANGE BOTH.
-String toAlarmState(Object? v) {
-  if (v == null || v == '') return 'unknown';
-  if (v is bool) return v ? 'alarm' : 'normal';
-  final s = '$v'.trim().toUpperCase();
-  if (RegExp(r'\bTRIP(PED)?\b').hasMatch(s)) return 'trip';
-  if (RegExp(r'\bNO\s+(ALARM|FAULT|FIRE)\b').hasMatch(s)) return 'normal';
-  if (RegExp(r'\bUNHEALTHY\b|\bABNORMAL\b|\bNOT\s+NORMAL\b|\bALARM\b|\bFAULT(Y|ED)?\b|\bFIRE\b|\bSMOKE\b').hasMatch(s)) return 'alarm';
-  if (RegExp(r'\bNORMAL\b|\bOK\b|\bHEALTHY\b|\bOFF\b|\bFALSE\b|^0$').hasMatch(s)) return 'normal';
-  if (RegExp(r'\bON\b|\bTRUE\b|^1$').hasMatch(s)) return 'alarm';
-  return 'unknown';
-}
-
-/// Standard parameters that report an alarm. Only these are read with
-/// [toAlarmState]: on a "Running status" point, `ON` means running, not alarm.
-final _alarmParam = RegExp(r'alarm|fault|trip|fire|smoke|leak', caseSensitive: false);
-
-/// One live point of a placed machine.
-class PlantPoint {
-  const PlantPoint({required this.name, required this.value, this.unit, this.time});
-  final String name;
-  final Object? value;
-  final String? unit;
-  final String? time;
-
-  bool get isAlarm => _alarmParam.hasMatch(name) && const {'alarm', 'trip'}.contains(toAlarmState(value));
-
-  String get display {
-    final v = value is num ? fmtNum(value as num, decimals: (value as num).abs() < 10 ? 2 : 1) : (value is bool ? ((value as bool) ? 'On' : 'Off') : '$value');
-    return unit == null || unit!.isEmpty ? v : '$v $unit';
-  }
-}
-
-/// Where a machine's numbers come from on the phone.
-/// `live | no-data | unmapped | unbound | not-found` come from the server.
-/// `device`: bound straight to a BMS device (read by `/:id/live`; an older
-/// server can't, so the phone says so). `none`: placed without an asset or
-/// device (the web animates a demo).
-enum PlantFeed { live, noData, unmapped, unbound, notFound, device, none, waiting }
-
-PlantFeed _feedOf(String? s) => switch (s) {
-      'live' => PlantFeed.live,
-      'no-data' => PlantFeed.noData,
-      'unmapped' => PlantFeed.unmapped,
-      'unbound' => PlantFeed.unbound,
-      'not-found' => PlantFeed.notFound,
-      _ => PlantFeed.noData,
-    };
-
-/// One machine placed in a room.
+/// One machine placed in a room (only what the summary counts).
 class PlantMachine {
-  const PlantMachine({
-    required this.id,
-    required this.type,
-    required this.label,
-    this.assetId,
-    this.assetName,
-    this.deviceName,
-    this.feed = PlantFeed.waiting,
-    this.points = const [],
-    this.verdict,
-    this.headline,
-  });
-
+  const PlantMachine({required this.id, required this.type, required this.label, this.assetId, this.deviceName});
   final String id;
   final String type;
   final String label;
   final String? assetId;
-  final String? assetName;
   final String? deviceName;
-  final PlantFeed feed;
-  final List<PlantPoint> points;
-
-  /// The server's verdict (`/:id/live`): critical · warn · ok · nodata.
-  final String? verdict;
-
-  /// The type's one headline number, e.g. "CHW Supply 6.8 °C".
-  final PlantPoint? headline;
-
-  bool get alarm => level == 'critical';
-
-  /// The server's verdict when there is one. Otherwise (an older server):
-  /// critical (an alarm point) · ok (live) · nodata — no `warn`, which needs
-  /// each type's thresholds.
-  String get level => verdict ?? (points.any((p) => p.isAlarm) ? 'critical' : (feed == PlantFeed.live ? 'ok' : 'nodata'));
-
-  /// Joins the machine with its verdict from `/:id/live`.
-  PlantMachine withVerdict(Map? machines) {
-    final v = machines?[id];
-    if (v is! Map) return this;
-    final h = v['headline'];
-    final source = s(v['source']);
-    return PlantMachine(
-      id: id,
-      type: type,
-      label: label,
-      assetId: assetId,
-      assetName: assetName,
-      deviceName: deviceName,
-      feed: source != null ? PlantFeed.live : (assetId != null || deviceName != null ? PlantFeed.noData : PlantFeed.none),
-      verdict: s(v['level']) ?? 'nodata',
-      headline: h is Map ? PlantPoint(name: s(h['label']) ?? '', value: h['value'], unit: s(h['unit'])) : null,
-      points: [
-        for (final r in v['readings'] is List ? v['readings'] as List : const [])
-          if (r is Map) PlantPoint(name: s(r['label']) ?? '${r['key']}', value: r['value'], unit: s(r['unit'])),
-      ],
-    );
-  }
-
-  /// Joins the machine with its asset's live feed from `/live`.
-  PlantMachine withLive(Map? live) {
-    if (assetId == null) return this;
-    final a = live?[assetId];
-    if (a is! Map) return this;
-    final pts = a['points'] is Map ? (a['points'] as Map) : const {};
-    return PlantMachine(
-      id: id,
-      type: type,
-      label: label,
-      assetId: assetId,
-      assetName: assetName,
-      deviceName: deviceName,
-      feed: _feedOf(s(a['status'])),
-      points: [
-        for (final e in pts.entries)
-          if (e.value is Map) PlantPoint(name: s((e.value as Map)['name']) ?? '${e.key}', value: (e.value as Map)['value'], unit: s((e.value as Map)['unit']), time: s((e.value as Map)['time'])),
-      ],
-    );
-  }
 
   static PlantMachine fromJson(Map j) {
     final binding = j['binding'] is Map ? j['binding'] as Map : null;
-    final asset = s(j['assetId']);
-    return PlantMachine(
-      id: '${j['id']}',
-      type: s(j['type']) ?? '',
-      label: s(j['label']) ?? '–',
-      assetId: asset,
-      assetName: s(j['assetName']),
-      deviceName: s(binding?['deviceName']),
-      feed: asset != null ? PlantFeed.waiting : (binding != null ? PlantFeed.device : PlantFeed.none),
-    );
+    return PlantMachine(id: '${j['id']}', type: s(j['type']) ?? '', label: s(j['label']) ?? '–', assetId: s(j['assetId']), deviceName: s(binding?['deviceName']));
   }
 }
 
-/// Machines of a room, alarms first, then warnings, then live, then the rest (stable).
-List<PlantMachine> sortMachines(List<PlantMachine> m) {
-  const rank = {'critical': 0, 'warn': 1, 'ok': 2, 'nodata': 3};
-  final indexed = [for (var i = 0; i < m.length; i++) (i, m[i])];
-  indexed.sort((a, b) {
-    final r = (rank[a.$2.level] ?? 3).compareTo(rank[b.$2.level] ?? 3);
-    return r != 0 ? r : a.$1.compareTo(b.$1);
-  });
-  return [for (final (_, x) in indexed) x];
+/// Machine counts per type, biggest first (then by type, stable).
+List<(String, int)> countByType(List<PlantMachine> m) {
+  final c = <String, int>{};
+  for (final x in m) {
+    c[x.type] = (c[x.type] ?? 0) + 1;
+  }
+  final out = [for (final e in c.entries) (e.key, e.value)];
+  out.sort((a, b) => b.$2 != a.$2 ? b.$2.compareTo(a.$2) : a.$1.compareTo(b.$1));
+  return out;
 }
-
-/// The distinct FM asset ids to ask `/live` for (server cap: 60).
-List<String> assetIdsOf(List<PlantMachine> m) => {for (final x in m) if (x.assetId != null) x.assetId!}.take(60).toList();
 
 String _typeLabel(BuildContext context, String type) {
   final key = 'plant.t_${type.toLowerCase()}';
@@ -291,7 +142,7 @@ class _PlantRoomListScreenState extends ConsumerState<PlantRoomListScreen> {
   }
 }
 
-// ── one room ────────────────────────────────────────────────────────────────
+// ── one room (summary) ──────────────────────────────────────────────────────
 
 class PlantRoomScreen extends ConsumerStatefulWidget {
   const PlantRoomScreen({super.key, required this.layoutId, required this.name});
@@ -304,28 +155,12 @@ class PlantRoomScreen extends ConsumerStatefulWidget {
 
 class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
   List<PlantMachine>? _machines;
-  Map? _live;
-
-  /// `/:id/live` machines; null until it answers (or on an older server).
-  Map? _verdicts;
-  bool _oldServer = false;
   Object? _error;
-  DateTime? _liveAt;
-  bool _polling = false;
-  Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     _load();
-    // Only while this screen is open; dispose stops it.
-    _timer = Timer.periodic(_pollEvery, (_) => _poll());
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
   }
 
   Future<void> _load() async {
@@ -333,51 +168,16 @@ class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
       final res = await ref.read(apiClientProvider).get('$_base/${widget.layoutId}');
       final inst = dataOf(res)['instances'];
       final list = [for (final i in (inst is List ? inst : const [])) if (i is Map) PlantMachine.fromJson(i)];
-      if (!mounted) return;
-      setState(() => (_machines = list, _error = null));
-      await _poll();
+      if (mounted) setState(() => (_machines = list, _error = null));
     } catch (e) {
       if (mounted) setState(() => _error = e);
-    }
-  }
-
-  /// One live call at a time: it can take longer than the poll interval.
-  Future<void> _poll() async {
-    final machines = _machines ?? const <PlantMachine>[];
-    if (_polling || machines.isEmpty) return;
-    _polling = true;
-    final api = ref.read(apiClientProvider);
-    try {
-      if (!_oldServer) {
-        try {
-          final res = await api.get('$_base/${widget.layoutId}/live', timeout: _liveTimeout);
-          final m = dataOf(res)['machines'];
-          if (mounted) setState(() => (_verdicts = m is Map ? m : const {}, _liveAt = DateTime.now(), _error = null));
-          return;
-        } on HttpFailure catch (e) {
-          // The room was just read, so a 404 here means a server without `/:id/live`.
-          if (e.status != 404) rethrow;
-          _oldServer = true;
-        }
-      }
-      final ids = assetIdsOf(machines);
-      if (ids.isEmpty) return;
-      final res = await api.get('$_base/live', query: {'assetIds': ids.join(',')}, timeout: _liveTimeout);
-      final assets = dataOf(res)['assets'];
-      if (mounted) setState(() => (_live = assets is Map ? assets : const {}, _liveAt = DateTime.now(), _error = null));
-    } catch (e) {
-      // A failed poll keeps the last good values (as the web does).
-      if (mounted) setState(() => _error = e);
-    } finally {
-      _polling = false;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     if (!_stillVisible(ref)) return const UnavailableScreen();
-    final raw = _machines;
-    final machines = raw == null ? null : sortMachines([for (final m in raw) _verdicts != null ? m.withVerdict(_verdicts) : m.withLive(_live)]);
+    final m = _machines;
     return Scaffold(
       appBar: FeHeader(title: widget.name),
       body: RefreshIndicator(
@@ -386,32 +186,39 @@ class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
           children: [
-            if (machines == null && _error == null) const Padding(padding: EdgeInsets.all(32), child: TechSpinner()),
-            if (machines == null && _error != null)
+            if (m == null && _error == null) const Padding(padding: EdgeInsets.all(32), child: TechSpinner()),
+            if (m == null && _error != null)
               TechEmptyState(icon: LucideIcons.circleAlert, title: 'module.load_error'.getString(context), subtitle: _error is ApiFailure ? (_error as ApiFailure).message : null),
-            if (machines != null && machines.isEmpty) TechEmptyState(icon: LucideIcons.factory, title: 'plant.no_machines'.getString(context)),
-            if (machines != null && machines.isNotEmpty) ...[
-              _Kpis(machines: machines),
+            if (m != null && m.isEmpty) TechEmptyState(icon: LucideIcons.factory, title: 'plant.no_machines'.getString(context)),
+            if (m != null && m.isNotEmpty) ...[
+              _Kpis(machines: m),
               Padding(
-                padding: const EdgeInsets.only(left: 4, top: 8, bottom: 8),
-                child: AppText.caption(_status(context, machines), color: _error == null ? FeColors.ink2 : FeColors.warning),
+                padding: const EdgeInsets.only(left: 4, top: 20, bottom: 10),
+                child: AppText.caption('plant.by_type'.getString(context).toUpperCase(), weight: FontWeight.w700),
               ),
-              _Grid(machines: machines),
+              TechCard(
+                child: Column(
+                  children: [
+                    for (final (type, n) in countByType(m))
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Row(
+                          children: [
+                            Expanded(child: AppText.body(_typeLabel(context, type))),
+                            AppText.body(fmtNum(n), weight: FontWeight.w700),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 16),
-              const DesktopNote(textKey: 'desktop.plant_3d'),
             ],
+            if (m != null) const DesktopNote(textKey: 'desktop.plant_3d'),
           ],
         ),
       ),
     );
-  }
-
-  String _status(BuildContext context, List<PlantMachine> m) {
-    if (_oldServer && assetIdsOf(m).isEmpty) return 'plant.no_assets'.getString(context);
-    final at = _liveAt;
-    if (at == null) return (_error == null ? 'plant.loading_live' : 'plant.live_failed').getString(context);
-    final hhmm = '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
-    return context.formatString((_error == null ? 'util.updated' : 'util.stale').getString(context), [hhmm]);
   }
 }
 
@@ -421,13 +228,13 @@ class _Kpis extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final alarms = machines.where((m) => m.level == 'critical').length;
-    final warnings = machines.where((m) => m.level == 'warn').length;
+    final asset = machines.where((x) => x.assetId != null).length;
+    final device = machines.where((x) => x.assetId == null && x.deviceName != null).length;
     final kpis = [
       Kpi('plant.machines', fmtNum(machines.length)),
-      Kpi('plant.alarms', fmtNum(alarms), tone: alarms > 0 ? Tone.bad : Tone.good),
-      Kpi('plant.warnings', fmtNum(warnings), tone: warnings > 0 ? Tone.warn : Tone.good),
-      Kpi('plant.live', fmtNum(machines.where((m) => m.feed == PlantFeed.live).length), tone: Tone.info),
+      Kpi('plant.types', fmtNum(countByType(machines).length), tone: Tone.info),
+      Kpi('plant.linked', fmtNum(asset + device), tone: Tone.good),
+      Kpi('plant.not_linked', fmtNum(machines.length - asset - device), tone: machines.length - asset - device > 0 ? Tone.warn : Tone.good),
     ];
     return LayoutBuilder(
       builder: (context, c) {
@@ -437,127 +244,3 @@ class _Kpis extends StatelessWidget {
     );
   }
 }
-
-class _Grid extends StatelessWidget {
-  const _Grid({required this.machines});
-  final List<PlantMachine> machines;
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, c) {
-          final w = (c.maxWidth - 10) / 2;
-          return Wrap(spacing: 10, runSpacing: 10, children: [for (final m in machines) SizedBox(width: w, child: _MachineCard(m))]);
-        },
-      );
-}
-
-class _MachineCard extends StatelessWidget {
-  const _MachineCard(this.m);
-  final PlantMachine m;
-
-  static const _maxPoints = 3;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = levelColor(m.level);
-    final points = [if (m.headline != null) m.headline!, ...m.points.where((p) => p.isAlarm), ...m.points.where((p) => !p.isAlarm)];
-    return TechCard(
-      padding: const EdgeInsets.all(12),
-      onTap: () => _showMachine(context, m),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-              const SizedBox(width: 6),
-              Expanded(child: AppText.caption(_typeLabel(context, m.type), maxLines: 1, overflow: TextOverflow.ellipsis)),
-            ],
-          ),
-          const SizedBox(height: 6),
-          AppText.titleSmall(m.label, maxLines: 2, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 6),
-          if (points.isEmpty)
-            AppText.caption(_feedText(context, m.feed), color: color, maxLines: 2)
-          else
-            for (final p in points.take(_maxPoints))
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Row(
-                  children: [
-                    Expanded(child: AppText.caption(p.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
-                    const SizedBox(width: 6),
-                    Flexible(child: AppText.bodySmall(p.display, weight: FontWeight.w700, color: p.isAlarm ? FeColors.danger : null, maxLines: 1, overflow: TextOverflow.ellipsis)),
-                  ],
-                ),
-              ),
-        ],
-      ),
-    );
-  }
-}
-
-/// The web's statusColor: critical red, warn amber, ok green, no data grey.
-Color levelColor(String level) => switch (level) {
-      'critical' => FeColors.danger,
-      'warn' => FeColors.warning,
-      'ok' => FeColors.success,
-      _ => FeColors.ink2,
-    };
-
-String _feedText(BuildContext context, PlantFeed f) => switch (f) {
-      PlantFeed.live => 'plant.feed_live',
-      PlantFeed.noData => 'plant.feed_no_data',
-      PlantFeed.unmapped => 'plant.feed_unmapped',
-      PlantFeed.unbound => 'plant.feed_unbound',
-      PlantFeed.notFound => 'plant.feed_not_found',
-      PlantFeed.device => 'plant.feed_device',
-      PlantFeed.none => 'plant.feed_none',
-      PlantFeed.waiting => 'plant.loading_live',
-    }
-        .getString(context);
-
-void _showMachine(BuildContext context, PlantMachine m) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.6,
-        maxChildSize: 0.92,
-        builder: (context, scroll) => ListView(
-          controller: scroll,
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-          children: [
-            AppText.caption(_typeLabel(context, m.type)),
-            AppText.title(m.label),
-            if (m.assetName != null || m.deviceName != null) AppText.bodySmall(m.assetName ?? m.deviceName!),
-            const SizedBox(height: 4),
-            AppText.caption(
-              m.verdict == null ? _feedText(context, m.feed) : 'plant.level_${m.level}'.getString(context),
-              color: levelColor(m.level),
-            ),
-            const SizedBox(height: 16),
-            for (final p in [if (m.headline != null) m.headline!, ...m.points])
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          AppText.body(p.name),
-                          if (p.time != null) AppText.caption(p.time!),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    AppText.body(p.display, weight: FontWeight.w700, color: p.isAlarm ? FeColors.danger : null),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-    );

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../catalog/catalog_guard.dart';
+import '../../catalog/module_icons.dart';
 import '../../core/network/api_exception.dart';
 import '../../domain/mobile_catalog.dart';
 import '../../state/providers.dart';
@@ -221,7 +222,7 @@ class _ModuleSummaryScreenState extends ConsumerState<ModuleSummaryScreen> {
     }
     return [
       for (final row in _rows)
-        Padding(padding: const EdgeInsets.only(bottom: 10), child: RecordCard(row: list.row(row), onTap: () => _open(row))),
+        Padding(padding: const EdgeInsets.only(bottom: 10), child: RecordCard(row: list.row(row), icon: moduleIcon(widget.module.icon), onTap: () => _open(row))),
       if (_loadingList) const Padding(padding: EdgeInsets.all(16), child: TechSpinner(size: 24)),
     ];
   }
@@ -315,12 +316,14 @@ class KpiTile extends StatelessWidget {
     final value = AppText.titleMedium(kpi.value, color: kpi.tone == Tone.neutral ? FeColors.ink : c, maxLines: 1);
     final label = AppText.caption(kpiLabel(context, kpi.label), maxLines: 2, overflow: TextOverflow.ellipsis);
     if (compact) {
+      // One line, scaled to fit, so all four tiles keep the same height.
+      final oneLine = FittedBox(fit: BoxFit.scaleDown, alignment: AlignmentDirectional.centerStart, child: AppText.caption(kpiLabel(context, kpi.label), maxLines: 1));
       return TechCard(
         radius: 16,
         padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [badge, const SizedBox(height: 6), FittedBox(fit: BoxFit.scaleDown, alignment: AlignmentDirectional.centerStart, child: value), label],
+          children: [badge, const SizedBox(height: 6), FittedBox(fit: BoxFit.scaleDown, alignment: AlignmentDirectional.centerStart, child: value), oneLine],
         ),
       );
     }
@@ -344,9 +347,12 @@ class KpiTile extends StatelessWidget {
 }
 
 class RecordCard extends StatelessWidget {
-  const RecordCard({super.key, required this.row, required this.onTap});
+  const RecordCard({super.key, required this.row, required this.onTap, this.icon});
   final RecordRow row;
   final VoidCallback onTap;
+
+  /// The module's icon on a tile at the start; a finished record shows a tick.
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
@@ -354,21 +360,24 @@ class RecordCard extends StatelessWidget {
     final accent = r.priority != null
         ? context.chips.priority(r.priority).foreground
         : (r.status != null ? context.chips.status(r.status).foreground : null);
-    return TechCard(
-      onTap: onTap,
-      radius: 16,
-      accentLeft: accent,
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      child: Column(
+    final done = {'completed', 'closed', 'done', 'resolved', 'verified'}.contains(r.status?.toLowerCase());
+    final body = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (r.status != null) TechChip(label: chipLabel(r.status!), style: context.chips.status(r.status)),
-              if (r.status != null && r.priority != null) const SizedBox(width: 6),
-              if (r.priority != null) TechChip(label: chipLabel(r.priority!), style: context.chips.priority(r.priority)),
-              const Spacer(),
-              if (r.ref != null) AppText.caption(r.ref!, weight: FontWeight.w700),
+              Expanded(
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    if (r.status != null) TechChip(label: chipLabel(r.status!), style: context.chips.status(r.status)),
+                    if (r.priority != null) TechChip(label: chipLabel(r.priority!), style: context.chips.priority(r.priority)),
+                  ],
+                ),
+              ),
+              if (r.ref != null) ...[const SizedBox(width: 6), AppText.caption(r.ref!, weight: FontWeight.w700)],
             ],
           ),
           if (r.status != null || r.priority != null || r.ref != null) const SizedBox(height: 8),
@@ -393,7 +402,22 @@ class RecordCard extends StatelessWidget {
             ),
           ],
         ],
-      ),
+      );
+    return TechCard(
+      onTap: onTap,
+      radius: 16,
+      accentLeft: accent,
+      padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+      child: icon == null
+          ? body
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                IconBadge(icon: done ? LucideIcons.check : icon!, style: FeBadgeStyle.of(done ? FeColors.success : (accent ?? FeColors.primary)), size: 38, iconSize: 18),
+                const SizedBox(width: 10),
+                Expanded(child: body),
+              ],
+            ),
     );
   }
 }

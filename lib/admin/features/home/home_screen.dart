@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
 import '../../core/network/api_exception.dart';
+import '../../catalog/catalog_guard.dart';
+import '../../state/auth_controller.dart';
 import '../../state/catalog_controller.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
@@ -67,22 +70,14 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final boot = ref.watch(loadedCatalogProvider);
-    return Scaffold(
-      appBar: FeHeader(
-        title: 'nav.home_title'.getString(context),
-        subtitle: _greeting(context),
-        actions: [
-          IconButton.filledTonal(
-            style: IconButton.styleFrom(backgroundColor: Colors.white.withValues(alpha: 0.8)),
-            icon: const Icon(LucideIcons.bell, size: 20),
-            tooltip: 'nav.alerts'.getString(context),
-            onPressed: () => context.go(Routes.alerts),
-          ),
-        ],
+    // White status-bar icons: the picture header runs behind the status bar.
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        // Owner's decision (2026-10-30, P-003): the app always shows Home and its
+        // tiles, whether or not the web's Dashboard switch is on for this user.
+        body: boot == null ? const TechSpinner() : _Dashboard(env: boot.dashboardEnv),
       ),
-      // Owner's decision (2026-10-30, P-003): the app always shows Home and its
-      // tiles, whether or not the web's Dashboard switch is on for this user.
-      body: boot == null ? const TechSpinner() : _Dashboard(env: boot.dashboardEnv),
     );
   }
 }
@@ -94,32 +89,166 @@ class _Dashboard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final doc = ref.watch(dashboardProvider(env));
+    final hasAssets = ref.watch(loadedCatalogProvider)?.has('assets') ?? false;
     return RefreshIndicator(
       onRefresh: () => ref.refresh(dashboardProvider(env).future).catchError((_) => <String, dynamic>{}),
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: doc.when(
-          skipLoadingOnRefresh: true,
-          loading: () => const [Padding(padding: EdgeInsets.all(32), child: TechSpinner())],
-          error: (e, _) => [
-            TechEmptyState(
-              icon: LucideIcons.circleAlert,
-              title: 'module.load_error'.getString(context),
-              subtitle: e is ApiFailure ? e.message : null,
+        padding: const EdgeInsets.only(bottom: 24),
+        children: [
+          Stack(
+            children: [
+              const _Hero(),
+              // The first tiles overlap the picture's bottom edge.
+              Padding(
+                padding: EdgeInsets.fromLTRB(16, _Hero.heightOf(context) - 30, 16, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: doc.when(
+                    skipLoadingOnRefresh: true,
+                    loading: () => const [Padding(padding: EdgeInsets.all(32), child: TechSpinner())],
+                    error: (e, _) => [
+                      TechEmptyState(
+                        icon: LucideIcons.circleAlert,
+                        title: 'module.load_error'.getString(context),
+                        subtitle: e is ApiFailure ? e.message : null,
+                      ),
+                    ],
+                    data: (d) => [
+                      for (final (title, kpis) in dashboardSections(d)) ...[
+                        if (title == 'home.assets' && kpis.length == 4)
+                          _AssetHealthCard(kpis: kpis, title: title.getString(context), onOpen: hasAssets ? () => context.push(modulePath('assets')) : null)
+                        else if (title == 'home.maintenance_risk')
+                          _RiskCard(kpis: kpis, title: title.getString(context))
+                        else ...[
+                          // The design's site tiles sit straight under the picture.
+                          if (title != 'home.site') SectionLabel(title.getString(context)),
+                          TwoUpGrid(children: [for (var i = 0; i < kpis.length; i++) KpiTile(kpis[i], color: FeColors.tile(i))]),
+                        ],
+                        const SizedBox(height: 14),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The picture header: brand, alerts bell, greeting and the signed-in name.
+class _Hero extends ConsumerWidget {
+  const _Hero();
+
+  static double heightOf(BuildContext context) => MediaQuery.paddingOf(context).top + 190;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final name = ref.watch(authControllerProvider).user?.name;
+    return SizedBox(
+      height: heightOf(context),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            const ColoredBox(color: FeColors.primary),
+            // Mirrored for right-to-left: the words stay over the dark sky.
+            Transform.flip(
+              flipX: Directionality.of(context) == TextDirection.rtl,
+              child: Image.asset(FeArt.home, fit: BoxFit.cover, alignment: Alignment.centerRight, errorBuilder: (_, _, _) => const SizedBox.shrink()),
+            ),
+            // Keeps the white words readable over the bright part of the sky.
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(begin: AlignmentDirectional.centerStart, end: AlignmentDirectional.centerEnd, colors: [Color(0xD9053B3A), Color(0x00053B3A)], stops: [0.45, 0.85]),
+              ),
+            ),
+            SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 6, 12, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 30,
+                          height: 30,
+                          decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(9)),
+                          child: const Icon(LucideIcons.building2, size: 17, color: Colors.white),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(child: AppText.titleSmall('nav.brand'.getString(context), color: Colors.white, maxLines: 1)),
+                        IconButton(
+                          icon: const Icon(LucideIcons.bell, size: 22, color: Colors.white),
+                          tooltip: 'nav.alerts'.getString(context),
+                          onPressed: () => context.go(Routes.alerts),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    AppText.bodyMedium('${_greeting(context)},', color: Colors.white.withValues(alpha: 0.9)),
+                    if (name != null && name.isNotEmpty)
+                      AppText.title('$name 👋', color: Colors.white, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    AppText.bodySmall('nav.home_title'.getString(context), color: Colors.white.withValues(alpha: 0.85)),
+                  ],
+                ),
+              ),
             ),
           ],
-          data: (d) => [
-            for (final (title, kpis) in dashboardSections(d)) ...[
-              Padding(padding: const EdgeInsets.only(top: 6), child: SectionLabel(title.getString(context))),
-              if (title == 'home.assets' && kpis.length == 4)
-                _AssetHealthCard(kpis: kpis)
-              else
-                TwoUpGrid(children: [for (var i = 0; i < kpis.length; i++) KpiTile(kpis[i], color: FeColors.tile(i))]),
-              const SizedBox(height: 14),
-            ],
-          ],
         ),
+      ),
+    );
+  }
+}
+
+/// Critical / high / medium / low, each on its own colour.
+class _RiskCard extends StatelessWidget {
+  const _RiskCard({required this.kpis, required this.title});
+  final List<Kpi> kpis;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    const colors = [FeColors.critical, FeColors.high, FeColors.medium, FeColors.low];
+    return TechCard(
+      radius: 16,
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(padding: const EdgeInsets.fromLTRB(2, 0, 2, 10), child: AppText.titleSmall(title)),
+          TwoUpGrid(
+            gap: 8,
+            children: [
+              for (var i = 0; i < kpis.length; i++)
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(color: colors[i % 4].withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)),
+                  child: Row(
+                    children: [
+                      Icon(LucideIcons.triangleAlert, size: 20, color: colors[i % 4]),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            AppText.titleMedium(kpis[i].value, color: colors[i % 4], maxLines: 1),
+                            AppText.caption(kpiLabel(context, kpis[i].label), maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -133,10 +262,14 @@ String _greeting(BuildContext context) {
 
 /// "141 assets" as a ring split good / fair / poor, with its legend.
 class _AssetHealthCard extends StatelessWidget {
-  const _AssetHealthCard({required this.kpis});
+  const _AssetHealthCard({required this.kpis, required this.title, this.onOpen});
 
   /// total, good, fair, poor — in that order (see [dashboardSections]).
   final List<Kpi> kpis;
+  final String title;
+
+  /// Opens the asset list, when this user has that module.
+  final VoidCallback? onOpen;
 
   static double _n(String v) {
     final t = v.replaceAll(',', '').trim().toLowerCase();
@@ -151,7 +284,20 @@ class _AssetHealthCard extends StatelessWidget {
     final sum = parts.fold<double>(0, (a, p) => a + _n(p.$1.value));
     return TechCard(
       radius: 16,
-      child: Row(
+      onTap: onOpen,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              children: [
+                Expanded(child: AppText.titleSmall(title)),
+                if (onOpen != null) const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+              ],
+            ),
+          ),
+          Row(
         children: [
           SizedBox(
             width: 116,
@@ -198,6 +344,8 @@ class _AssetHealthCard extends StatelessWidget {
               ],
             ),
           ),
+        ],
+      ),
         ],
       ),
     );

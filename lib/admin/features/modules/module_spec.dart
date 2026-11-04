@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 
+import '../../core/i18n/server_text.dart';
 import '../../core/network/api_client.dart';
 import '../../domain/mobile_catalog.dart';
 
@@ -144,6 +145,7 @@ class ModuleSpec {
     this.open,
     this.screen,
     this.extra,
+    this.extraTab,
     this.headerActions,
     this.desktopNote,
   });
@@ -175,6 +177,10 @@ class ModuleSpec {
 
   /// More detail sections under the facts (a snag's photos and thread).
   final List<Widget> Function(BuildContext context, Json r)? extra;
+
+  /// i18n key of a second detail tab holding [extra] (the first is Details);
+  /// null keeps [extra] under the details.
+  final String? extraTab;
 }
 
 // ── tolerant readers ─────────────────────────────────────────────────────────
@@ -269,7 +275,8 @@ const _wordMark = '\u{E000}';
 
 /// A fact's text as shown: [word] values translated, others unchanged.
 String factText(BuildContext context, String value) {
-  if (!value.startsWith(_wordMark)) return value;
+  // A plain fact may still be a status word (SLA "breached"); others are unchanged.
+  if (!value.startsWith(_wordMark)) return statusWord(value);
   final parts = value.substring(1).split(_wordMark);
   if (parts.length != 2) return value;
   final key = '${parts[0]}${parts[1]}';
@@ -296,4 +303,4 @@ num countIn(Object? list, String keyField, String key, {String countField = 'cou
 }
 
 /// Server status words as chip text: `checked_in` / `in-progress` → `checked in` / `in progress`.
-String chipLabel(String raw) => raw.replaceAll(RegExp('[_-]+'), ' ');
+String chipLabel(String raw) => statusWord(raw.replaceAll(RegExp('[_-]+'), ' '));

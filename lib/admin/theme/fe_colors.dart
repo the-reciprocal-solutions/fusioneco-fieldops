@@ -10,23 +10,26 @@ import 'package:flutter/material.dart';
 /// Status/priority/condition/SLA colors live in `fe_status_tokens.dart`
 /// instead — they're a distinct, larger semantic group in the source file.
 abstract final class FeColors {
-  // ---- 2026-11-03 "colorful" redesign (owner's ChatGPT design-system sheet) --
-  static const primary = Color(0xFF2563EB); // brand blue
+  // ---- 2026-11-04 teal redesign (owner's design-system sheet v1.0) ----------
+  static const primary = Color(0xFF0E7A6B); // brand teal
   static const onPrimary = Colors.white;
 
-  /// Lighter blue — a gradient partner where a flat brand fill needs a
+  /// Lighter teal — a gradient partner where a flat brand fill needs a
   /// second stop (hero cards, progress ring).
-  static const primaryLight = Color(0xFF3B82F6);
+  static const primaryLight = Color(0xFF14A08C);
 
-  /// Secondary brand hue (violet) — the second gradient stop of hero cards.
-  static const secondary = Color(0xFF7C3AED);
+  /// Secondary brand hue (blue) — the second gradient stop of hero cards.
+  static const secondary = Color(0xFF0B5ED7);
 
   /// Scaffold background — the lightest surface in the app.
   static const page = Color(0xFFF8FAFC);
 
-  /// The soft blue → lavender wash behind page headers.
-  static const headerTop = Color(0xFFDCE7FF);
-  static const headerBottom = Color(0xFFEDE4FF);
+  /// The soft mint wash behind page headers (under the header art).
+  static const headerTop = Color(0xFFCFEFE8);
+  static const headerBottom = Color(0xFFE3F3F4);
+
+  /// A selected control's fill: readable with any label colour.
+  static const selectedTint = Color(0xFFD6F0EA);
 
   /// Card/panel surface — pure white, one step brighter than [page].
   static const panel = Color(0xFFFFFFFF);
@@ -40,7 +43,7 @@ abstract final class FeColors {
   static const dashboardAccent2 = Color(0xFF818CF8);
   static const dashboardAccentSoft = Color(0xFFEEF2FF);
 
-  static const success = Color(0xFF10B981);
+  static const success = Color(0xFF16A34A);
   static const successSoft = Color(0xFFECFDF5);
   static const warning = Color(0xFFF59E0B);
   static const warningSoft = Color(0xFFFFFBEB);
@@ -63,9 +66,9 @@ abstract final class FeColors {
   /// Icon-tile colours, cycled across menu rows and tiles so each module
   /// reads as its own colour (blue, orange, green, violet, red, amber, sky, pink).
   static const tilePalette = <Color>[
-    Color(0xFF2563EB),
+    Color(0xFF0B5ED7),
     Color(0xFFF97316),
-    Color(0xFF10B981),
+    Color(0xFF16A34A),
     Color(0xFF7C3AED),
     Color(0xFFEF4444),
     Color(0xFFF59E0B),

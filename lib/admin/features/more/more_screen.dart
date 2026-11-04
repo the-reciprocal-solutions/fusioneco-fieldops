@@ -8,8 +8,10 @@ import 'package:go_router/go_router.dart';
 import '../../app/locale_config.dart';
 import '../../catalog/catalog_guard.dart';
 import '../../catalog/module_icons.dart';
+import '../../core/i18n/server_text.dart';
 import '../../domain/mobile_catalog.dart';
 import '../../state/auth_controller.dart';
+import '../../state/catalog_controller.dart';
 import '../../state/locale_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../theme/theme_extensions.dart';
@@ -33,9 +35,22 @@ class MoreScreen extends ConsumerWidget {
     final language = ref.watch(localeControllerProvider);
 
     return Scaffold(
-      appBar: FeHeader(title: 'nav.more'.getString(context), subtitle: 'nav.more_sub'.getString(context)),
+      appBar: FeHeader(
+        title: 'nav.more'.getString(context),
+        subtitle: 'nav.more_sub'.getString(context),
+        art: FeArt.more,
+        actions: [
+          if (ref.watch(loadedCatalogProvider)?.has('alerts') ?? false)
+            IconButton(
+              icon: const Icon(LucideIcons.settings, color: FeColors.primary),
+              tooltip: 'push.title'.getString(context),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const PushSettingsScreen())),
+            ),
+        ],
+      ),
       body: CatalogView(
         builder: (context, boot) => ModuleGroupList(
+          grid: true,
           // The catalog's "Account" modules (Notifications) join this
           // screen's own Account section instead of a second one.
           modules: boot.forTab(NavTab.more).where((m) => m.group != _accountGroup).toList(),
@@ -52,7 +67,7 @@ class MoreScreen extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           AppText.titleSmall(user?.name ?? '', color: Colors.white, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          AppText.bodySmall([user?.role, user?.email].whereType<String>().join(' · '), color: Colors.white.withValues(alpha: 0.85), maxLines: 1, overflow: TextOverflow.ellipsis),
+                          AppText.bodySmall([if (user?.role != null) statusWord(user!.role), user?.email].whereType<String>().join(' · '), color: Colors.white.withValues(alpha: 0.85), maxLines: 1, overflow: TextOverflow.ellipsis),
                         ],
                       ),
                     ),
@@ -91,7 +106,7 @@ class MoreScreen extends ConsumerWidget {
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [SectionLabel('more.on_web_title'.getString(context)), AppText.bodySmall('${'more.on_web_hint'.getString(context)} ${boot.webOnly.join(' · ')}')],
+                  children: [SectionLabel('more.on_web_title'.getString(context)), AppText.bodySmall('${'more.on_web_hint'.getString(context)} ${boot.webOnly.map(catalogWebOnly).join(' · ')}')],
                 ),
               ),
           ],

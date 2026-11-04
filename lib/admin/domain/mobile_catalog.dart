@@ -3,6 +3,8 @@
 /// The app never works out visibility rules itself; it only reads this.
 library;
 
+import '../core/i18n/server_text.dart';
+
 /// The bottom-nav tabs. `more` holds every module without a tab of its own.
 enum NavTab { home, efficiency, alerts, operations, more }
 
@@ -15,10 +17,15 @@ NavTab? _navTab(Object? v) => switch (v) {
     };
 
 class ModulePage {
-  const ModulePage({required this.id, required this.label, this.group});
+  const ModulePage({required this.id, required String label, this.group}) : serverLabel = label;
 
   final String id;
-  final String label;
+
+  /// The name as the server sent it; [label] is what to show.
+  final String serverLabel;
+  String get label => serverText('catalog.page.$id', serverLabel);
+
+  /// The server's group name: a grouping key. Show it through [catalogGroup].
   final String? group;
 
   factory ModulePage.fromJson(Map<String, dynamic> json) => ModulePage(
@@ -31,18 +38,23 @@ class ModulePage {
 class MobileModule {
   const MobileModule({
     required this.id,
-    required this.label,
+    required String label,
     required this.group,
     required this.icon,
     required this.webPath,
     this.navTab,
     this.pages = const [],
     this.tabs = const [],
-  });
+  }) : serverLabel = label;
 
   /// Stable contract with the server catalog (src/mobile/moduleCatalog.ts).
   final String id;
-  final String label;
+
+  /// The name as the server sent it; [label] is what to show.
+  final String serverLabel;
+  String get label => serverText('catalog.module.$id', serverLabel);
+
+  /// The server's group name: a grouping key. Show it through [catalogGroup].
   final String group;
 
   /// lucide icon name, kebab-case (same set as the web).

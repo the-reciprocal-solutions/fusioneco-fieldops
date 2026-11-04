@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:technician_portal/admin/core/network/api_client.dart';
 import 'package:technician_portal/admin/core/storage/secure_store.dart';
+import 'package:technician_portal/admin/core/storage/session_store.dart';
 import 'package:technician_portal/admin/domain/mobile_catalog.dart';
 import 'package:technician_portal/admin/features/home/home_screen.dart';
 import 'package:technician_portal/admin/state/catalog_controller.dart';
@@ -39,7 +40,7 @@ void main() {
     expect(boot.has('dashboard'), isFalse);
     final l = FlutterLocalization.instance;
     await tester.pumpWidget(ProviderScope(
-      overrides: [apiClientProvider.overrideWithValue(api), loadedCatalogProvider.overrideWithValue(boot)],
+      overrides: [apiClientProvider.overrideWithValue(api), sessionStoreProvider.overrideWithValue(await SessionStore.open()), loadedCatalogProvider.overrideWithValue(boot)],
       child: MaterialApp(theme: AppTheme.build(), supportedLocales: l.supportedLocales, localizationsDelegates: l.localizationsDelegates, home: const HomeScreen()),
     ));
     await tester.pumpAndSettle();

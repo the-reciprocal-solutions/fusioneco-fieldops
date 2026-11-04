@@ -5,6 +5,7 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../core/i18n/server_text.dart';
 import '../../core/network/api_exception.dart';
 import '../../domain/mobile_catalog.dart';
 import '../../state/catalog_controller.dart';
@@ -280,7 +281,7 @@ void _openFinding(BuildContext context, Json f, HvacSite site, String pageId) =>
 final Map<String, _Body> _bodies = {
   'overview': (context, sm, site) => [
         _tiles([
-          Kpi('eff.score', '${fmtNum(sm['score'])} · ${s(sm['grade']) ?? ''}', tone: _scoreTone(n(sm['score']))),
+          Kpi('eff.score', '${fmtNum(sm['score'])} · ${statusWord(s(sm['grade']) ?? '')}', tone: _scoreTone(n(sm['score']))),
           Kpi('eff.findings', fmtNum(rowsOf({'data': sm['findings']}).length), tone: Tone.warn),
           Kpi('eff.data_health', fmtPct(at(sm, 'kpis.dataHealthPct')), tone: _scoreTone(n(at(sm, 'kpis.dataHealthPct')))),
           Kpi('eff.cost_per_day', '${fmtNum(at(sm, 'impact.perDay'), decimals: 2)} ${s(at(sm, 'impact.currency')) ?? ''}', tone: Tone.bad),
@@ -300,7 +301,7 @@ final Map<String, _Body> _bodies = {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        AppText.titleSmall(s(p['label']) ?? '–'),
+                        AppText.titleSmall(serverText('eff.pillar_${p['key']}', s(p['label']) ?? '–')),
                         AppText.bodySmall(
                           p['available'] == false || p['score'] == null ? 'eff.area_na'.getString(context) : (s(p['top']) ?? 'eff.area_clear'.getString(context)),
                           maxLines: 2,
@@ -378,7 +379,7 @@ final Map<String, _Body> _bodies = {
   },
   'report': (context, sm, site) => [
         _tiles([
-          Kpi('eff.score', '${fmtNum(sm['score'])} · ${s(sm['grade']) ?? ''}', tone: _scoreTone(n(sm['score']))),
+          Kpi('eff.score', '${fmtNum(sm['score'])} · ${statusWord(s(sm['grade']) ?? '')}', tone: _scoreTone(n(sm['score']))),
           Kpi('eff.findings', fmtNum(rowsOf({'data': sm['findings']}).length), tone: Tone.warn),
           Kpi('eff.cost_per_day', '${fmtNum(at(sm, 'impact.perDay'), decimals: 2)} ${s(at(sm, 'impact.currency')) ?? ''}', tone: Tone.bad),
           Kpi('eff.data_health', fmtPct(at(sm, 'kpis.dataHealthPct'))),
@@ -492,7 +493,7 @@ final Map<String, _Body> _bodies = {
   // Point-by-point charts need the web's picker; the phone shows where the site stands.
   'trends': (context, sm, site) => [
         _tiles([
-          Kpi('eff.score', '${fmtNum(sm['score'])} · ${s(sm['grade']) ?? ''}', tone: _scoreTone(n(sm['score']))),
+          Kpi('eff.score', '${fmtNum(sm['score'])} · ${statusWord(s(sm['grade']) ?? '')}', tone: _scoreTone(n(sm['score']))),
           Kpi('eff.data_health', fmtPct(at(sm, 'kpis.dataHealthPct')), tone: _scoreTone(n(at(sm, 'kpis.dataHealthPct')))),
           Kpi('eff.plant_delta_t', '${_deg(at(sm, 'kpis.plantDeltaT'))} / ${_deg(at(sm, 'kpis.designDeltaT'))}'),
           Kpi('eff.chillers_running', '${fmtNum(at(sm, 'kpis.chillersRunning'))} / ${fmtNum(at(sm, 'kpis.chillersTotal'))}', tone: Tone.good),

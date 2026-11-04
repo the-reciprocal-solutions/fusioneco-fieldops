@@ -37,6 +37,7 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
   Object? _error;
   bool _busy = false;
   bool _changed = false;
+  int _tab = 0;
 
   @override
   void initState() {
@@ -95,6 +96,8 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
         await a.run!(api, _record!, text);
       }
       _changed = true;
+      // What was just written (a comment, a photo) lives on the second tab.
+      if (widget.spec.extraTab != null && (text != null || photo != null)) _tab = 1;
       messenger.showSnackBar(SnackBar(content: AppText(done)));
       if (widget.spec.list?.detailPath != null) {
         await _reload();
@@ -168,6 +171,12 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
     final me = ref.read(authControllerProvider).user;
     final actions = widget.spec.actions?.call({...rec, if (me != null) '_me': {'id': me.id, 'role': me.role}}) ?? const <RecordAction>[];
     final url = widget.spec.open?.call(rec);
+    final buttons = <Widget>[
+      if (url != null) _ActionButton(label: 'act.open'.getString(context), icon: LucideIcons.externalLink, primary: true, onTap: _busy ? null : () => _openUrl(url)),
+      for (final a in actions) _ActionButton(label: a.label.getString(context), icon: a.icon, primary: a.primary, danger: a.danger, onTap: _busy ? null : () => _run(a)),
+    ];
+    final extras = widget.spec.extra?.call(context, rec) ?? const <Widget>[];
+    final tabbed = widget.spec.extraTab != null && extras.isNotEmpty;
 
     // RowGroup brings its own 16px side inset; the header card and buttons
     // get the same inset so every card lines up (as on the alert detail).
@@ -182,8 +191,22 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
               if (row != null)
                 TechCard(
                   radius: 16,
+                  padding: EdgeInsets.zero,
                   accentLeft: row.priority != null ? context.chips.priority(row.priority).foreground : (row.status != null ? context.chips.status(row.status).foreground : null),
-                  child: Column(
+                  child: Stack(
+                    children: [
+                      // An air-conditioning job shows the unit in the card's corner.
+                      if ((s(rec['category']) ?? '').toLowerCase().contains('hvac'))
+                        PositionedDirectional(
+                          top: 8,
+                          end: 8,
+                          width: 104,
+                          height: 60,
+                          child: Image.asset(FeArt.workOrderHvac, fit: BoxFit.contain, errorBuilder: (_, _, _) => const SizedBox.shrink()),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
@@ -208,30 +231,40 @@ class _RecordDetailScreenState extends ConsumerState<RecordDetailScreen> {
                       ],
                     ],
                   ),
+                      ),
+                    ],
+                  ),
                 ),
-              if (actions.isNotEmpty || url != null) ...[
+              // The first two buttons share a row, the rest wrap under them.
+              if (buttons.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
+                Row(
                   children: [
-                    if (url != null) _ActionButton(label: 'act.open'.getString(context), icon: LucideIcons.externalLink, primary: true, onTap: _busy ? null : () => _openUrl(url)),
-                    for (final a in actions) _ActionButton(label: a.label.getString(context), icon: a.icon, primary: a.primary, danger: a.danger, onTap: _busy ? null : () => _run(a)),
+                    Expanded(child: buttons[0]),
+                    if (buttons.length > 1) ...[const SizedBox(width: 10), Expanded(child: buttons[1])],
                   ],
                 ),
+                if (buttons.length > 2) ...[
+                  const SizedBox(height: 10),
+                  Wrap(spacing: 10, runSpacing: 10, children: buttons.sublist(2)),
+                ],
+              ],
+              if (tabbed) ...[
+                const SizedBox(height: 16),
+                _Tabs(labels: ['module.details'.getString(context), widget.spec.extraTab!.getString(context)], selected: _tab, onSelect: (i) => setState(() => _tab = i)),
               ],
             ],
           ),
         ),
-        if (facts.isNotEmpty) ...[
+        if (facts.isNotEmpty && (!tabbed || _tab == 0)) ...[
           const SizedBox(height: 16),
           RowGroup(
-            label: 'module.details'.getString(context),
+            label: tabbed ? '' : 'module.details'.getString(context),
             dividerIndent: 16,
             rows: [for (final (label, value) in facts) _FactRow(label: label, value: factText(context, value!))],
           ),
         ],
-        ...?widget.spec.extra?.call(context, rec),
+        if (!tabbed || _tab == 1) ...extras,
       ],
     );
   }
@@ -248,7 +281,11 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final child = Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 16), const SizedBox(width: 6), AppText(label)]);
+    final child = Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [Icon(icon, size: 16), const SizedBox(width: 6), Flexible(child: AppText(label, maxLines: 1, overflow: TextOverflow.ellipsis))],
+    );
     if (primary) return ElevatedButton(onPressed: onTap, child: child);
     return OutlinedButton(
       onPressed: onTap,
@@ -261,6 +298,34 @@ class _ActionButton extends StatelessWidget {
       child: child,
     );
   }
+}
+
+/// Underlined tabs: Details and the spec's second tab.
+class _Tabs extends StatelessWidget {
+  const _Tabs({required this.labels, required this.selected, required this.onSelect});
+  final List<String> labels;
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: FeColors.line))),
+        child: Row(
+          children: [
+            for (var i = 0; i < labels.length; i++)
+              Expanded(
+                child: InkWell(
+                  onTap: () => onSelect(i),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(border: Border(bottom: BorderSide(color: i == selected ? FeColors.primary : Colors.transparent, width: 2))),
+                    child: AppText.body(labels[i], align: TextAlign.center, weight: FontWeight.w600, color: i == selected ? FeColors.primary : FeColors.ink2, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
 }
 
 /// Fact label key → icon, from words in the key.

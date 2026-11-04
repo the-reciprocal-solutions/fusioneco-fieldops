@@ -61,7 +61,8 @@ class TechCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: dark ? FeColors.ink : (tint ?? FeColors.panel),
         borderRadius: r,
-        border: borderColor == null ? null : Border.all(color: borderColor!),
+        // A hairline keeps the white card crisp on the pale page (redesign).
+        border: borderColor != null ? Border.all(color: borderColor!) : (dark || tint != null ? null : Border.all(color: const Color(0xFFE6EEF0))),
         boxShadow: dark
             ? FeElevation.floating
             : (tint != null ? FeElevation.tinted(tint!) : FeElevation.soft),
@@ -278,7 +279,7 @@ class PhasePlaceholder extends StatelessWidget {
   );
 }
 
-/// A coloured hero card (brand blue → violet gradient) — the More tab's
+/// A coloured hero card (brand teal → blue gradient) — the More tab's
 /// profile card and other "headline" panels of the redesign.
 class GradientCard extends StatelessWidget {
   const GradientCard({super.key, required this.child, this.colors = const [FeColors.primary, FeColors.secondary], this.padding = const EdgeInsets.all(16), this.onTap});
@@ -318,12 +319,13 @@ class MenuTile extends StatelessWidget {
   Widget build(BuildContext context) => TechCard(
         onTap: onTap,
         radius: 16,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
         child: Row(
           children: [
-            IconBadge(icon: icon, style: FeBadgeStyle.of(color), size: 40, iconSize: 19),
-            const SizedBox(width: 10),
-            Expanded(child: AppText.titleSmall(label, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontSize: 14, height: 18 / 14))),
+            IconBadge(icon: icon, style: FeBadgeStyle.of(color), size: 36, iconSize: 18),
+            const SizedBox(width: 8),
+            Expanded(child: AppText.titleSmall(label, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontSize: 12.5, height: 16 / 12.5, fontWeight: FontWeight.w600))),
+            const Icon(LucideIcons.chevronRight, size: 14, color: FeColors.ink2),
           ],
         ),
       );

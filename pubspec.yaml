@@ -107,6 +107,7 @@ flutter:
   assets:
     - assets/i18n/
     - assets/public/
+    - assets/admin/headers/
     # The model viewer's page (docs/bim-viewer.md): served to its WebView by
     # the app's loopback server. Folders aren't recursive, so vendor/ too.
     - assets/bim_viewer/

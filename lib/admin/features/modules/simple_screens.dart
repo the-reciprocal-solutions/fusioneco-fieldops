@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../catalog/catalog_guard.dart';
 import '../../catalog/module_icons.dart';
+import '../../core/i18n/server_text.dart';
 import '../../domain/mobile_catalog.dart';
 import '../../widgets/catalog_view.dart';
 import '../../widgets/fe_header.dart';
@@ -20,7 +21,7 @@ class ModulePagesScreen extends StatelessWidget {
           padding: const EdgeInsets.only(top: 16, bottom: 32),
           children: [
             RowGroup(
-              label: module.group,
+              label: catalogGroup(module.group),
               rows: [
                 for (final p in module.pages)
                   NavRow(title: p.label, icon: moduleIcon(module.icon), onTap: () => context.push(modulePath(module.id, page: p.id))),

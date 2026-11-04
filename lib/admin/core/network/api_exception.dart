@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import '../i18n/server_text.dart';
+
 sealed class ApiFailure implements Exception {
   const ApiFailure(this.message);
   final String message;
@@ -43,15 +45,15 @@ ApiFailure mapDioException(DioException e) {
       DioExceptionType.connectionTimeout ||
       DioExceptionType.sendTimeout ||
       DioExceptionType.receiveTimeout =>
-        'The server took too long to answer. Please try again in a moment.',
-      _ => 'Could not reach the server. Check your connection and try again.',
+        serverText('error.timeout', 'The server took too long to answer. Please try again in a moment.'),
+      _ => serverText('error.no_connection', 'Could not reach the server. Check your connection and try again.'),
     });
   }
   final data = response.data;
   final status = response.statusCode ?? 0;
   var message = status >= 500
-      ? 'Server is temporarily unavailable. Please try again in a moment.'
-      : 'Something went wrong. Please try again.';
+      ? serverText('error.server_down', 'Server is temporarily unavailable. Please try again in a moment.')
+      : serverText('error.generic', 'Something went wrong. Please try again.');
 
   if (data is Map) {
     final raw = data['message'] ?? data['error'];

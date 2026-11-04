@@ -13,6 +13,19 @@ import 'app_text.dart';
 /// one-off hand-rolled dark bar.
 enum FeHeaderVariant { standard, immersive }
 
+/// The header pictures (assets/admin/headers, 2026-11-04). Replace a file to
+/// change a picture; keep the name.
+abstract final class FeArt {
+  static const _dir = 'assets/admin/headers';
+  static const home = '$_dir/home.png';
+  static const wave = '$_dir/wave.png';
+  static const efficiency = '$_dir/efficiency.png';
+  static const alerts = '$_dir/alerts.png';
+  static const operations = '$_dir/operations.png';
+  static const more = '$_dir/more.png';
+  static const workOrderHvac = '$_dir/work_order_hvac.png';
+}
+
 /// The app's one header component. Replaces the old split between
 /// `TechHeader` (always dark), the default `AppBarTheme` (silently
 /// inherited dark by a couple of screens that never opted in), and the
@@ -32,6 +45,7 @@ class FeHeader extends StatelessWidget implements PreferredSizeWidget {
     this.actions = const [],
     this.bottom,
     this.subtitle,
+    this.art = FeArt.wave,
   }) : _showBack = showBack, // ignore: prefer_initializing_formals — public `showBack` name must stay, field is deliberately private
        assert(
          title != null || titleWidget != null,
@@ -62,8 +76,11 @@ class FeHeader extends StatelessWidget implements PreferredSizeWidget {
   /// ("Operations" / "Manage facility operations").
   final String? subtitle;
 
+  /// The picture behind the header; it fades into the page at the bottom.
+  final String art;
+
   static const _height = 56.0;
-  static const _tallHeight = 76.0;
+  static const _tallHeight = 92.0;
 
   @override
   Size get preferredSize => Size.fromHeight(
@@ -94,17 +111,30 @@ class FeHeader extends StatelessWidget implements PreferredSizeWidget {
     return AppBar(
       toolbarHeight: tall ? _tallHeight : _height,
       backgroundColor: immersive ? background : Colors.transparent,
-      // The soft blue → lavender wash of the redesign (2026-11-03).
       flexibleSpace: immersive
           ? null
-          : const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [FeColors.headerTop, FeColors.headerBottom],
+          : Stack(
+              fit: StackFit.expand,
+              children: [
+                const ColoredBox(color: FeColors.headerTop),
+                // A missing picture leaves the plain wash, never an error box.
+                // The picture sits at the end of the header, away from the title:
+                // mirrored for right-to-left languages.
+                Transform.flip(
+                  flipX: Directionality.of(context) == TextDirection.rtl,
+                  child: Image.asset(art, fit: BoxFit.cover, alignment: Alignment.centerRight, errorBuilder: (_, _, _) => const SizedBox.shrink()),
                 ),
-              ),
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: [0.62, 1],
+                      colors: [Color(0x00F8FAFC), FeColors.page],
+                    ),
+                  ),
+                ),
+              ],
             ),
       foregroundColor: foreground,
       surfaceTintColor: Colors.transparent,

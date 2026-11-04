@@ -5,8 +5,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'fe_colors.dart';
 import 'theme_extensions.dart';
 
-/// Light-only. 2026-11-03: the owner's colourful redesign (brand blue
-/// #2563EB + violet, Inter, soft gradient headers, coloured icon tiles).
+/// Light-only. 2026-11-04: the owner's teal redesign (brand teal #0E7A6B +
+/// blue #0B5ED7, Inter, picture headers, glass cards, coloured icon tiles).
 /// It ships no dark variant.
 abstract final class AppTheme {
   static ThemeData build() {
@@ -163,7 +163,7 @@ abstract final class AppTheme {
       ),
       chipTheme: ChipThemeData(
         backgroundColor: FeColors.panel,
-        selectedColor: const Color(0xFFDBEAFE),
+        selectedColor: FeColors.selectedTint,
         checkmarkColor: FeColors.primary,
         showCheckmark: false,
         side: BorderSide(color: FeColors.line),
@@ -172,13 +172,13 @@ abstract final class AppTheme {
         secondaryLabelStyle: text.labelLarge?.copyWith(color: FeColors.primary),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       ),
-      // Selected = soft blue tint + blue text (like the filter chips), not a
+      // Selected = soft teal tint + teal text (like the filter chips), not a
       // solid fill: a label that sets its own colour stays readable on it.
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: SegmentedButton.styleFrom(
           backgroundColor: FeColors.panel,
           foregroundColor: FeColors.ink,
-          selectedBackgroundColor: const Color(0xFFDBEAFE),
+          selectedBackgroundColor: FeColors.selectedTint,
           selectedForegroundColor: FeColors.primary,
           side: BorderSide(color: FeColors.line),
           textStyle: text.labelLarge?.copyWith(fontWeight: FontWeight.w600),
@@ -239,8 +239,8 @@ abstract final class AppTheme {
         color: onSurface,
       ),
       headlineSmall: const TextStyle(
-        fontSize: 22,
-        height: 30 / 22,
+        fontSize: 24,
+        height: 32 / 24,
         fontWeight: FontWeight.w700,
         color: onSurface,
       ),

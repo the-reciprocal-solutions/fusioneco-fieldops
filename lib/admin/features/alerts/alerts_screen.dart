@@ -64,6 +64,7 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
             ? context.formatString('alerts.selected'.getString(context), [_selected.length])
             : 'nav.alerts'.getString(context),
         subtitle: selecting ? null : 'nav.alerts_sub'.getString(context),
+        art: FeArt.alerts,
         leading: selecting
             ? IconButton(icon: const Icon(LucideIcons.x), onPressed: () => setState(_selected.clear))
             : null,
@@ -165,7 +166,7 @@ class _SummaryRow extends StatelessWidget {
         const SizedBox(width: 8),
         tile('alerts.sum_unack', s?.unacknowledged, FeColors.high, LucideIcons.clockAlert),
         const SizedBox(width: 8),
-        tile('alerts.sum_mine', s?.mine, FeColors.secondary, LucideIcons.user),
+        tile('alerts.sum_mine', s?.mine, FeColors.ai, LucideIcons.user),
       ],
     );
   }
@@ -198,6 +199,14 @@ class _FilterBar extends ConsumerWidget {
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
+          Padding(
+            padding: const EdgeInsetsDirectional.only(end: 8),
+            child: FilterChip(
+              label: AppText('alerts.filter_all'.getString(context), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+              selected: filters.severity.isEmpty,
+              onSelected: (_) => set(filters.copyWith(severity: const {})),
+            ),
+          ),
           for (final sev in alertSeverities)
             Padding(
               padding: const EdgeInsetsDirectional.only(end: 8),
@@ -364,7 +373,13 @@ class _AlertCard extends StatelessWidget {
                   AppText.titleSmall(a.title, maxLines: 2, overflow: TextOverflow.ellipsis),
                   if (a.where.isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    AppText.bodySmall(a.where, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Row(
+                      children: [
+                        const Icon(LucideIcons.mapPin, size: 13, color: FeColors.ink2),
+                        const SizedBox(width: 4),
+                        Expanded(child: AppText.bodySmall(a.where, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                      ],
+                    ),
                   ],
                   if (a.readingText != null || a.ackOverdue || a.assigneeName != null) ...[
                     const SizedBox(height: 8),

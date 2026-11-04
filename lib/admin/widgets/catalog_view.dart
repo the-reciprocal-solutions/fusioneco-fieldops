@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../catalog/catalog_guard.dart';
 import '../catalog/module_icons.dart';
+import '../core/i18n/server_text.dart';
 import '../core/network/api_exception.dart';
 import '../domain/mobile_catalog.dart';
 import '../state/catalog_controller.dart';
@@ -164,6 +165,8 @@ class ModuleGroupList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The names below come from the models: redraw when the language changes.
+    Localizations.localeOf(context);
     final groups = <String, List<MobileModule>>{};
     for (final m in modules) {
       groups.putIfAbsent(m.group, () => []).add(m);
@@ -180,7 +183,7 @@ class ModuleGroupList extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  SectionLabel(g.key),
+                  SectionLabel(catalogGroup(g.key)),
                   TwoUpGrid(children: [
                     for (var i = 0; i < g.value.length; i++)
                       MenuTile(label: g.value[i].label, icon: moduleIcon(g.value[i].icon), color: FeColors.tile(i), onTap: () => context.push(modulePath(g.value[i].id))),
@@ -190,7 +193,7 @@ class ModuleGroupList extends StatelessWidget {
             )
           else
             RowGroup(
-              label: g.key,
+              label: catalogGroup(g.key),
               rows: [
                 for (var i = 0; i < g.value.length; i++)
                   NavRow(title: g.value[i].label, icon: moduleIcon(g.value[i].icon), color: FeColors.tile(i), onTap: () => context.push(modulePath(g.value[i].id))),

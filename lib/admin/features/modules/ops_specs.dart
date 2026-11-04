@@ -1,3 +1,4 @@
+import '../../core/i18n/server_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -16,7 +17,8 @@ Map<String, dynamic> _pages(int page, int size) => {'page': '$page', 'limit': '$
 Map<String, dynamic> _offset(int page, int size) => {'limit': '$size', 'offset': '${(page - 1) * size}'};
 
 String? _join(Iterable<Object?> parts) {
-  final v = parts.map(s).whereType<String>().toList();
+  // Known words (Monthly, HVAC) in the user's language; names stay as they are.
+  final v = parts.map(s).whereType<String>().map(statusWord).toList();
   return v.isEmpty ? null : v.join(' · ');
 }
 

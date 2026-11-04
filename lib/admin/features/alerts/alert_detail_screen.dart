@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../core/i18n/server_text.dart';
 import '../../catalog/catalog_guard.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/utils/time_ago.dart';
@@ -222,7 +223,7 @@ class _Body extends StatelessWidget {
       if (a.assetName != null && a.assetName != a.location && a.assetName != a.buildingName)
         (LucideIcons.package, 'alerts.fact_asset', a.assetName!),
       if (a.readingText != null) (LucideIcons.activity, 'alerts.fact_reading', a.readingText!),
-      if (a.sourceLabel.isNotEmpty) (LucideIcons.radioTower, 'alerts.fact_source', a.sourceLabel),
+      if (a.sourceLabel.isNotEmpty) (LucideIcons.radioTower, 'alerts.fact_source', statusWord(a.sourceLabel)),
       if (a.teamName != null) (LucideIcons.users, 'alerts.fact_team', a.teamName!),
       (LucideIcons.user, 'alerts.fact_assignee', a.assigneeName ?? 'alerts.unassigned'.getString(context)),
       if (a.isSnoozed)

@@ -1,3 +1,4 @@
+import '../../core/i18n/server_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -22,7 +23,8 @@ import 'scan_screen.dart';
 Map<String, dynamic> _pages(int page, int size) => {'page': '$page', 'limit': '$size'};
 
 String? _join(Iterable<Object?> parts) {
-  final v = parts.map(s).whereType<String>().toList();
+  // Known words (Monthly, HVAC) in the user's language; names stay as they are.
+  final v = parts.map(s).whereType<String>().map(statusWord).toList();
   return v.isEmpty ? null : v.join(' · ');
 }
 
@@ -138,6 +140,7 @@ final workOrdersSpec = ModuleSpec(
     ];
   },
   extra: woSections,
+  extraTab: 'wo.history',
 );
 
 /// Comments and history (`GET /:id/work-log`, newest first as sent).
@@ -682,7 +685,7 @@ final auditLogSpec = ModuleSpec(
     pageQuery: _pages,
     row: (r) => RecordRow(
       id: '${r['id']}',
-      title: _join([r['action'], r['entityLabel'] ?? r['entityType']]) ?? '–',
+      title: _join([chipLabel(s(r['action']) ?? ''), r['entityLabel'] ?? r['entityType']]) ?? '–',
       subtitle: _join([r['actorName'], r['actorRole']]),
       status: s(r['action']),
       date: d(r['createdAt']),

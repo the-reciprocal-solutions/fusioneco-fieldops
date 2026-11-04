@@ -246,6 +246,8 @@ void main() {
   testWidgets('work order: comments and history listed; a new comment shows at once', (tester) async {
     final api = await _pump(tester, RecordDetailScreen(spec: workOrdersSpec, recordId: 'w1', initial: _woRow));
     expect(api.gets, contains('/api/fm/work-order/w1/work-log'));
+    await tester.tap(find.text('Comments & history')); // the log is the second tab
+    await tester.pumpAndSettle();
     expect(find.text('Technician Checked Out'), findsOneWidget);
     expect(find.textContaining('Checked out after 5 min on site'), findsOneWidget);
 

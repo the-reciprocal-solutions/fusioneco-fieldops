@@ -5,6 +5,7 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../core/i18n/server_text.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../state/providers.dart';
@@ -222,9 +223,9 @@ List<(String, List<String>)> suggestedQuestions(Json f, Json? summary) {
   final unit = stats.where((u) => '${u['key']}' == first).map((u) => s(u['label'])).firstOrNull ?? first ?? 'this unit';
   final tripped = RegExp('trip', caseSensitive: false).hasMatch('${f['rule']} ${f['title']}');
   return [
-    ('ask.fix', ['How do I fix this?', 'Give me a step-by-step plan for the technician at $unit', 'What should I check first, and why?']),
-    ('ask.safety', [tripped ? 'Is it safe to reset $unit?' : 'How do I work on $unit safely?', 'What tools, parts and permits do I need?']),
-    ('ask.understand', ['Why is this happening?', 'What happens if we leave it for a week?', 'How do I confirm it is fixed on the BMS?']),
+    ('ask.fix', [serverText('ask.q_fix', 'How do I fix this?'), serverText('ask.q_plan', 'Give me a step-by-step plan for the technician at %a').replaceAll('%a', unit), serverText('ask.q_first', 'What should I check first, and why?')]),
+    ('ask.safety', [(tripped ? serverText('ask.q_reset', 'Is it safe to reset %a?') : serverText('ask.q_safely', 'How do I work on %a safely?')).replaceAll('%a', unit), serverText('ask.q_tools', 'What tools, parts and permits do I need?')]),
+    ('ask.understand', [serverText('ask.q_why', 'Why is this happening?'), serverText('ask.q_week', 'What happens if we leave it for a week?'), serverText('ask.q_confirm', 'How do I confirm it is fixed on the BMS?')]),
   ];
 }
 

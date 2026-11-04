@@ -18,7 +18,7 @@ abstract final class FeStatusHues {
       HSLColor.fromAHSL(1, h, s / 100, l / 100).toColor();
 
   // ---- work-order / task lifecycle status --------------------------------
-  static final open = const Color(0xFF2563EB);
+  static final open = const Color(0xFF0B5ED7);
   static final inProgress = const Color(0xFFD97706);
   static final onHold = const Color(0xFF7C3AED);
   static final completed = const Color(0xFF059669);

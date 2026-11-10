@@ -159,7 +159,7 @@ class _PhotoAnnotationScreenState extends State<PhotoAnnotationScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsetsDirectional.only(end: 8),
             child: TextButton(
               onPressed: decoded == null || _saving ? null : _save,
               child: _saving

@@ -16,6 +16,7 @@ import '../../core/capture/capture_services.dart';
 import '../../core/utils/dates.dart';
 import '../../domain/chat_message.dart';
 import '../../domain/maintenance_record.dart';
+import '../../data/ai_chat_repository.dart' show kNoAssistantReply;
 import '../../state/auth_controller.dart';
 import '../../state/chat_controller.dart';
 import '../../state/checklist_controller.dart' show photoCaptureProvider;
@@ -26,6 +27,8 @@ import '../../widgets/app_text.dart';
 import '../../widgets/tech_popup.dart';
 import '../../widgets/voice_note_player.dart';
 import '../../widgets/voice_waveform.dart';
+import '../../theme/app_font.dart';
+import '../../widgets/dir_icon.dart';
 
 /// The per-order assistant, opened from the button on the detail screen.
 ///
@@ -406,7 +409,7 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: EdgeInsets.fromLTRB(onBack == null ? 20 : 8, 16, 12, 16),
+        padding: EdgeInsetsDirectional.fromSTEB(onBack == null ? 20 : 8, 16, 12, 16),
         decoration: const BoxDecoration(
           border: Border(bottom: BorderSide(color: Color(0x14FFFFFF))),
         ),
@@ -414,7 +417,7 @@ class _Header extends StatelessWidget {
           children: [
             if (onBack != null)
               IconButton(
-                icon: const Icon(LucideIcons.chevronLeft,
+                icon: const DirIcon(LucideIcons.chevronLeft,
                     size: 20, color: FeColors.ink2),
                 tooltip: 'order_detail.chat_back_tooltip'.getString(context),
                 onPressed: onBack,
@@ -711,11 +714,11 @@ class _HistoryListView extends StatelessWidget {
             'order_detail.chat_history_section_label'
                 .getString(context)
                 .toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
               color: FeColors.ink2,
               fontSize: 10.5,
               fontWeight: FontWeight.w700,
-              letterSpacing: 0.6,
+              letterSpacing: context.letterSpacingFor(0.6),
             ),
           ),
           const SizedBox(height: 10),
@@ -780,7 +783,7 @@ class _HistoryRow extends StatelessWidget {
                     ),
                   ),
                 ),
-                const Icon(LucideIcons.chevronRight,
+                const DirIcon(LucideIcons.chevronRight,
                     size: 16, color: FeColors.ink2),
               ],
             ),
@@ -882,11 +885,11 @@ class _EmptyState extends StatelessWidget {
             const SizedBox(height: 18),
             AppText(
               'order_detail.chat_suggestions_label'.getString(context).toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                 color: FeColors.ink2,
                 fontSize: 10.5,
                 fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
+                letterSpacing: context.letterSpacingFor(0.6),
               ),
             ),
             const SizedBox(height: 10),
@@ -993,7 +996,7 @@ class _Bubble extends StatelessWidget {
     final roundRadius = Radius.circular(context.radii.xl);
 
     return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: mine ? AlignmentDirectional.centerEnd : AlignmentDirectional.centerStart,
       child: Column(
         crossAxisAlignment:
             mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -1005,11 +1008,11 @@ class _Bubble extends StatelessWidget {
             ),
             decoration: BoxDecoration(
               color: mine ? FeColors.panel : const Color(0xFF2B2D31),
-              borderRadius: BorderRadius.only(
-                topLeft: mine ? roundRadius : tailRadius,
-                topRight: mine ? tailRadius : roundRadius,
-                bottomLeft: roundRadius,
-                bottomRight: roundRadius,
+              borderRadius: BorderRadiusDirectional.only(
+                topStart: mine ? roundRadius : tailRadius,
+                topEnd: mine ? tailRadius : roundRadius,
+                bottomStart: roundRadius,
+                bottomEnd: roundRadius,
               ),
               // Assistant bubbles sit on a background that is nearly the
               // same dark tone as the bubble itself — this faint edge is
@@ -1073,7 +1076,11 @@ class _Bubble extends StatelessWidget {
                             ),
                         ],
                       )
-                    : _AssistantMarkdown(content: message.content),
+                    : _AssistantMarkdown(
+                        content: message.content == kNoAssistantReply
+                            ? 'chat.no_reply'.getString(context)
+                            : message.content,
+                      ),
           ),
           if (!message.pending && message.sentAt != null) ...[
             const SizedBox(height: 4),
@@ -1148,10 +1155,12 @@ class _AssistantMarkdown extends StatelessWidget {
             color: const Color(0xFF1C1E22),
             borderRadius: BorderRadius.circular(8),
           ),
-          blockquotePadding: const EdgeInsets.fromLTRB(10, 0, 0, 0),
+          // The stripe is on the start side (BorderDirectional below); the
+          // stylesheet wants a plain EdgeInsets, so resolve it here.
+          blockquotePadding: const EdgeInsetsDirectional.fromSTEB(10, 0, 0, 0).resolve(Directionality.of(context)),
           blockquoteDecoration: const BoxDecoration(
-            border: Border(
-              left: BorderSide(color: Color(0x33FFFFFF), width: 3),
+            border: BorderDirectional(
+              start: BorderSide(color: Color(0x33FFFFFF), width: 3),
             ),
           ),
           horizontalRuleDecoration: const BoxDecoration(
@@ -1480,7 +1489,7 @@ class _Composer extends StatelessWidget {
                               disabledForegroundColor: FeColors.ink2,
                             ),
                             onPressed: canSend ? onSend : null,
-                            icon: const Icon(LucideIcons.send, size: 15),
+                            icon: const DirIcon(LucideIcons.send, size: 15),
                           );
                         },
                       ),
@@ -1521,9 +1530,9 @@ class _AttachmentPreview extends StatelessWidget {
                 child: Image.memory(photo.bytes, fit: BoxFit.cover),
               ),
             ),
-            Positioned(
+            PositionedDirectional(
               top: 2,
-              right: 2,
+              end: 2,
               child: GestureDetector(
                 onTap: onRemove,
                 child: Container(

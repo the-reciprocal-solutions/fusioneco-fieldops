@@ -998,18 +998,18 @@ class _PhotoGrid extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
                 child: Image.memory(photo.bytes, fit: BoxFit.cover),
               ),
-              Positioned(
+              PositionedDirectional(
                 bottom: 2,
-                left: 2,
+                start: 2,
                 child: Container(
                   padding: const EdgeInsets.all(3),
                   decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
                   child: const Icon(LucideIcons.pencil, size: 11, color: Colors.white),
                 ),
               ),
-              Positioned(
+              PositionedDirectional(
                 top: 2,
-                right: 2,
+                end: 2,
                 child: InkWell(
                   onTap: () => onRemove(i),
                   child: Container(

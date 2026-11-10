@@ -12,6 +12,7 @@ import '../../../theme/fe_colors.dart';
 import '../../../theme/fe_status_tokens.dart';
 import '../../../theme/theme_extensions.dart';
 import 'snag_region_overlay.dart';
+import '../../../theme/app_font.dart';
 
 /// Translates [key] and fills its `%a` slots. Arguments are stringified here
 /// so call sites can pass counts directly.
@@ -499,7 +500,7 @@ class _Tag extends StatelessWidget {
     decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(999)),
     child: Text(
       label.toUpperCase(),
-      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.8),
+      style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: context.letterSpacingFor(0.8)),
     ),
   );
 }
@@ -558,8 +559,8 @@ class SnagStatusStepper extends StatelessWidget {
                               : null,
                         ),
                         if (i == 0 && snag.reopenedCount > 0)
-                          Positioned(
-                            right: -12,
+                          PositionedDirectional(
+                            end: -12,
                             top: -8,
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),

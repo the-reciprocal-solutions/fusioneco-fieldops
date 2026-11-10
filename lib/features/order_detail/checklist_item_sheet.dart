@@ -19,6 +19,7 @@ import '../../widgets/tech_popup.dart';
 import '../../widgets/voice_note_player.dart';
 import '../../widgets/voice_waveform.dart';
 import 'verification_sheet.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Everything a technician does to one task: run its timer, tick it off, add
 /// notes and photos.
@@ -199,7 +200,7 @@ class _ChecklistItemSheetState extends ConsumerState<ChecklistItemSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 8, 0),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -331,7 +332,7 @@ class _SignatureItemSheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+            padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 8, 0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -573,15 +574,15 @@ class _SessionRow extends StatelessWidget {
                 // end capture, which read as "no photo was taken" — the exact
                 // opposite of what its presence means.
                 if (session.faceCaptureUrl != null)
-                  const Icon(
+                  const DirIcon(
                     LucideIcons.logIn,
                     size: 12,
                     color: FeColors.primary,
                   ),
                 if (session.endFaceCaptureUrl != null)
                   const Padding(
-                    padding: EdgeInsets.only(left: 4),
-                    child: Icon(
+                    padding: EdgeInsetsDirectional.only(start: 4),
+                    child: DirIcon(
                       LucideIcons.logOut,
                       size: 12,
                       color: FeColors.primary,
@@ -856,9 +857,9 @@ class _AttachmentTile extends StatelessWidget {
                     ),
             ),
           ),
-          Positioned(
+          PositionedDirectional(
             top: 2,
-            right: 2,
+            end: 2,
             child: GestureDetector(
               onTap: () => _confirmRemove(context),
               child: Container(
@@ -938,7 +939,7 @@ class _NoteComposer extends StatelessWidget {
         IconButton(
           onPressed: enabled && !recording ? onSend : null,
           tooltip: 'order_detail.send_note'.getString(context),
-          icon: const Icon(LucideIcons.send, size: 20),
+          icon: const DirIcon(LucideIcons.send, size: 20),
         ),
       ],
     ),

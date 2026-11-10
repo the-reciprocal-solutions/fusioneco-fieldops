@@ -15,6 +15,7 @@ import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
+import '../../widgets/dir_icon.dart';
 
 /// FR-5.2 (room-grouped list) + FR-5.3 (verified/outstanding/flagged
 /// progress) for one downloaded route. Reads everything from local storage —
@@ -342,7 +343,7 @@ class _AssetRow extends StatelessWidget {
             AppText.caption('routes.queued_upload'.getString(context), color: FeColors.warning),
             const SizedBox(width: 8),
           ],
-          const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
+          const DirIcon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
         ],
       ),
     );

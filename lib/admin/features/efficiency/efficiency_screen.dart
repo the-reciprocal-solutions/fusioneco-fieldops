@@ -15,6 +15,7 @@ import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../modules/module_spec.dart';
 import 'efficiency_data.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// Page key (server mobile/visibility.ts HVAC_PAGES) → icon and colour.
 const _pageLook = <String, (IconData, Color)>{
@@ -174,7 +175,7 @@ class _ScoreCards extends ConsumerWidget {
                     ],
                   ),
                 ),
-                if (overview != null) const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+                if (overview != null) const DirIcon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
               ],
             ),
           ),

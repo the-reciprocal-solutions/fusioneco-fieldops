@@ -7,6 +7,7 @@ import '../../../core/ar/vec.dart';
 import '../../../state/ar_view_models.dart';
 import '../../../theme/fe_ar_colors.dart';
 import '../../../theme/fe_colors.dart';
+import '../../../theme/app_font.dart';
 
 /// A numbered stop on the plan (install run walking order).
 class ArPlanStop {
@@ -233,9 +234,9 @@ class _ArMiniPlanState extends State<ArMiniPlan> with SingleTickerProviderStateM
                 child: paint,
               ),
               if (widget.onExpand != null)
-                Positioned(
+                PositionedDirectional(
                   top: 4,
-                  right: 4,
+                  end: 4,
                   child: Material(
                     color: FeColors.panel.withValues(alpha: 0.92),
                     shape: const CircleBorder(),
@@ -497,7 +498,7 @@ class _PlanPainter extends CustomPainter {
   /// A centred label, skipped when it would overlap a pin or another label.
   void _textClear(Canvas canvas, String s, Offset at, TextStyle style, List<Rect> taken) {
     final tp = TextPainter(
-      text: TextSpan(text: s, style: style),
+      text: TextSpan(text: s, style: style.copyWith(fontFamily: kAppFont)),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
@@ -741,7 +742,7 @@ class _PlanPainter extends CustomPainter {
 
   void _text(Canvas canvas, String s, Offset at, TextStyle style, {bool center = false}) {
     final tp = TextPainter(
-      text: TextSpan(text: s, style: style),
+      text: TextSpan(text: s, style: style.copyWith(fontFamily: kAppFont)),
       textDirection: TextDirection.ltr,
       maxLines: 1,
     )..layout(maxWidth: 140);

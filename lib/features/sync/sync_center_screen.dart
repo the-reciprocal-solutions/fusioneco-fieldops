@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/router.dart';
 import '../../core/offline/left_on_device.dart';
+import '../../core/offline/mutation_label_text.dart';
 import '../../core/offline/mutation_labels.dart';
 import '../../core/offline/sync_client.dart' show SentWrite;
 import '../../core/offline/offline_db.dart';
@@ -18,6 +19,7 @@ import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../../widgets/sync_conflict_panel.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Everything sitting in the offline queue, grouped by the order it belongs
 /// to, with a "Sync all" and a per-item "Sync now". The Home screen's
@@ -213,6 +215,14 @@ class _Group {
   final OrderType? orderType;
   final String? entityId;
   final items = <PendingMutation>[];
+
+  /// [reference] with the order type in the app's language.
+  String? title(BuildContext context) {
+    final type = orderType;
+    final id = entityId;
+    if (type == null || id == null || id.isEmpty) return reference;
+    return '${type.displayLabel(context)} · ${id.length > 8 ? id.substring(0, 8) : id}';
+  }
 }
 
 class _GroupHeader extends StatelessWidget {
@@ -245,12 +255,12 @@ class _GroupHeader extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(
                 child: AppText.labelMedium(
-                  group.reference ?? 'sync.other_changes'.getString(context),
+                  group.title(context) ?? 'sync.other_changes'.getString(context),
                   color: FeColors.ink2,
                 ),
               ),
               if (canOpen)
-                const Icon(
+                const DirIcon(
                   LucideIcons.chevronRight,
                   size: 14,
                   color: FeColors.ink2,
@@ -299,7 +309,7 @@ class _MutationRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                AppText.bodyMedium(mutation.label, weight: FontWeight.w600),
+                AppText.bodyMedium(mutationLabelText(context, mutation.label), weight: FontWeight.w600),
                 const SizedBox(height: 2),
                 AppText.bodySmall(
                   sending
@@ -453,7 +463,7 @@ class _DraftsSection extends ConsumerWidget {
                       icon: const Icon(LucideIcons.trash2, size: 18, color: FeColors.danger),
                       onPressed: () => _confirmDiscard(context, ref, d),
                     ),
-                    const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
+                    const DirIcon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
                   ],
                 ),
               ),
@@ -517,7 +527,7 @@ class _SentSection extends StatelessWidget {
               children: [
                 const Icon(LucideIcons.circleCheckBig, size: 16, color: FeColors.success),
                 const SizedBox(width: 8),
-                Expanded(child: AppText.bodySmall(w.label, color: FeColors.ink)),
+                Expanded(child: AppText.bodySmall(mutationLabelText(context, w.label), color: FeColors.ink)),
                 AppText.caption(
                   context.formatString('sync.sent_at'.getString(context), [formatDateTimeShort(w.at)]),
                   color: FeColors.ink2,

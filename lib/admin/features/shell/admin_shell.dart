@@ -12,6 +12,7 @@ import '../../theme/fe_colors.dart';
 import '../../theme/theme_extensions.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/motion.dart';
+import '../../../theme/app_font.dart';
 
 /// Bottom nav: Home · Efficiency · Alerts · Operations · More.
 ///
@@ -171,7 +172,7 @@ class _NavButton extends StatelessWidget {
                 style: Theme.of(context).textTheme.labelSmall!.copyWith(
                       color: active ? FeColors.primary : FeColors.ink2,
                       fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                      letterSpacing: 0.25,
+                      letterSpacing: context.letterSpacingFor(0.25),
                     ),
                 child: AppText(item.labelKey.getString(context), maxLines: 1),
               ),

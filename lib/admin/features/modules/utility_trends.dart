@@ -13,6 +13,7 @@ import '../../widgets/common.dart';
 import 'module_spec.dart';
 import 'module_summary_screen.dart' show KpiTile;
 import 'utility_screens.dart';
+import '../../../theme/app_font.dart';
 
 /// The utility pages' **Trends** tab on the phone (web: MscTrends →
 /// TrendStudio): one device, one point, a time window, a line of the
@@ -251,7 +252,7 @@ class _Chart extends StatelessWidget {
         lineTouchData: LineTouchData(
           touchTooltipData: LineTouchTooltipData(
             getTooltipItems: (items) => [
-              for (final i in items) LineTooltipItem('${label(i.x)}\n${fmtNum(i.y, decimals: 2)}', const TextStyle(color: Colors.white, fontSize: 12)),
+              for (final i in items) LineTooltipItem('${label(i.x)}\n${fmtNum(i.y, decimals: 2)}', const TextStyle(fontFamily: kAppFont, color: Colors.white, fontSize: 12)),
             ],
           ),
         ),

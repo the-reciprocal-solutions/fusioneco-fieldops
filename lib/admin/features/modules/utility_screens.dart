@@ -22,6 +22,7 @@ import 'cctv_legacy.dart';
 import 'module_spec.dart';
 import 'module_summary_screen.dart';
 import 'utility_trends.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// Facility Utilities + HVAC on the phone (FE-mobile.md Phase 3b). Every
 /// utility page on the web defaults to the building system ("msc" variant,
@@ -322,7 +323,7 @@ Widget _kpiWrap(List<Kpi> kpis) => LayoutBuilder(
 );
 
 Widget _updated(BuildContext context, DateTime? at, Object? error) => Padding(
-  padding: const EdgeInsets.only(left: 4, top: 4, bottom: 8),
+  padding: const EdgeInsetsDirectional.only(start: 4, top: 4, bottom: 8),
   child: AppText.caption(
     at == null ? '' : context.formatString((error == null ? 'util.updated' : 'util.stale').getString(context), ['${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}']),
     color: error == null ? FeColors.ink2 : FeColors.warning,
@@ -587,7 +588,7 @@ class _UtilityRow extends StatelessWidget {
               ],
             ),
           ),
-          const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+          const DirIcon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
         ],
       ),
     );

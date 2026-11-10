@@ -116,7 +116,7 @@ class _PushSettingsScreenState extends ConsumerState<PushSettingsScreen> {
           ),
           const SizedBox(height: 16),
           Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            padding: const EdgeInsetsDirectional.only(start: 4, bottom: 8),
             child: AppText.caption('push.min_severity'.getString(context).toUpperCase(), weight: FontWeight.w700),
           ),
           TechCard(

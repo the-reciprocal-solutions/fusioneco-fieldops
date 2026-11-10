@@ -39,7 +39,7 @@ class _AdminAppState extends ConsumerState<AdminApp> {
     return MaterialApp.router(
       title: '${Env.brandName} Admin',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.build(),
+      theme: AppTheme.build(rtl: AppLocales.isRtl(languageCode)),
       supportedLocales: localization.supportedLocales,
       localizationsDelegates: localization.localizationsDelegates,
       locale: AppLocales.localeFor(languageCode),

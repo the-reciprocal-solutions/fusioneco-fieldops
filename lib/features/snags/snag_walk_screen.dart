@@ -807,8 +807,8 @@ class _SnagWalkScreenState extends ConsumerState<SnagWalkScreen> with WidgetsBin
                           compactRegions: true,
                         ),
                       ),
-                      Positioned(
-                        right: 3,
+                      PositionedDirectional(
+                        end: 3,
                         bottom: 3,
                         child: Container(
                           padding: const EdgeInsets.all(2),

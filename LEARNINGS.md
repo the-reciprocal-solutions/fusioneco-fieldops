@@ -245,8 +245,8 @@ Entries marked **Source:** were carried over on 2026-09-25 from `fusion-eco-serv
 **What happened:** Arabic reverted to English after moving between bottom-nav tabs. **Cause:** screens read `FlutterLocalization.instance.currentLocale` directly. The package's delegate freezes its string table at construction, and the shell's indexed-stack rebuilds let it drift from `currentLocale`. **Fix:** `LocaleController` is the only caller of `translate()`, and every widget watches it. `Directionality` is pinned explicitly in `app.dart`. **What to watch:** never read or set the locale through the package singleton.
 **Where:** `lib/state/locale_controller.dart:6-62`, `lib/app/app.dart:73`
 
-### An i18n key can be missing from both files at once (2026-09-25, open)
-**What happened:** `common.pull_down_to_retry` is used in three screens but exists in neither `en.json` nor `ar.json`. **Cause:** only en and ar were compared with each other (both have 595 keys and match). **Fix:** not fixed. Add the key, plus a test that checks every `'x.y'.getString` literal in `lib/` against `en.json`. **What to watch:** key-parity checks alone can't catch this.
+### An i18n key can be missing from both files at once (2026-09-25, fixed 2026-11-10)
+**What happened:** `common.pull_down_to_retry` is used in three screens but exists in neither `en.json` nor `ar.json`. **Cause:** only en and ar were compared with each other (both have 595 keys and match). **Fix:** key added 2026-11-10 (P-036). Still worth a test that checks every `'x.y'.getString` literal in `lib/` against `en.json`. **What to watch:** key-parity checks alone can't catch this.
 **Where:** `lib/features/profile/profile_screen.dart:130`, `lib/features/invites/invites_screen.dart:101`, `lib/features/notifications/notifications_screen.dart:88`
 
 ### Device-specific Flutter traps (pre-2026-09-25)
@@ -653,3 +653,13 @@ Design: [docs/permit-to-work.md](docs/permit-to-work.md). Server: `../fusion-eco
 ### A missing translation is "<key> not found", not the key (2026-11-03)
 **What happened:** a snag's history showed "snag.ev_work_order_linked not found". The fallback compared the result with the key, but flutter_localization returns "<key> not found". **Fix:** labels added, and the fallback also catches that text. **What to watch:** any `v == key` "missing translation" check is wrong with this package.
 **Where:** `lib/admin/features/photo_twin/snag_actions.dart` (`_eventLabel`)
+
+### flutter_localization `getString` returns "<key> not found", not the key (2026-11-10)
+**What happened:** a fallback written as `v == key ? raw : v` never fires, because a missing key comes back as `'$key not found'`. **Fix:** check known values with a `switch`, or use `FlutterLocalizationTranslator.instance.getStringOrKey` (as admin `serverText` does). **Watch:** dynamic keys like `'x.status_$s'` show "… not found" for a value the JSON doesn't list.
+**Where:** `lib/features/inspection/inspection_list_screen.dart` `_statusLabel`
+
+### Translate stored English labels when drawing them, not where they're written (2026-11-10)
+**What happened:** sync queue labels are English strings saved in SQLite and also used in logs. Changing the repositories would leave every already-queued write in English. **Fix:** `mutationLabelText()` maps the stored text (exact + a few regexes) to keys when the Sync Center draws it, and shows unknown labels unchanged. **Watch:** a new or reworded `label:` in `lib/data/` needs a row in `core/offline/mutation_label_text.dart`.
+
+### Mirroring Lucide icons in RTL: flip the widget, not the IconData (2026-11-10)
+**What happened:** Lucide icons don't set `matchTextDirection`. Building `IconData(..., matchTextDirection: true)` at runtime makes the icon non-const, which breaks icon tree-shaking in release builds. A `const <IconData>{...}` set also fails to compile (`const_set_element_not_primitive_equality`), because `IconData` overrides `==`. **Fix:** `DirIcon` (`lib/widgets/dir_icon.dart`) wraps a normal `Icon` in `Transform.flip` under RTL; `DirIcon.auto` checks a const *list*. **Watch:** don't mirror arrows that point at something physical (AR nudges, the annotation arrow tool), and keep coordinate-placed `Positioned` (plan pins, the before/after split) physical.

@@ -216,7 +216,7 @@ class _RunView extends ConsumerWidget {
                 Expanded(
                   flex: 11,
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(0, 16, 16, 16),
+                    padding: const EdgeInsetsDirectional.fromSTEB(0, 16, 16, 16),
                     child: TechCard(padding: const EdgeInsets.all(10), child: planWidget),
                   ),
                 ),

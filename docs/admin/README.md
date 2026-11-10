@@ -6,7 +6,7 @@ Technicians use FieldOps (`../technician_portal`). The plan is `FE-mobile.md` in
 
 Same stack and idioms as technician_portal: Flutter 3.47 / Dart 3.13, Riverpod 2
 (hand-written, no codegen), go_router, Dio, flutter_secure_storage,
-flutter_localization (JSON, EN + AR/RTL), google_fonts + lucide icons.
+flutter_localization (JSON, EN + AR/RTL), bundled Montserrat (shared with the technician side) + lucide icons.
 
 - Android package / iOS bundle: `com.fusionapps.admin`
 

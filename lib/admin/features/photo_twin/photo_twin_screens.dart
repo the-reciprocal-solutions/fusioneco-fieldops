@@ -167,7 +167,7 @@ class _PhotoTwinScreenState extends ConsumerState<PhotoTwinScreen> {
               if (_scans.isNotEmpty) const Padding(padding: EdgeInsets.only(bottom: 10), child: DesktopNote(textKey: 'desktop.twin_scans')),
               for (final b in _buildings)
                 if (_scans[b['id']] case final scans?) ...[
-                  Padding(padding: const EdgeInsets.only(left: 4, bottom: 8), child: AppText.titleSmall(s(b['name']) ?? '–')),
+                  Padding(padding: const EdgeInsetsDirectional.only(start: 4, bottom: 8), child: AppText.titleSmall(s(b['name']) ?? '–')),
                   for (final scan in scans) Padding(padding: const EdgeInsets.only(bottom: 10), child: _ScanCard(scan)),
                 ],
             ],
@@ -193,7 +193,7 @@ class _PhotoTwinScreenState extends ConsumerState<PhotoTwinScreen> {
   }
 
   Widget _heading(BuildContext context, String key) => Padding(
-        padding: const EdgeInsets.only(left: 4, top: 20, bottom: 10),
+        padding: const EdgeInsetsDirectional.only(start: 4, top: 20, bottom: 10),
         child: AppText.caption(key.getString(context).toUpperCase(), weight: FontWeight.w700),
       );
 }

@@ -109,7 +109,7 @@ class _ArMenuPanelPhoneState extends State<ArMenuPanelPhone> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                  padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 8, 8),
                   child: Row(
                     children: [
                       Expanded(
@@ -159,7 +159,7 @@ class _PanelColumn extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+          padding: const EdgeInsetsDirectional.fromSTEB(20, 16, 8, 8),
           child: Row(
             children: [
               Expanded(child: AppText.title(title, weight: FontWeight.w800)),

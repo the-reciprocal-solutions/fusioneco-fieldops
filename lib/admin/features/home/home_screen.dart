@@ -19,6 +19,7 @@ import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../modules/module_spec.dart';
 import '../modules/module_summary_screen.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// Home = the Dashboard V3 summary (FE-mobile.md Phase 3a). The doc is the
 /// provider the user's brand switch picks (`prefs.dashboardEnv`), ~3.5 KB.
@@ -170,7 +171,7 @@ class _Hero extends ConsumerWidget {
             SafeArea(
               bottom: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 6, 12, 0),
+                padding: const EdgeInsetsDirectional.fromSTEB(20, 6, 12, 0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -293,7 +294,7 @@ class _AssetHealthCard extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(child: AppText.titleSmall(title)),
-                if (onOpen != null) const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+                if (onOpen != null) const DirIcon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
               ],
             ),
           ),

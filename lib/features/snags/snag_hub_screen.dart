@@ -20,6 +20,7 @@ import '../../widgets/tech_popup.dart';
 import 'widgets/snag_card.dart';
 import 'widgets/snag_sheets.dart';
 import 'widgets/snag_visuals.dart';
+import '../../widgets/dir_icon.dart';
 
 enum _ListFilter { live, ready, closed, all }
 
@@ -645,8 +646,8 @@ class _WaitingCard extends StatelessWidget {
             Stack(
               children: [
                 SnagPhoto(evidence: item.snag.coverPhoto, height: 84),
-                Positioned(
-                  left: 8,
+                PositionedDirectional(
+                  start: 8,
                   top: 8,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
@@ -725,7 +726,7 @@ class _SurveyTile extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          const Icon(LucideIcons.chevronRight, color: FeColors.ink2, size: 18),
+          const DirIcon(LucideIcons.chevronRight, color: FeColors.ink2, size: 18),
         ],
       ),
     );

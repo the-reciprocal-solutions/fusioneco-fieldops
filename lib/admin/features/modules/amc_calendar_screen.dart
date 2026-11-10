@@ -15,6 +15,7 @@ import '../../widgets/catalog_view.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import 'module_spec.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// AMC's calendar on the phone (the web's schedule calendar). One month at a
 /// time — `GET /api/fm/schedule-management/calendar?year=&month=` →
@@ -103,9 +104,9 @@ class _AmcCalendarScreenState extends ConsumerState<AmcCalendarScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Row(
                 children: [
-                  IconButton(icon: const Icon(LucideIcons.chevronLeft), tooltip: l.previousMonthTooltip, onPressed: () => _shift(-1)),
+                  IconButton(icon: const DirIcon(LucideIcons.chevronLeft), tooltip: l.previousMonthTooltip, onPressed: () => _shift(-1)),
                   Expanded(child: AppText.titleMedium(l.formatMonthYear(_month), align: TextAlign.center)),
-                  IconButton(icon: const Icon(LucideIcons.chevronRight), tooltip: l.nextMonthTooltip, onPressed: () => _shift(1)),
+                  IconButton(icon: const DirIcon(LucideIcons.chevronRight), tooltip: l.nextMonthTooltip, onPressed: () => _shift(1)),
                 ],
               ),
             ),

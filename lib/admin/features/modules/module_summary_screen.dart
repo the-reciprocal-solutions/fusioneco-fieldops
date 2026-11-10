@@ -191,7 +191,7 @@ class _ModuleSummaryScreenState extends ConsumerState<ModuleSummaryScreen> {
                 ],
                 if (_total != null)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 8, left: 4),
+                    padding: const EdgeInsetsDirectional.only(bottom: 8, start: 4),
                     child: AppText.label(
                       context.formatString('module.records'.getString(context), [fmtNum(_total)]),
                       color: FeColors.ink2,
@@ -320,7 +320,7 @@ class KpiTile extends StatelessWidget {
       final oneLine = FittedBox(fit: BoxFit.scaleDown, alignment: AlignmentDirectional.centerStart, child: AppText.caption(kpiLabel(context, kpi.label), maxLines: 1));
       return TechCard(
         radius: 16,
-        padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+        padding: const EdgeInsetsDirectional.fromSTEB(10, 10, 8, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [badge, const SizedBox(height: 6), FittedBox(fit: BoxFit.scaleDown, alignment: AlignmentDirectional.centerStart, child: value), oneLine],
@@ -407,7 +407,7 @@ class RecordCard extends StatelessWidget {
       onTap: onTap,
       radius: 16,
       accentLeft: accent,
-      padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+      padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 14, 12),
       child: icon == null
           ? body
           : Row(

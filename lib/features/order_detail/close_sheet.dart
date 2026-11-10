@@ -329,7 +329,7 @@ class _CloseSheetState extends ConsumerState<CloseSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 8, 0),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -423,7 +423,7 @@ class _CloseSheetState extends ConsumerState<CloseSheet> {
                         ),
                       if (_openWindow == null && !_predicted)
                         Align(
-                          alignment: Alignment.centerRight,
+                          alignment: AlignmentDirectional.centerEnd,
                           child: TextButton.icon(
                             onPressed: _applyPredicted,
                             icon: const Icon(LucideIcons.timerReset, size: 14),

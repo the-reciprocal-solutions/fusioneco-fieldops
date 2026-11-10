@@ -284,7 +284,7 @@ class _BuildingSheetState extends State<_BuildingSheet> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 8, 0),
+                padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 8, 0),
                 child: Row(
                   children: [
                     Expanded(child: AppText.titleSmall('alerts.filter_building'.getString(context))),
@@ -343,7 +343,7 @@ class _AlertCard extends StatelessWidget {
         accentLeft: severityHue(a.severity),
         borderColor: selected ? FeColors.primary : null,
         radius: 16,
-        padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+        padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 14, 12),
         onTap: onTap,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,

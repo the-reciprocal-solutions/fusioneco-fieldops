@@ -271,7 +271,7 @@ Known gaps:
 
 ## 9. UI, theme & i18n conventions
 
-**Theme** (light only, "Navy Professional"; [app_theme.dart](../lib/theme/app_theme.dart), Poppins from `google_fonts`):
+**Theme** (light only, "Navy Professional"; [app_theme.dart](../lib/theme/app_theme.dart), Montserrat bundled in `assets/fonts/montserrat/`, set once as `ThemeData.fontFamily`; canvas text uses `kAppFont` from [app_font.dart](../lib/theme/app_font.dart); inline `letterSpacing` goes through `context.letterSpacingFor(x)` so Arabic gets 0. RTL: use `EdgeInsetsDirectional` / `PositionedDirectional` / `AlignmentDirectional` / `BorderDirectional` for UI sides (physical left/right only for things placed by coordinates), and `DirIcon` for any arrow that means back/next/send/sign-in-out. Montserrat has no Arabic letters, so Arabic uses the phone's system font):
 - Colors: use [`FeColors`](../lib/theme/fe_colors.dart) (`primary`, `page`, `panel`, `line`, `ink`, `ink2`,
   `success/warning/danger/info` + `*Soft`). Status, priority, condition and SLA hues come from
   [`FeStatusHues`](../lib/theme/fe_status_tokens.dart), which are ported from the web portal's

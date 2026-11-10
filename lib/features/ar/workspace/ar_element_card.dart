@@ -35,8 +35,8 @@ class ArDisciplineTile extends StatelessWidget {
       height: size + 4,
       child: Stack(
         children: [
-          Positioned(
-            left: 0,
+          PositionedDirectional(
+            start: 0,
             top: 4,
             child: Container(
               width: size,
@@ -50,8 +50,8 @@ class ArDisciplineTile extends StatelessWidget {
             ),
           ),
           if (target)
-            Positioned(
-              right: 0,
+            PositionedDirectional(
+              end: 0,
               top: 0,
               child: Container(
                 width: 18,

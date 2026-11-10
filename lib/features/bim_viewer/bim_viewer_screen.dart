@@ -151,7 +151,7 @@ class _BimViewerScreenState extends ConsumerState<BimViewerScreen> {
       children: [
         _Toolbar(state: s, controller: _controller),
         if (s.isDemo)
-          const Padding(padding: EdgeInsets.fromLTRB(12, 0, 12, 8), child: Align(alignment: Alignment.centerLeft, child: ArDemoBanner())),
+          const Padding(padding: EdgeInsets.fromLTRB(12, 0, 12, 8), child: Align(alignment: AlignmentDirectional.centerStart, child: ArDemoBanner())),
         if (!s.model3dAvailable) _No3dBanner(onRetry: _retry3d),
         if (s.needsDownload || s.downloading != null || s.downloadErrorKey != null)
           _DownloadBanner(state: s, onDownload: _controller.download),
@@ -358,9 +358,9 @@ class _ModelPane extends StatelessWidget {
         Positioned.fill(child: started ? engine.buildView(context) : const SizedBox.expand()),
         if (!state.engineReady) const Center(child: CircularProgressIndicator()),
         if (loadingTiles)
-          Positioned(
+          PositionedDirectional(
             top: 10,
-            left: 10,
+            start: 10,
             child: _Pill(
               icon: LucideIcons.download,
               text: arTr(context, 'bim_viewer.tiles_loading', [state.tilesLoaded, state.tilesTotal]),
@@ -372,14 +372,14 @@ class _ModelPane extends StatelessWidget {
             left: 10,
             right: 10,
             child: Align(
-              alignment: Alignment.topLeft,
+              alignment: AlignmentDirectional.topStart,
               child: _Pill(icon: LucideIcons.info, text: 'bim_viewer.walls_from_plan'.getString(context)),
             ),
           ),
         if (state.camera == BimCameraMode.walk && state.engineReady)
-          Positioned(
+          PositionedDirectional(
             top: 10,
-            right: 10,
+            end: 10,
             child: _Pill(icon: LucideIcons.info, text: 'bim_viewer.walk_hint'.getString(context)),
           ),
       ],
@@ -422,9 +422,9 @@ class _PlanPane extends StatelessWidget {
           ),
         ),
         if (room != null && room.name.trim().isNotEmpty && state.layout == BimViewLayout.split)
-          Positioned(
+          PositionedDirectional(
             top: 8,
-            left: 8,
+            start: 8,
             child: _Pill(icon: LucideIcons.mapPin, text: arTr(context, 'bim_viewer.you_are_in', [room.name])),
           ),
       ],
@@ -506,7 +506,7 @@ class _SelectionCard extends StatelessWidget {
     final sub = [selection.ifcType, selection.discipline].where((v) => v != null && v.isNotEmpty).join(' · ');
     final assetId = selection.assetId;
     return TechCard(
-      padding: const EdgeInsets.fromLTRB(14, 10, 6, 8),
+      padding: const EdgeInsetsDirectional.fromSTEB(14, 10, 6, 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -548,7 +548,7 @@ class _SelectionCard extends StatelessWidget {
           ),
           if (assetId != null)
             Padding(
-              padding: const EdgeInsets.only(top: 4, right: 8),
+              padding: const EdgeInsetsDirectional.only(top: 4, end: 8),
               child: Wrap(
                 spacing: 8,
                 runSpacing: 4,
@@ -644,7 +644,7 @@ class _No3dBanner extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
       child: TechCard(
         tint: FeColors.warningSoft,
-        padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+        padding: const EdgeInsetsDirectional.fromSTEB(14, 10, 8, 10),
         child: Row(
           children: [
             const Icon(LucideIcons.triangleAlert, size: 18, color: FeColors.warning),

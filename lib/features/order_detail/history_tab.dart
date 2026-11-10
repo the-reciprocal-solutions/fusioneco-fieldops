@@ -10,6 +10,7 @@ import '../../theme/fe_colors.dart';
 import '../../theme/theme_extensions.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
+import '../../widgets/dir_icon.dart';
 
 /// The web renders this as a desktop data table; on a phone it is a timeline.
 class HistoryTab extends ConsumerWidget {
@@ -152,7 +153,7 @@ class _HistoryRow extends StatelessWidget {
                 ),
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 6),
-                  child: Icon(LucideIcons.arrowRight,
+                  child: DirIcon(LucideIcons.arrowRight,
                       size: 12, color: FeColors.ink2),
                 ),
                 Flexible(

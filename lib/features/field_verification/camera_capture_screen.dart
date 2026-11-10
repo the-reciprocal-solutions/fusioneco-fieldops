@@ -152,17 +152,17 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
                   child: _LevelOverlay(rollX: _rollX, pitchZ: _pitchZ),
                 ),
               ),
-            Positioned(
+            PositionedDirectional(
               top: 4,
-              left: 4,
+              start: 4,
               child: IconButton(
                 icon: const Icon(LucideIcons.x, color: Colors.white),
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ),
-            Positioned(
+            PositionedDirectional(
               top: 4,
-              right: 4,
+              end: 4,
               child: IconButton(
                 tooltip: _torchOn
                     ? 'fieldVerify.torch_off'.getString(context)

@@ -14,6 +14,7 @@ import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../modules/module_spec.dart';
 import 'efficiency_data.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// "Ask AI" on one finding — the web's AskAi.tsx chat (finding page), over
 ///   POST /api/fm/hvac-efficiency/explain {kind: "ask", context}
@@ -363,7 +364,7 @@ class _AskAiCardState extends ConsumerState<AskAiCard> {
                 ),
               ),
               const SizedBox(width: 8),
-              IconButton.filled(onPressed: _busy ? null : () => _ask(_q.text), icon: const Icon(LucideIcons.send, size: 18)),
+              IconButton.filled(onPressed: _busy ? null : () => _ask(_q.text), icon: const DirIcon(LucideIcons.send, size: 18)),
             ],
           ),
         ],
@@ -380,7 +381,7 @@ class _Question extends StatelessWidget {
   Widget build(BuildContext context) => Align(
         alignment: AlignmentDirectional.centerEnd,
         child: Container(
-          margin: const EdgeInsets.only(bottom: 8, left: 40),
+          margin: const EdgeInsetsDirectional.only(bottom: 8, start: 40),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(color: FeColors.primary, borderRadius: BorderRadius.circular(14)),
           child: AppText.bodySmall(text, color: Colors.white),

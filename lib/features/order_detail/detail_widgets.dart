@@ -12,6 +12,7 @@ import '../../theme/theme_extensions.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/tech_popup.dart';
+import '../../theme/app_font.dart';
 
 /// Work-order status block. Read-only: Start and Complete live on the
 /// checklist tab, which has the completion context the close flow needs.
@@ -402,7 +403,7 @@ class ChecklistSummaryCard extends StatelessWidget {
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: FeColors.primary,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: 1.5,
+                    letterSpacing: context.letterSpacingFor(1.5),
                   ),
                 ),
                 const SizedBox(height: 4),

@@ -16,6 +16,7 @@ import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../../widgets/text_prompt.dart';
 import 'module_spec.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// One record of a Phase 3 module: header, facts, light actions. Opened from
 /// the list with the row as [initial]; fetches the fresh record when the spec
@@ -284,7 +285,7 @@ class _ActionButton extends StatelessWidget {
     final child = Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
-      children: [Icon(icon, size: 16), const SizedBox(width: 6), Flexible(child: AppText(label, maxLines: 1, overflow: TextOverflow.ellipsis))],
+      children: [DirIcon.auto(icon, size: 16), const SizedBox(width: 6), Flexible(child: AppText(label, maxLines: 1, overflow: TextOverflow.ellipsis))],
     );
     if (primary) return ElevatedButton(onPressed: onTap, child: child);
     return OutlinedButton(

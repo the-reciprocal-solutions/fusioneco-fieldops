@@ -16,6 +16,8 @@ import '../../widgets/common.dart';
 import '../../widgets/motion.dart';
 import '../../widgets/progress_ring.dart';
 import '../../widgets/tech_header.dart';
+import '../../theme/app_font.dart';
+import '../../widgets/dir_icon.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -55,11 +57,11 @@ class ProfileScreen extends ConsumerWidget {
                 children: [
                   Text(
                     'profile.title'.getString(context),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 26,
                       fontWeight: FontWeight.w800,
                       color: FeColors.ink,
-                      letterSpacing: -0.5,
+                      letterSpacing: context.letterSpacingFor(-0.5),
                     ),
                   ),
                   Material(
@@ -83,7 +85,7 @@ class ProfileScreen extends ConsumerWidget {
                             ),
                           ],
                         ),
-                        child: const Icon(
+                        child: const DirIcon(
                           LucideIcons.logOut,
                           size: 18,
                           color: Color(0xFFEF4444),
@@ -110,11 +112,11 @@ class ProfileScreen extends ConsumerWidget {
               // Performance Section
               Text(
                 'profile.performance_section'.getString(context),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
                   color: FeColors.ink,
-                  letterSpacing: -0.2,
+                  letterSpacing: context.letterSpacingFor(-0.2),
                 ),
               ),
               const SizedBox(height: 12),
@@ -139,11 +141,11 @@ class ProfileScreen extends ConsumerWidget {
                 const SizedBox(height: 22),
                 Text(
                   'profile.certifications_section'.getString(context),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
                     color: FeColors.ink,
-                    letterSpacing: -0.2,
+                    letterSpacing: context.letterSpacingFor(-0.2),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -191,7 +193,7 @@ class ProfileScreen extends ConsumerWidget {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(
+                          const DirIcon(
                             LucideIcons.logOut,
                             size: 18,
                             color: Color(0xFFEF4444),
@@ -298,11 +300,11 @@ class _ProfileHeroCard extends StatelessWidget {
                       children: [
                         Text(
                           name,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 21,
                             fontWeight: FontWeight.w800,
                             color: FeColors.ink,
-                            letterSpacing: -0.3,
+                            letterSpacing: context.letterSpacingFor(-0.3),
                           ),
                         ),
                         if (email != null) ...[
@@ -396,11 +398,11 @@ class _FactPill extends StatelessWidget {
       children: [
         Text(
           label.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 10.5,
             fontWeight: FontWeight.w700,
             color: Color(0xFF64748B),
-            letterSpacing: 0.5,
+            letterSpacing: context.letterSpacingFor(0.5),
           ),
         ),
         const SizedBox(height: 2),
@@ -1019,7 +1021,7 @@ class _MySchedulesLink extends StatelessWidget {
             ],
           ),
         ),
-        const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+        const DirIcon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
       ],
     ),
   );

@@ -10,6 +10,7 @@ import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
 import 'snag_region_overlay.dart';
 import 'snag_visuals.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// One suggestion the technician can apply.
 enum SnagAiField { title, description, trade, priority, issueType, cause, fix, responsible }
@@ -267,7 +268,7 @@ class SnagAiPanel extends StatelessWidget {
                               ),
                             ),
                             AppText.bodySmall(SnagVisuals.statusLabel(context, d.status), color: FeColors.ink2),
-                            const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
+                            const DirIcon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
                           ],
                         ),
                       ),
@@ -325,7 +326,7 @@ class _SuggestionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+    padding: const EdgeInsetsDirectional.fromSTEB(10, 6, 4, 6),
     decoration: BoxDecoration(
       color: Colors.white,
       borderRadius: BorderRadius.circular(12),
@@ -428,7 +429,7 @@ class _ThinkingState extends State<_Thinking> with SingleTickerProviderStateMixi
               children: [
                 for (var i = 0; i < 3; i++)
                   Padding(
-                    padding: const EdgeInsets.only(right: 4),
+                    padding: const EdgeInsetsDirectional.only(end: 4),
                     child: Opacity(
                       opacity: 0.3 + 0.7 * (((_c.value * 3 - i) % 3) < 1 ? 1 : 0),
                       child: const CircleAvatar(radius: 4, backgroundColor: FeColors.ai),

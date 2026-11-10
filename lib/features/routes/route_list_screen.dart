@@ -16,6 +16,7 @@ import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
+import '../../widgets/dir_icon.dart';
 
 /// FR-5.1 + FR-5.5 — Route mode's entry point. Top: routes an admin assigned
 /// to this technician ("what's waiting for me"), each one tap from a size
@@ -475,7 +476,7 @@ class _AssignedRouteCardState extends ConsumerState<_AssignedRouteCard> {
     IconButton(
       tooltip: 'routes.release'.getString(context),
       onPressed: _busy ? null : _release,
-      icon: const Icon(LucideIcons.logOut, size: 20, color: FeColors.ink2),
+      icon: const DirIcon(LucideIcons.logOut, size: 20, color: FeColors.ink2),
     ),
   ];
 }
@@ -776,9 +777,9 @@ class _DownloadRouteSheetState extends ConsumerState<_DownloadRouteSheet> {
   Widget build(BuildContext context) {
     final busy = _checking || _downloading;
     return Padding(
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
+      padding: EdgeInsetsDirectional.only(
+        start: 20,
+        end: 20,
         top: 12,
         bottom: MediaQuery.of(context).viewInsets.bottom + 24,
       ),

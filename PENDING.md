@@ -23,9 +23,19 @@ Work this repo still owes: unfinished, partly done, blocked, or built but never 
 - **Next step:** <the first concrete action>
 -->
 
-Next number: **P-036**
+Next number: **P-037**
 
 ## Open
+
+### P-036 · Arabic: rest of the RTL/typography audit (2026-11-10), plus a phone check of the translated screens
+- **Status:** partial · **Priority:** P2 · **Area:** i18n, theme, inspections, sync
+- **Found:** 2026-11-10 (Arabic audit of every page)
+- **Done so far:** translated the inspection list + form (were all English), Sync Center / conflict panel queue labels (`core/offline/mutation_label_text.dart` translates the stored English label when drawn, so already-queued writes show Arabic too; order-group titles use `OrderType.displayLabel`), the day-card refusal text, the AI chat "no response" fallback, and added the missing `common.pull_down_to_retry`. 103 keys added to both `en.json`/`ar.json` (3513 each). `flutter analyze` on the changed files clean, related tests pass (Flutter 3.47.2). Checked: gas-verdict and AR error `message`s are never drawn (UI uses keys), so left as is.
+- **2026-11-10 (later):** owner: "all the text uses the font Montserrat, no other font". Montserrat (400–900 + italic, OFL) bundled in `assets/fonts/montserrat/`, `google_fonts` dropped, both themes set `fontFamily: 'Montserrat'`, canvas text (`ar_mini_plan`, `bim_plan_view`, chart tooltips) uses `kAppFont`. Letter spacing is 0 in Arabic: themes via `AppTheme.build(rtl:)`, 40 inline sites via `context.letterSpacingFor()`. `flutter analyze` 0 errors (same 30 old infos), `flutter test` 1476 pass. Montserrat has no Arabic letters, so Arabic still draws in the phone's system font; that's the font's limit, not a bug (a matching Arabic face would be a separate font, which the owner ruled out).
+- **Left:** (3) `core/utils/dates.dart` month/day names stay English (needs `initializeDateFormatting` once in `main()` and tests); (4) ~~RTL mirroring~~ done 2026-11-10: 18 `EdgeInsets.only` and 23 uneven `fromLTRB` → `EdgeInsetsDirectional`; 34 UI corner `Positioned` (badges, close/remove buttons, photo chips, toast, BIM pills) → `PositionedDirectional`; chat bubble side + tail corner, blockquote and AR-coach stripes, snag-card stripe, 10 text/row `Alignment`s → directional; direction icons (chevrons, back/next arrows, send, log in/out, undo/redo) mirror via `widgets/dir_icon.dart` (`DirIcon`, `DirIcon.auto` in shared header/badge/action widgets). `TechCard`/`GradientCard`/AR chrome `padding` widened to `EdgeInsetsGeometry`. Left physical on purpose: floor-plan/snag-plan/AR pins placed by x/y, AR workspace overlays, the before/after photo split and its labels (`snag_visuals.dart:453-474`), decorative gradients, header art, scanner corners, AR nudge arrows and the annotation arrow tool. Analyzer 0 errors, 1478 tests pass (+`test/dir_icon_test.dart`); not seen on a phone; (5) `conv.chip_remind_text`/`chip_watch_text` are still English in `ar.json` (probably parser triggers, confirm); (6) look at the inspection form, Sync Center and day card in Arabic on a phone, and check the Montserrat switch didn't overflow any English layout (wider than Poppins).
+- **Why deferred:** owner asked for translations first.
+- **Where:** `lib/theme/app_theme.dart:264-275`, `lib/admin/theme/app_theme.dart:292-303`, `lib/core/utils/dates.dart`
+- **Next step:** dates (`initializeDateFormatting` in `main()`), then a phone pass in Arabic.
 
 ### P-035 · Admin screens moved into FieldOps (one app): built and tested, not yet run on a phone with an admin
 - **Status:** needs verification · **Priority:** P1 · **Area:** sign-in, push, `lib/admin/`

@@ -7,6 +7,8 @@ import '../theme/theme_extensions.dart';
 import 'app_text.dart';
 import 'fe_header.dart';
 import 'motion.dart';
+import '../../theme/app_font.dart';
+import '../../widgets/dir_icon.dart';
 
 /// The portal's one surface treatment: a soft, floating card. Depth comes
 /// from a wide low-opacity shadow rather than a border — the "card floats a
@@ -38,7 +40,7 @@ class TechCard extends StatelessWidget {
   }) : assert(!dark || tint == null, 'dark and tint are mutually exclusive');
 
   final Widget child;
-  final EdgeInsets padding;
+  final EdgeInsetsGeometry padding;
   final Color? borderColor;
   final VoidCallback? onTap;
   final Color? accentTop;
@@ -169,7 +171,7 @@ class TechEmptyState extends StatelessWidget {
             color: iconColor.withValues(alpha: 0.1),
             shape: BoxShape.circle,
           ),
-          child: Icon(icon, size: iconSize * 0.6, color: iconColor),
+          child: DirIcon.auto(icon, size: iconSize * 0.6, color: iconColor),
         ),
         const SizedBox(height: 16),
         AppText.bodyMedium(
@@ -220,7 +222,7 @@ class TechChip extends StatelessWidget {
       style: Theme.of(context).textTheme.labelSmall?.copyWith(
         color: style.foreground,
         fontWeight: FontWeight.w700,
-        letterSpacing: 0.5,
+        letterSpacing: context.letterSpacingFor(0.5),
       ),
     ),
   );
@@ -248,7 +250,7 @@ class IconBadge extends StatelessWidget {
     width: size,
     alignment: Alignment.center,
     decoration: BoxDecoration(color: style.background, borderRadius: BorderRadius.circular(size * 0.3)),
-    child: Icon(icon, size: iconSize, color: style.foreground),
+    child: DirIcon.auto(icon, size: iconSize, color: style.foreground),
   );
 }
 
@@ -286,7 +288,7 @@ class GradientCard extends StatelessWidget {
 
   final Widget child;
   final List<Color> colors;
-  final EdgeInsets padding;
+  final EdgeInsetsGeometry padding;
   final VoidCallback? onTap;
 
   @override
@@ -325,7 +327,7 @@ class MenuTile extends StatelessWidget {
             IconBadge(icon: icon, style: FeBadgeStyle.of(color), size: 36, iconSize: 18),
             const SizedBox(width: 8),
             Expanded(child: AppText.titleSmall(label, maxLines: 2, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontSize: 12.5, height: 16 / 12.5, fontWeight: FontWeight.w600))),
-            const Icon(LucideIcons.chevronRight, size: 14, color: FeColors.ink2),
+            const DirIcon(LucideIcons.chevronRight, size: 14, color: FeColors.ink2),
           ],
         ),
       );

@@ -13,6 +13,7 @@ import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../../widgets/order_card.dart';
+import '../../widgets/dir_icon.dart';
 
 /// A month at a glance, with the selected day's jobs underneath.
 class CalendarScreen extends ConsumerWidget {
@@ -54,7 +55,7 @@ class CalendarScreen extends ConsumerWidget {
                       onPressed: ref
                           .read(calendarMonthProvider.notifier)
                           .previous,
-                      icon: const Icon(LucideIcons.chevronLeft, size: 20),
+                      icon: const DirIcon(LucideIcons.chevronLeft, size: 20),
                     ),
                     Expanded(
                       child: AppText.titleMedium(
@@ -65,7 +66,7 @@ class CalendarScreen extends ConsumerWidget {
                     ),
                     IconButton(
                       onPressed: ref.read(calendarMonthProvider.notifier).next,
-                      icon: const Icon(LucideIcons.chevronRight, size: 20),
+                      icon: const DirIcon(LucideIcons.chevronRight, size: 20),
                     ),
                   ],
                 ),

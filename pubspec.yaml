@@ -34,7 +34,6 @@ dependencies:
   shared_preferences: ^2.3.3
 
   # ui
-  google_fonts: ^6.2.1
   lucide_icons_flutter: ^3.0.0
 
   # device capture — checklist sessions record a face photo and coordinates,
@@ -112,3 +111,23 @@ flutter:
     # the app's loopback server. Folders aren't recursive, so vendor/ too.
     - assets/bim_viewer/
     - assets/bim_viewer/vendor/
+
+  # The app's only typeface, bundled so it works offline from the first
+  # launch (OFL, assets/fonts/montserrat/OFL.txt). Montserrat has no Arabic
+  # letters; Arabic text falls back to the phone's system font.
+  fonts:
+    - family: Montserrat
+      fonts:
+        - asset: assets/fonts/montserrat/Montserrat-Regular.ttf
+        - asset: assets/fonts/montserrat/Montserrat-Italic.ttf
+          style: italic
+        - asset: assets/fonts/montserrat/Montserrat-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/montserrat/Montserrat-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/montserrat/Montserrat-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/montserrat/Montserrat-ExtraBold.ttf
+          weight: 800
+        - asset: assets/fonts/montserrat/Montserrat-Black.ttf
+          weight: 900

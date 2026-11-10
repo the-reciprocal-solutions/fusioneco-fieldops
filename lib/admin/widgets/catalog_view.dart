@@ -14,6 +14,7 @@ import '../theme/fe_colors.dart';
 import '../theme/theme_extensions.dart';
 import 'app_text.dart';
 import 'common.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Draws [builder] once the catalog is loaded; loading, error and
 /// license-locked states otherwise. Pull-to-refresh refetches the catalog.
@@ -147,7 +148,7 @@ class NavRow extends StatelessWidget {
         leading: icon == null ? null : IconBadge(icon: icon!, style: badge ?? (color == null ? FeBadgeStyle.of(FeColors.primary) : FeBadgeStyle.of(color!)), size: 38, iconSize: 18),
         title: AppText.body(title, weight: FontWeight.w600),
         subtitle: subtitle == null ? null : AppText.bodySmall(subtitle!),
-        trailing: onTap == null ? null : const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+        trailing: onTap == null ? null : const DirIcon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
         onTap: onTap,
       );
 }

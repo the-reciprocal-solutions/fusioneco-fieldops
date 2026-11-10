@@ -149,8 +149,8 @@ class _Photo extends StatelessWidget {
               // Storage the phone can't reach (a LAN-only file server) → a tile, not a crash.
               errorBuilder: (_, _, _) => Container(width: 120, height: 120, color: FeColors.line, child: const Icon(LucideIcons.imageOff, color: FeColors.ink2)),
             ),
-            Positioned(
-              left: 6,
+            PositionedDirectional(
+              start: 6,
               bottom: 6,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

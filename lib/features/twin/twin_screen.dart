@@ -16,6 +16,7 @@ import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
+import '../../theme/app_font.dart';
 
 /// The 3D asset view, shown by loading the portal's own twin page.
 ///
@@ -256,7 +257,7 @@ class _TwinScreenState extends ConsumerState<TwinScreen> {
               'twin.view_label'.getString(context),
               style: theme.textTheme.labelSmall?.copyWith(
                 color: FeColors.ink2,
-                letterSpacing: 1.5,
+                letterSpacing: context.letterSpacingFor(1.5),
                 fontWeight: FontWeight.w700,
               ),
             ),

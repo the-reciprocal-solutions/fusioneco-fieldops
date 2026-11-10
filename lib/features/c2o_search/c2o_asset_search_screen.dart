@@ -15,6 +15,7 @@ import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/fe_header.dart';
+import '../../widgets/dir_icon.dart';
 
 /// FR-1.6 — the fallback when there is no tag to scan at all: search by
 /// Asset ID, serial, or room over the assets assigned to this technician
@@ -147,7 +148,7 @@ class _C2oAssetSearchScreenState extends ConsumerState<C2oAssetSearchScreen> {
                                     [cached.assetReferenceId, space].where((v) => v != null && v.isNotEmpty).join(' · '),
                                     color: FeColors.ink2,
                                   ),
-                                  trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                                  trailing: const DirIcon(LucideIcons.chevronRight, size: 18),
                                   onTap: () => _showDetail(cached),
                                 );
                               },
@@ -285,7 +286,7 @@ class _AssetDetailSheetState extends ConsumerState<_AssetDetailSheet> {
             // assigned-orders lookup itself instead.
             TextButton.icon(
               onPressed: () => context.push(Routes.assetDetail(cached.assetId)),
-              style: TextButton.styleFrom(padding: EdgeInsets.zero, alignment: Alignment.centerLeft),
+              style: TextButton.styleFrom(padding: EdgeInsets.zero, alignment: AlignmentDirectional.centerStart),
               icon: const Icon(LucideIcons.fileText, size: 14),
               label: AppText('search.view_full_details'.getString(context)),
             ),

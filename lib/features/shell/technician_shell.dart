@@ -20,6 +20,7 @@ import '../../widgets/app_text.dart';
 import '../../widgets/motion.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/sync_conflict_panel.dart';
+import '../../theme/app_font.dart';
 
 class _NavItem {
   const _NavItem(this.labelKey, this.icon);
@@ -253,7 +254,7 @@ class _NavButton extends StatelessWidget {
                 style: Theme.of(context).textTheme.labelSmall!.copyWith(
                   color: active ? const Color(0xFF0284C7) : FeColors.ink2,
                   fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                  letterSpacing: 0.25,
+                  letterSpacing: context.letterSpacingFor(0.25),
                 ),
                 child: AppText(item.labelKey.getString(context), maxLines: 1),
               ),

@@ -16,6 +16,7 @@ import '../../widgets/open_on_web.dart';
 import '../module/module_screen.dart';
 import '../modules/module_spec.dart';
 import '../modules/module_summary_screen.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// Plant Room on the phone: a summary only (owner, 2026-11-03 — "recommend
 /// the web for the plant room; simple summary data is enough"). The saved
@@ -130,7 +131,7 @@ class _PlantRoomListScreenState extends ConsumerState<PlantRoomListScreen> {
                           ),
                         ),
                         if (r['shared'] == true) AppText.caption('plant.shared'.getString(context), color: FeColors.primary),
-                        const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+                        const DirIcon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
                       ],
                     ),
                   ),
@@ -193,7 +194,7 @@ class _PlantRoomScreenState extends ConsumerState<PlantRoomScreen> {
             if (m != null && m.isNotEmpty) ...[
               _Kpis(machines: m),
               Padding(
-                padding: const EdgeInsets.only(left: 4, top: 20, bottom: 10),
+                padding: const EdgeInsetsDirectional.only(start: 4, top: 20, bottom: 10),
                 child: AppText.caption('plant.by_type'.getString(context).toUpperCase(), weight: FontWeight.w700),
               ),
               TechCard(

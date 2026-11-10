@@ -6,6 +6,8 @@ import '../domain/maintenance_record.dart';
 import '../theme/fe_colors.dart';
 import '../theme/theme_extensions.dart';
 import 'app_text.dart';
+import '../theme/app_font.dart';
+import 'dir_icon.dart';
 
 /// The list row shared by the dashboard, orders list, and calendar.
 class OrderCard extends StatelessWidget {
@@ -161,7 +163,7 @@ class OrderCard extends StatelessWidget {
                                       fontSize: 10,
                                       fontWeight: FontWeight.w700,
                                       color: statusFg,
-                                      letterSpacing: 0.4,
+                                      letterSpacing: context.letterSpacingFor(0.4),
                                     ),
                                   ),
                                 ),
@@ -171,11 +173,11 @@ class OrderCard extends StatelessWidget {
                           const SizedBox(height: 3),
                           Text(
                             title,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 16.5,
                               fontWeight: FontWeight.w800,
                               color: FeColors.ink,
-                              letterSpacing: -0.2,
+                              letterSpacing: context.letterSpacingFor(-0.2),
                             ),
                           ),
                           if (description != null &&
@@ -203,7 +205,7 @@ class OrderCard extends StatelessWidget {
                         color: Color(0xFFF8FAFC),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(
+                      child: const DirIcon(
                         LucideIcons.chevronRight,
                         size: 18,
                         color: Color(0xFF64748B),
@@ -348,7 +350,7 @@ class TechChipCompact extends StatelessWidget {
         fontSize: 10,
         color: style.foreground,
         fontWeight: FontWeight.w700,
-        letterSpacing: 0.5,
+        letterSpacing: context.letterSpacingFor(0.5),
       ),
     ),
   );

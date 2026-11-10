@@ -21,6 +21,7 @@ import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import '../module/module_screen.dart';
 import 'module_spec.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// Ask FlowAI on the phone (FE-mobile.md 3c): the web's chat
 /// (components/fu-agent/fu-agent.tsx) over the same calls:
@@ -431,7 +432,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ),
                   if (_mode != null)
                     Padding(
-                      padding: const EdgeInsets.only(top: 2, bottom: 4, left: 4),
+                      padding: const EdgeInsetsDirectional.only(top: 2, bottom: 4, start: 4),
                       child: AppText.caption((_mode == ChatMode.createAsset ? 'chat.hint_asset' : 'chat.hint_report').getString(context)),
                     ),
                   if (_photos.isNotEmpty)
@@ -442,13 +443,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         children: [
                           for (var i = 0; i < _photos.length; i++)
                             Padding(
-                              padding: const EdgeInsets.only(right: 8, top: 4),
+                              padding: const EdgeInsetsDirectional.only(end: 8, top: 4),
                               child: Stack(
                                 clipBehavior: Clip.none,
                                 children: [
                                   ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(dataUrlBytes(_photos[i])!, width: 56, height: 56, fit: BoxFit.cover, errorBuilder: _brokenPhoto)),
-                                  Positioned(
-                                    right: -8,
+                                  PositionedDirectional(
+                                    end: -8,
                                     top: -8,
                                     child: IconButton(
                                       visualDensity: VisualDensity.compact,
@@ -482,7 +483,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      IconButton.filled(onPressed: _sending ? null : _send, icon: const Icon(LucideIcons.send, size: 18)),
+                      IconButton.filled(onPressed: _sending ? null : _send, icon: const DirIcon(LucideIcons.send, size: 18)),
                     ],
                   ),
                 ],

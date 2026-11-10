@@ -13,6 +13,7 @@ import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/technician_loading.dart';
+import '../../widgets/dir_icon.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -435,7 +436,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                       mainAxisAlignment:
                                           MainAxisAlignment.center,
                                       children: [
-                                        const Icon(
+                                        const DirIcon(
                                           LucideIcons.logIn,
                                           size: 18,
                                         ),

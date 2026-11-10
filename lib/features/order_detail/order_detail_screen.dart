@@ -28,6 +28,8 @@ import 'documents_tab.dart';
 // import 'record_voice_note.dart'; // only used by the hidden voice note sheet below
 import 'history_tab.dart';
 import 'order_chat_sheet.dart';
+import '../../theme/app_font.dart';
+import '../../widgets/dir_icon.dart';
 
 class OrderDetailScreen extends ConsumerStatefulWidget {
   const OrderDetailScreen({
@@ -110,7 +112,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           elevation: 0,
           scrolledUnderElevation: 0,
           leading: IconButton(
-            icon: const Icon(
+            icon: const DirIcon(
               LucideIcons.arrowLeft,
               color: Color(0xFF0F172A),
               size: 22,
@@ -120,11 +122,11 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           ),
           title: Text(
             OrderDetailScreen.headerTitleFor(key.type, context),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 19,
               fontWeight: FontWeight.w800,
               color: Color(0xFF0F172A),
-              letterSpacing: -0.3,
+              letterSpacing: context.letterSpacingFor(-0.3),
             ),
           ),
           actions: [
@@ -383,11 +385,11 @@ class _DetailsTab extends ConsumerWidget {
                 const SizedBox(height: 14),
                 Text(
                   OrderDetailScreen.detailTitleFor(record, context),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 21,
                     fontWeight: FontWeight.w800,
                     color: Color(0xFF0F172A),
-                    letterSpacing: -0.3,
+                    letterSpacing: context.letterSpacingFor(-0.3),
                     height: 1.25,
                   ),
                 ),
@@ -970,7 +972,7 @@ class _AttachmentRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            const Icon(
+            const DirIcon(
               LucideIcons.chevronRight,
               size: 16,
               color: Color(0xFF94A3B8),

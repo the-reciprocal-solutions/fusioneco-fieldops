@@ -15,6 +15,7 @@ import '../../widgets/common.dart';
 import '../../widgets/fe_header.dart';
 import 'module_spec.dart';
 import 'module_summary_screen.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// The web's yearly PM compliance report for one building
 /// (app/facility-management/preventive-maintenance/compliance-report):
@@ -142,10 +143,10 @@ class _PmReportScreenState extends ConsumerState<PmReportScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Row(
                 children: [
-                  IconButton(icon: const Icon(LucideIcons.chevronLeft), tooltip: 'pmr.prev_year'.getString(context), onPressed: () => _shiftYear(-1)),
+                  IconButton(icon: const DirIcon(LucideIcons.chevronLeft), tooltip: 'pmr.prev_year'.getString(context), onPressed: () => _shiftYear(-1)),
                   Expanded(child: AppText.titleSmall('$_year', align: TextAlign.center)),
                   IconButton(
-                    icon: const Icon(LucideIcons.chevronRight),
+                    icon: const DirIcon(LucideIcons.chevronRight),
                     tooltip: 'pmr.next_year'.getString(context),
                     onPressed: _year >= DateTime.now().year + 1 ? null : () => _shiftYear(1),
                   ),

@@ -27,6 +27,8 @@ import '../../widgets/motion.dart';
 import '../../widgets/order_card.dart';
 import '../../widgets/progress_ring.dart';
 import '../../widgets/tech_header.dart';
+import '../../theme/app_font.dart';
+import '../../widgets/dir_icon.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -169,11 +171,11 @@ class DashboardScreen extends ConsumerWidget {
               // Section Title: "Today's Active Tasks"
               Text(
                 'dashboard.section_active_tasks'.getString(context),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
                   color: FeColors.ink,
-                  letterSpacing: -0.2,
+                  letterSpacing: context.letterSpacingFor(-0.2),
                 ),
               ),
               const SizedBox(height: 12),
@@ -256,15 +258,15 @@ class _TopBar extends StatelessWidget {
               // on normal-width phones where it already fits).
               FittedBox(
                 fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
+                alignment: AlignmentDirectional.centerStart,
                 child: Text(
                   'dashboard.title'.getString(context),
                   maxLines: 1,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.w800,
                     color: FeColors.ink,
-                    letterSpacing: -0.5,
+                    letterSpacing: context.letterSpacingFor(-0.5),
                     height: 1.1,
                   ),
                 ),
@@ -402,7 +404,7 @@ class _CircleActionButton extends StatelessWidget {
               ),
             ],
           ),
-          child: Icon(icon, size: 19, color: FeColors.ink),
+          child: DirIcon.auto(icon, size: 19, color: FeColors.ink),
         ),
       ),
     );
@@ -413,9 +415,9 @@ class _CircleActionButton extends StatelessWidget {
       clipBehavior: Clip.none,
       children: [
         button,
-        Positioned(
+        PositionedDirectional(
           top: -2,
-          right: -2,
+          end: -2,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
             constraints: const BoxConstraints(minWidth: 16),
@@ -527,11 +529,11 @@ class _HeroGreetingCard extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           name,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 21,
                             fontWeight: FontWeight.w800,
                             color: FeColors.ink,
-                            letterSpacing: -0.3,
+                            letterSpacing: context.letterSpacingFor(-0.3),
                           ),
                         ),
                         const SizedBox(height: 1),
@@ -657,7 +659,7 @@ class _SyncStatusCard extends ConsumerWidget {
                     color: FeColors.warning,
                   ),
                 ),
-                const Icon(
+                const DirIcon(
                   LucideIcons.chevronRight,
                   size: 16,
                   color: FeColors.warning,
@@ -708,7 +710,7 @@ class _LeftOnDeviceCard extends StatelessWidget {
               color: FeColors.warning,
             ),
           ),
-          const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.warning),
+          const DirIcon(LucideIcons.chevronRight, size: 16, color: FeColors.warning),
         ],
       ),
     ),
@@ -736,7 +738,7 @@ class _NothingLeftCard extends StatelessWidget {
               color: FeColors.success,
             ),
           ),
-          const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.success),
+          const DirIcon(LucideIcons.chevronRight, size: 16, color: FeColors.success),
         ],
       ),
     ),
@@ -868,7 +870,7 @@ class _StatCard extends StatelessWidget {
               color: badgeColor,
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, size: 18, color: iconColor),
+            child: DirIcon.auto(icon, size: 18, color: iconColor),
           ),
           const SizedBox(height: 6),
           Text(
@@ -945,7 +947,7 @@ class _ScanQrActionCard extends StatelessWidget {
                     Flexible(
                       child: FittedBox(
                         fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
+                        alignment: AlignmentDirectional.centerStart,
                         child: Text(
                           'dashboard.action_scan_qr'.getString(context),
                           maxLines: 1,
@@ -966,7 +968,7 @@ class _ScanQrActionCard extends StatelessWidget {
                         color: Colors.white.withValues(alpha: 0.22),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(
+                      child: const DirIcon(
                         LucideIcons.arrowRight,
                         color: Colors.white,
                         size: 15,
@@ -1033,7 +1035,7 @@ class _WorkOrdersActionCard extends StatelessWidget {
                     Flexible(
                       child: FittedBox(
                         fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
+                        alignment: AlignmentDirectional.centerStart,
                         child: Text(
                           'dashboard.action_work_orders'.getString(context),
                           maxLines: 1,
@@ -1054,7 +1056,7 @@ class _WorkOrdersActionCard extends StatelessWidget {
                         color: Color(0xFFF1F5F9),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(
+                      child: const DirIcon(
                         LucideIcons.arrowRight,
                         color: Color(0xFF475569),
                         size: 15,

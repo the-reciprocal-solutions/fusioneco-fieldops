@@ -12,6 +12,7 @@ import '../../state/overview_controller.dart';
 import '../../state/providers.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/common.dart';
+import '../../theme/app_font.dart';
 
 /// Analytics for the signed-in technician: tabs per maintenance type,
 /// year-to-date and in-progress stat cards, and 12-month volume bar chart.
@@ -178,11 +179,11 @@ class _TopBar extends StatelessWidget {
             children: [
               Text(
                 'overview.title'.getString(context),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
                   color: FeColors.ink,
-                  letterSpacing: -0.5,
+                  letterSpacing: context.letterSpacingFor(-0.5),
                   height: 1.1,
                 ),
               ),
@@ -263,9 +264,9 @@ class _CircleActionButton extends StatelessWidget {
       clipBehavior: Clip.none,
       children: [
         button,
-        Positioned(
+        PositionedDirectional(
           top: -2,
-          right: -2,
+          end: -2,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
             constraints: const BoxConstraints(minWidth: 16),
@@ -511,11 +512,11 @@ class _TrendCard extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 17,
                   fontWeight: FontWeight.w800,
                   color: FeColors.ink,
-                  letterSpacing: -0.2,
+                  letterSpacing: context.letterSpacingFor(-0.2),
                 ),
               ),
               Container(
@@ -685,6 +686,7 @@ class _TrendChart extends StatelessWidget {
                 BarTooltipItem(
                   '${trends[groupIndex].month}\n',
                   const TextStyle(
+                    fontFamily: kAppFont,
                     color: FeColors.ink2,
                     fontSize: 11,
                     fontWeight: FontWeight.w500,

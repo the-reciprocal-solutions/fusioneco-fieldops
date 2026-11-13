@@ -10,6 +10,8 @@ import '../../state/invites_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/common.dart';
 import '../../widgets/motion.dart';
+import '../../theme/app_font.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Every invite the technician has not answered in one place, matching the design.
 class InvitesScreen extends ConsumerWidget {
@@ -38,11 +40,11 @@ class InvitesScreen extends ConsumerWidget {
                     children: [
                       Text(
                         'invites.title'.getString(context),
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 26,
                           fontWeight: FontWeight.w800,
                           color: FeColors.ink,
-                          letterSpacing: -0.5,
+                          letterSpacing: context.letterSpacingFor(-0.5),
                           height: 1.1,
                         ),
                       ),
@@ -210,11 +212,11 @@ class _AssignmentCardState extends ConsumerState<_AssignmentCard> {
           // Title
           Text(
             record.cardTitle,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w800,
               color: FeColors.ink,
-              letterSpacing: -0.3,
+              letterSpacing: context.letterSpacingFor(-0.3),
               height: 1.25,
             ),
           ),
@@ -442,7 +444,7 @@ class _AssignmentCardState extends ConsumerState<_AssignmentCard> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(
+                const DirIcon(
                   LucideIcons.arrowRight,
                   size: 16,
                   color: Color(0xFF0284C7),

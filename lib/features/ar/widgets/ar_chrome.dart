@@ -7,6 +7,7 @@ import '../../../widgets/app_text.dart';
 import '../../../widgets/motion.dart';
 import '../ar_ui.dart';
 import 'ar_sunlight.dart';
+import '../../../theme/app_font.dart';
 
 export 'ar_sunlight.dart' show ArChromeStyle, ArSunlightHost, ArSunlightScope;
 
@@ -392,7 +393,7 @@ class ArCard extends StatelessWidget {
   const ArCard({super.key, required this.child, this.padding = const EdgeInsets.all(18), this.radius = 24});
 
   final Widget child;
-  final EdgeInsets padding;
+  final EdgeInsetsGeometry padding;
   final double radius;
 
   @override
@@ -506,7 +507,7 @@ class ArEyebrow extends StatelessWidget {
       text.toUpperCase(),
       color: onDark ? FeArColors.onGlassMuted : FeColors.ink2,
       weight: FontWeight.w700,
-      style: Theme.of(context).textTheme.labelSmall?.copyWith(letterSpacing: 0.8),
+      style: Theme.of(context).textTheme.labelSmall?.copyWith(letterSpacing: context.letterSpacingFor(0.8)),
     );
   }
 }

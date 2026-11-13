@@ -23,6 +23,7 @@ import 'sheets/isolation_sheet.dart';
 import 'sheets/sign_on_sheet.dart';
 import 'sheets/stop_work_sheet.dart';
 import 'widgets/permit_visuals.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Permit detail (docs/permit-to-work.md). Everything here renders the
 /// server's `readiness` object — no rule is re-derived locally. The one
@@ -574,7 +575,7 @@ class _NextActionCard extends StatelessWidget {
       child: FilledButton.icon(
         onPressed: busy ? null : () => onAction(action),
         style: FilledButton.styleFrom(backgroundColor: FeColors.primary),
-        icon: const Icon(LucideIcons.arrowRight, size: 18),
+        icon: const DirIcon(LucideIcons.arrowRight, size: 18),
         label: AppText.bodyMedium(action.label, color: Colors.white, weight: FontWeight.w800),
       ),
     );

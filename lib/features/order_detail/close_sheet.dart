@@ -329,7 +329,7 @@ class _CloseSheetState extends ConsumerState<CloseSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 8, 0),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -423,7 +423,7 @@ class _CloseSheetState extends ConsumerState<CloseSheet> {
                         ),
                       if (_openWindow == null && !_predicted)
                         Align(
-                          alignment: Alignment.centerRight,
+                          alignment: AlignmentDirectional.centerEnd,
                           child: TextButton.icon(
                             onPressed: _applyPredicted,
                             icon: const Icon(LucideIcons.timerReset, size: 14),
@@ -562,12 +562,16 @@ class _CloseSheetState extends ConsumerState<CloseSheet> {
                       const SizedBox(height: 6),
                       Row(
                         children: [
+                          // Only while the pad is empty: once a stroke is
+                          // drawn the "required" hint read as still missing.
                           Expanded(
-                            child: AppText.caption(
-                              'order_detail.signature_required'
-                                  .getString(context),
-                              color: FeColors.ink2,
-                            ),
+                            child: signaturePending
+                                ? AppText.caption(
+                                    'order_detail.signature_required'
+                                        .getString(context),
+                                    color: FeColors.ink2,
+                                  )
+                                : const SizedBox.shrink(),
                           ),
                           TextButton.icon(
                             onPressed: _submitting

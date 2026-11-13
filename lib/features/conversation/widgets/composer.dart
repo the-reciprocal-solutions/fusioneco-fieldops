@@ -10,6 +10,7 @@ import '../../../domain/conversation.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/app_text.dart';
 import 'conv_visuals.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// The box at the bottom of a thread: @mention picker (Flow Agent first),
 /// quick "@agent" / "Remind me…" chips, the reply banner, and hints that
@@ -283,7 +284,7 @@ class ConversationComposerState extends State<ConversationComposer> {
                   minimumSize: const Size(46, 46),
                 ),
                 onPressed: text.trim().isEmpty ? null : _send,
-                icon: const Icon(LucideIcons.send, size: 18),
+                icon: const DirIcon(LucideIcons.send, size: 18),
               ),
             ],
           ),

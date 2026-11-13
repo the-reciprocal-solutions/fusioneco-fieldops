@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../domain/conversation.dart';
 import '../../../theme/fe_colors.dart';
+import '../../../theme/app_font.dart';
 
 /// `conv.*` / `schedules.*` string with `%a` arguments.
 String convTr(BuildContext context, String key, [List<Object> args = const []]) {
@@ -71,7 +72,7 @@ class AiTag extends StatelessWidget {
     decoration: BoxDecoration(color: FeColors.ai, borderRadius: BorderRadius.circular(6)),
     child: Text(
       'conv.ai_tag'.getString(context),
-      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.4),
+      style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: context.letterSpacingFor(0.4)),
     ),
   );
 }

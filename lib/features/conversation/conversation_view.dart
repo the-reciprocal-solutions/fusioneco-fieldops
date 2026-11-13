@@ -344,7 +344,7 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
                     ),
                   if (peopleTyping.isNotEmpty)
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(52, 4, 8, 0),
+                      padding: const EdgeInsetsDirectional.fromSTEB(52, 4, 8, 0),
                       child: AppText.caption(
                         convTr(context, 'conv.typing', [peopleTyping.join(', ')]),
                         color: FeColors.ink2,
@@ -352,7 +352,7 @@ class _ConversationViewState extends ConsumerState<ConversationView> with Widget
                     ),
                   for (final n in s.notes)
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(52, 4, 8, 0),
+                      padding: const EdgeInsetsDirectional.fromSTEB(52, 4, 8, 0),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [

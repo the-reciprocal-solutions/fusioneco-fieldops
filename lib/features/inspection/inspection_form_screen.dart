@@ -201,7 +201,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Could not get your location.')));
+        ).showSnackBar(SnackBar(content: Text('inspection.ui.location_failed'.getString(context))));
       }
     } finally {
       if (mounted) setState(() => _fetchingLocation = false);
@@ -250,7 +250,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
     if (existing.length >= field.maxPhotos) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Limit reached for this field.')));
+      ).showSnackBar(SnackBar(content: Text('inspection.ui.limit_reached'.getString(context))));
       return;
     }
 
@@ -269,10 +269,8 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
         } catch (_) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Location required — this photo field requires a geotag. Enable location access and try again.',
-                ),
+              SnackBar(
+                content: Text('inspection.ui.geotag_required'.getString(context)),
               ),
             );
           }
@@ -329,7 +327,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
     final bytes = pendingId == null ? null : _pendingBytes[pendingId];
     if (bytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please retake — this item can't be retried in this session.")),
+        SnackBar(content: Text('inspection.ui.retake_media'.getString(context))),
       );
       return;
     }
@@ -348,7 +346,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Still couldn't upload — check your connection and try again.")),
+          SnackBar(content: Text('inspection.ui.upload_still_failed'.getString(context))),
         );
       }
     } finally {
@@ -434,9 +432,9 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
         return StatefulBuilder(
         builder: (sheetContext, setSheetState) {
           return Padding(
-            padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
+            padding: EdgeInsetsDirectional.only(
+              start: 16,
+              end: 16,
               top: 16,
               bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
             ),
@@ -450,7 +448,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                   TextField(
                     controller: nameController,
                     decoration: InputDecoration(
-                      labelText: 'Printed name',
+                      labelText: 'inspection.ui.printed_name'.getString(context),
                       border: const OutlineInputBorder(),
                       isDense: true,
                       errorText: nameError,
@@ -475,7 +473,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                     Expanded(
                       child: OutlinedButton(
                         onPressed: sigController.clear,
-                        child: const Text('Clear'),
+                        child: Text('common.clear'.getString(context)),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -483,14 +481,14 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                       child: ElevatedButton(
                         onPressed: () async {
                           if (field.requireName && nameController.text.trim().isEmpty) {
-                            setSheetState(() => nameError = 'Name required');
+                            setSheetState(() => nameError = 'inspection.ui.name_required'.getString(context));
                             return;
                           }
                           if (sigController.isEmpty) return;
                           final png = await sigController.toPngBytes();
                           if (sheetContext.mounted) Navigator.of(sheetContext).pop(png);
                         },
-                        child: const Text('Lock Signature'),
+                        child: Text('inspection.ui.lock_signature'.getString(context)),
                       ),
                     ),
                   ],
@@ -546,7 +544,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
     final bytes = pendingId == null ? null : _pendingBytes[pendingId];
     if (bytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please redraw — this signature can't be retried in this session.")),
+        SnackBar(content: Text('inspection.ui.redraw_signature'.getString(context))),
       );
       return;
     }
@@ -569,7 +567,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Still couldn't upload — check your connection and try again.")),
+          SnackBar(content: Text('inspection.ui.upload_still_failed'.getString(context))),
         );
       }
     } finally {
@@ -592,9 +590,9 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
       isScrollControlled: true,
       backgroundColor: FeColors.panel,
       builder: (sheetContext) => Padding(
-        padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
+        padding: EdgeInsetsDirectional.only(
+          start: 16,
+          end: 16,
           top: 16,
           bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
         ),
@@ -602,7 +600,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const AppText.titleSmall('Supervisor Signature'),
+            AppText.titleSmall('inspection.ui.supervisor_signature'.getString(context)),
             const SizedBox(height: 12),
             Container(
               decoration: BoxDecoration(
@@ -619,7 +617,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(onPressed: sigController.clear, child: const Text('Clear')),
+                  child: OutlinedButton(onPressed: sigController.clear, child: Text('common.clear'.getString(context))),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -629,7 +627,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                       final png = await sigController.toPngBytes();
                       if (sheetContext.mounted) Navigator.of(sheetContext).pop(png);
                     },
-                    child: const Text('Lock Signature'),
+                    child: Text('inspection.ui.lock_signature'.getString(context)),
                   ),
                 ),
               ],
@@ -648,7 +646,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not upload the signature. Please try again.')),
+          SnackBar(content: Text('inspection.ui.signature_upload_failed'.getString(context))),
         );
       }
     } finally {
@@ -668,7 +666,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
   Future<void> _submit(InspectionSchema schema) async {
     if (schema.details.gpsRequired && _answers['_gpsLocation'] == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('GPS location is required before submission.')),
+        SnackBar(content: Text('inspection.ui.gps_required'.getString(context))),
       );
       _scrollTo(_gpsKey);
       return;
@@ -679,13 +677,13 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
     if (missing.isNotEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Missing required: ${missing.join(", ")}')));
+      ).showSnackBar(SnackBar(content: Text(context.formatString('inspection.ui.missing_required'.getString(context), [missing.join(', ')]))));
       return;
     }
 
     if (schema.details.supervisorSignature && _answers['_supervisorSignature'] == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Supervisor signature is required before submission.')),
+        SnackBar(content: Text('inspection.ui.supervisor_required'.getString(context))),
       );
       _scrollTo(_supervisorKey);
       return;
@@ -806,7 +804,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
 
     return Scaffold(
       backgroundColor: FeColors.page,
-      appBar: const TechHeader(title: 'Inspection', showBack: true),
+      appBar: TechHeader(title: 'inspection.ui.title'.getString(context), showBack: true),
       body: SafeArea(
         top: false,
         child: detailAsync.when(
@@ -815,7 +813,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
             padding: const EdgeInsets.all(16),
             child: TechEmptyState(
               icon: LucideIcons.circleAlert,
-              title: 'Unable to open this inspection',
+              title: 'inspection.ui.open_title'.getString(context),
               subtitle: switch (error) {
                 NetworkFailure() => 'inspection.open_offline'.getString(context),
                 HttpFailure(status: 410) => error.message,
@@ -855,8 +853,8 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                         children: [
                           const Icon(LucideIcons.clipboardCheck, size: 16, color: FeColors.info),
                           const SizedBox(width: 6),
-                          const AppText.bodySmall(
-                            'INSPECTION',
+                          AppText.bodySmall(
+                            'inspection.ui.badge'.getString(context),
                             weight: FontWeight.w800,
                             color: FeColors.info,
                           ),
@@ -869,7 +867,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                         AppText.bodySmall(detail.templateDescription!),
                       ],
                       const SizedBox(height: 8),
-                      AppText.bodySmall('Ref: ${detail.referenceId}', color: FeColors.ink2),
+                      AppText.bodySmall(context.formatString('inspection.ui.ref'.getString(context), [detail.referenceId]), color: FeColors.ink2),
                     ],
                   ),
                 ),
@@ -887,8 +885,8 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                     padding: const EdgeInsets.only(bottom: 12),
                     child: TechCard(
                       tint: FeColors.dangerSoft,
-                      child: const AppText.bodySmall(
-                        'This inspection has expired and can no longer be edited.',
+                      child: AppText.bodySmall(
+                        'inspection.ui.expired_readonly'.getString(context),
                         color: FeColors.danger,
                         weight: FontWeight.w600,
                       ),
@@ -941,16 +939,16 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                           )
                         : Text(
                             _isTimerRunning
-                                ? 'Stop Timer to Submit'
-                                : (schema.submitButtonLabel ?? 'Submit Inspection'),
+                                ? 'inspection.ui.stop_timer_to_submit'.getString(context)
+                                : (schema.submitButtonLabel ?? 'inspection.ui.submit'.getString(context)),
                             style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
                   ),
                 if (!readOnly && _isTimerRunning)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
                     child: AppText.bodySmall(
-                      'Stop the timer before submitting.',
+                      'inspection.ui.stop_timer_hint'.getString(context),
                       color: FeColors.warning,
                       align: TextAlign.center,
                     ),
@@ -978,11 +976,11 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: RichText(
-                    text: const TextSpan(
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: FeColors.ink),
+                    text: TextSpan(
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: FeColors.ink),
                       children: [
-                        TextSpan(text: 'Location Verification'),
-                        TextSpan(text: ' *', style: TextStyle(color: FeColors.danger)),
+                        TextSpan(text: 'inspection.ui.location_verification'.getString(context)),
+                        const TextSpan(text: ' *', style: TextStyle(color: FeColors.danger)),
                       ],
                     ),
                   ),
@@ -998,18 +996,18 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                   const Icon(LucideIcons.circleCheck, size: 16, color: FeColors.success),
                   const SizedBox(width: 6),
                   AppText.bodySmall(
-                    'Captured: ${(gps['city'] as String?) ?? 'Verified'}',
+                    context.formatString('inspection.ui.captured'.getString(context), [(gps['city'] as String?) ?? 'inspection.ui.verified'.getString(context)]),
                     color: FeColors.success,
                   ),
                 ],
               )
             else if (readOnly)
-              const AppText.bodySmall('Not Captured', color: FeColors.ink2)
+              AppText.bodySmall('inspection.ui.not_captured'.getString(context), color: FeColors.ink2)
             else
               OutlinedButton.icon(
                 onPressed: _fetchGpsLocation,
                 icon: const Icon(LucideIcons.mapPin, size: 16),
-                label: const Text('Fetch GPS Location'),
+                label: Text('inspection.ui.fetch_gps'.getString(context)),
               ),
             if (schema.details.timerEnabled) const SizedBox(height: 16),
           ],
@@ -1018,11 +1016,11 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
               children: [
                 const Icon(LucideIcons.clock, size: 16, color: FeColors.primary),
                 const SizedBox(width: 6),
-                const AppText.bodySmall('TIMER', weight: FontWeight.w800, color: FeColors.ink2),
+                AppText.bodySmall('inspection.ui.timer'.getString(context), weight: FontWeight.w800, color: FeColors.ink2),
                 const Spacer(),
                 if (_timerSessions.isNotEmpty)
                   AppText.bodySmall(
-                    '${_timerSessions.length} session${_timerSessions.length == 1 ? '' : 's'}',
+                    context.formatString('inspection.ui.sessions'.getString(context), [_timerSessions.length]),
                     color: FeColors.ink2,
                   ),
               ],
@@ -1045,13 +1043,13 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
                           onPressed: _stopTimer,
                           style: ElevatedButton.styleFrom(backgroundColor: FeColors.danger),
                           icon: const Icon(LucideIcons.square, size: 16),
-                          label: const Text('Stop'),
+                          label: Text('inspection.ui.stop'.getString(context)),
                         )
                       : ElevatedButton.icon(
                           onPressed: _startTimer,
                           style: ElevatedButton.styleFrom(backgroundColor: FeColors.success),
                           icon: const Icon(LucideIcons.play, size: 16),
-                          label: const Text('Start'),
+                          label: Text('inspection.ui.start'.getString(context)),
                         ),
               ],
             ),
@@ -1073,7 +1071,7 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
             children: [
               const Icon(LucideIcons.penTool, size: 16, color: FeColors.ink),
               const SizedBox(width: 6),
-              const AppText.bodySmall('SUPERVISOR SIGNATURE', weight: FontWeight.w800),
+              AppText.bodySmall('inspection.ui.supervisor_signature_caps'.getString(context), weight: FontWeight.w800),
             ],
           ),
           const SizedBox(height: 10),
@@ -1089,8 +1087,8 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
               children: [
                 const Icon(LucideIcons.circleCheck, size: 14, color: FeColors.success),
                 const SizedBox(width: 4),
-                const AppText.bodySmall(
-                  'Signature verified and captured',
+                AppText.bodySmall(
+                  'inspection.ui.signature_captured'.getString(context),
                   color: FeColors.success,
                 ),
                 const Spacer(),
@@ -1102,12 +1100,12 @@ class _InspectionFormScreenState extends ConsumerState<InspectionFormScreen> {
               ],
             ),
           ] else if (readOnly)
-            const AppText.bodySmall('No signature provided', color: FeColors.ink2)
+            AppText.bodySmall('inspection.ui.no_signature_provided'.getString(context), color: FeColors.ink2)
           else
             OutlinedButton.icon(
               onPressed: _captureSupervisorSignature,
               icon: const Icon(LucideIcons.penLine, size: 16),
-              label: const Text('Add Signature'),
+              label: Text('inspection.ui.add_signature'.getString(context)),
             ),
         ],
       ),
@@ -1271,7 +1269,7 @@ class _FieldCard extends StatelessWidget {
                   if (picked != null) onChanged(picked.toIso8601String());
                 },
           icon: const Icon(LucideIcons.calendar, size: 16),
-          label: Text(parsed == null ? 'Select date' : '${parsed.month}/${parsed.day}/${parsed.year}'),
+          label: Text(parsed == null ? 'inspection.ui.select_date'.getString(context) : '${parsed.month}/${parsed.day}/${parsed.year}'),
         );
       case InspectionFieldType.selectboxes:
         final raw = answers[field.key];
@@ -1373,8 +1371,8 @@ class _FieldCard extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w700, color: FeColors.ink),
               ),
               const SizedBox(height: 6),
-              const AppText.bodySmall(
-                'Static panels are not supported in the app yet.',
+              AppText.bodySmall(
+                'inspection.ui.panel_unsupported'.getString(context),
                 color: FeColors.ink2,
               ),
             ],
@@ -1393,8 +1391,8 @@ class _FieldCard extends StatelessWidget {
             color: FeColors.warningSoft,
             borderRadius: BorderRadius.circular(10),
           ),
-          child: const AppText.bodySmall(
-            "This field isn't supported in the app yet — please fill it in on the emailed web form instead.",
+          child: AppText.bodySmall(
+            'inspection.ui.field_unsupported'.getString(context),
             color: FeColors.warning,
           ),
         );
@@ -1461,9 +1459,9 @@ class _FileGrid extends StatelessWidget {
                       ),
                     ),
                     if (!readOnly)
-                      Positioned(
+                      PositionedDirectional(
                         top: -6,
-                        right: -6,
+                        end: -6,
                         child: GestureDetector(
                           onTap: () => actions.onDeleteFile(field, i),
                           child: const Icon(Icons.cancel, size: 18, color: FeColors.danger),
@@ -1481,7 +1479,7 @@ class _FileGrid extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: () => actions.onCaptureFile(field, fromCamera: true),
                   icon: const Icon(LucideIcons.camera, size: 16),
-                  label: const Text('Camera'),
+                  label: Text('inspection.ui.camera'.getString(context)),
                 ),
               ),
               if (!field.aiAnalyse || field.aiAllowGallery) ...[
@@ -1490,7 +1488,7 @@ class _FileGrid extends StatelessWidget {
                   child: OutlinedButton.icon(
                     onPressed: () => actions.onCaptureFile(field, fromCamera: false),
                     icon: const Icon(LucideIcons.image, size: 16),
-                    label: const Text('Gallery'),
+                    label: Text('inspection.ui.gallery'.getString(context)),
                   ),
                 ),
               ],
@@ -1533,7 +1531,7 @@ class _MediaGrid extends StatelessWidget {
             ],
           ),
         if (items.isNotEmpty) const SizedBox(height: 8),
-        AppText.bodySmall('${items.length}/${field.maxPhotos} photos', color: FeColors.ink2),
+        AppText.bodySmall(context.formatString('inspection.ui.photo_count'.getString(context), [items.length, field.maxPhotos]), color: FeColors.ink2),
         const SizedBox(height: 8),
         if (uploading)
           const TechSpinner(size: 24)
@@ -1544,7 +1542,7 @@ class _MediaGrid extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: () => actions.onCapturePhoto(field, fromCamera: true),
                   icon: const Icon(LucideIcons.camera, size: 16),
-                  label: const Text('Camera'),
+                  label: Text('inspection.ui.camera'.getString(context)),
                 ),
               ),
               if (field.allowGallery) ...[
@@ -1553,7 +1551,7 @@ class _MediaGrid extends StatelessWidget {
                   child: OutlinedButton.icon(
                     onPressed: () => actions.onCapturePhoto(field, fromCamera: false),
                     icon: const Icon(LucideIcons.image, size: 16),
-                    label: const Text('Gallery'),
+                    label: Text('inspection.ui.gallery'.getString(context)),
                   ),
                 ),
               ],
@@ -1584,9 +1582,9 @@ class _MediaGrid extends StatelessWidget {
           ),
         ),
         if (!readOnly)
-          Positioned(
+          PositionedDirectional(
             top: -6,
-            right: -6,
+            end: -6,
             child: GestureDetector(
               onTap: () => actions.onDeleteMedia(field, index),
               child: const Icon(Icons.cancel, size: 18, color: FeColors.danger),
@@ -1606,9 +1604,9 @@ class _MediaGrid extends StatelessWidget {
                     color: FeColors.warning,
                     borderRadius: BorderRadius.circular(999),
                   ),
-                  child: const Text(
-                    'Retry',
-                    style: TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700),
+                  child: Text(
+                    'common.retry'.getString(context),
+                    style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700),
                   ),
                 ),
               ),
@@ -1668,7 +1666,7 @@ class _SignatureBlock extends StatelessWidget {
             TextButton.icon(
               onPressed: () => actions.onCaptureSignature(field),
               icon: const Icon(LucideIcons.rotateCcw, size: 14),
-              label: const Text('Redo'),
+              label: Text('inspection.ui.redo'.getString(context)),
             ),
           ],
         ],
@@ -1680,25 +1678,25 @@ class _SignatureBlock extends StatelessWidget {
         children: [
           const Icon(LucideIcons.clock, size: 14, color: FeColors.warning),
           const SizedBox(width: 6),
-          const Expanded(
-            child: AppText.bodySmall('Upload failed. Saved on this device.', color: FeColors.warning),
+          Expanded(
+            child: AppText.bodySmall('inspection.ui.upload_failed_saved'.getString(context), color: FeColors.warning),
           ),
           TextButton(
             onPressed: () => actions.onRetrySignature(field),
-            child: const Text('Retry'),
+            child: Text('common.retry'.getString(context)),
           ),
         ],
       );
     }
 
     if (readOnly) {
-      return const AppText.bodySmall('No signature captured', color: FeColors.ink2);
+      return AppText.bodySmall('inspection.ui.no_signature_captured'.getString(context), color: FeColors.ink2);
     }
 
     return OutlinedButton.icon(
       onPressed: () => actions.onCaptureSignature(field),
       icon: const Icon(LucideIcons.penLine, size: 16),
-      label: const Text('Add Signature'),
+      label: Text('inspection.ui.add_signature'.getString(context)),
     );
   }
 }

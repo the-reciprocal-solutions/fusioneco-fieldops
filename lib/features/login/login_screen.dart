@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../admin/state/auth_controller.dart' as admin;
 import '../../app/env.dart';
 import '../../app/router.dart';
 import '../../state/auth_controller.dart';
@@ -12,6 +13,7 @@ import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/technician_loading.dart';
+import '../../widgets/dir_icon.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -25,6 +27,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _username = TextEditingController();
   final _password = TextEditingController();
   bool _obscure = true;
+
+  /// The admin login is running (after "Technician not found").
+  bool _adminBusy = false;
 
   @override
   void dispose() {
@@ -41,6 +46,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         .read(authControllerProvider.notifier)
         .login(_username.text.trim(), _password.text);
     if (!mounted) return;
+
+    // Not a technician: maybe an admin-panel user. On success AppRoot swaps
+    // to the admin side by itself; on failure its message (e.g. "Invalid
+    // Credentials" for an admin's wrong password) replaces ours.
+    if (!ok && ref.read(authControllerProvider).notTechnician) {
+      setState(() => _adminBusy = true);
+      final adminAuth = ref.read(admin.authControllerProvider.notifier);
+      await adminAuth.login(_username.text.trim(), _password.text);
+      if (!mounted) return;
+      setState(() => _adminBusy = false);
+      final a = ref.read(admin.authControllerProvider);
+      if (a.isAuthenticated) {
+        ref.read(authControllerProvider.notifier).clearError();
+      } else if (a.error != null) {
+        ref.read(authControllerProvider.notifier).showError(a.error!);
+      }
+      return;
+    }
 
     if (ok) {
       final session = ref.read(authControllerProvider).session;
@@ -122,6 +145,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
+    final adminExpired = ref.watch(admin.authControllerProvider.select((s) => s.sessionExpired));
 
     return Scaffold(
       backgroundColor: FeColors.page,
@@ -135,7 +159,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Technician Hero Branding Emblem
+                  // Hero branding emblem
                   Center(
                     child: Stack(
                       alignment: Alignment.center,
@@ -176,8 +200,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               width: 2,
                             ),
                           ),
+                          // A building, not a hard hat: admins sign in here
+                          // too since 2026-10-31 (docs/admin-side.md).
                           child: const Icon(
-                            LucideIcons.hardHat,
+                            LucideIcons.building2,
                             color: Colors.white,
                             size: 34,
                           ),
@@ -238,8 +264,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Session Expired Banner (if redirected after 24h)
-                  if (auth.sessionExpired) ...[
+                  // Session-ended banner (the server refused to renew the session)
+                  if (auth.sessionExpired || adminExpired) ...[
                     Container(
                       padding: const EdgeInsets.all(12),
                       margin: const EdgeInsets.only(bottom: 16),
@@ -276,7 +302,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   TechCard(
                     padding: const EdgeInsets.all(24),
                     radius: 16,
-                    child: auth.isBusy
+                    child: auth.isBusy || _adminBusy
                         ? Padding(
                             padding: const EdgeInsets.symmetric(vertical: 24),
                             child: TechnicianLoadingView(
@@ -410,7 +436,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                       mainAxisAlignment:
                                           MainAxisAlignment.center,
                                       children: [
-                                        const Icon(
+                                        const DirIcon(
                                           LucideIcons.logIn,
                                           size: 18,
                                         ),

@@ -10,6 +10,7 @@ import '../theme/fe_colors.dart';
 import '../theme/theme_extensions.dart';
 import 'app_text.dart';
 import 'fe_header.dart';
+import 'dir_icon.dart';
 
 /// The shell-level header: [FeHeader] plus the calendar/notification-bell/
 /// logout affordances every top-level screen shares.
@@ -89,7 +90,7 @@ class _HeaderButton extends StatelessWidget {
       onPressed: onTap,
       tooltip: tooltip,
       visualDensity: VisualDensity.compact,
-      icon: Icon(icon, size: 20),
+      icon: DirIcon.auto(icon, size: 20),
     );
 
     if (badge <= 0) return button;
@@ -98,9 +99,9 @@ class _HeaderButton extends StatelessWidget {
       clipBehavior: Clip.none,
       children: [
         button,
-        Positioned(
+        PositionedDirectional(
           top: 2,
-          right: 2,
+          end: 2,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
             constraints: const BoxConstraints(minWidth: 16),
@@ -151,7 +152,7 @@ Future<bool> showLogoutDialog(BuildContext context, {int pendingCount = 0}) asyn
               color: FeColors.dangerSoft,
               shape: BoxShape.circle,
             ),
-            child: Icon(LucideIcons.logOut, size: 20, color: FeColors.danger),
+            child: DirIcon(LucideIcons.logOut, size: 20, color: FeColors.danger),
           ),
           const SizedBox(width: 12),
           AppText('common.sign_out_title'.getString(context)),

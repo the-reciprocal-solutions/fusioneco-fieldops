@@ -2,6 +2,10 @@ import '../core/network/api_client.dart';
 import '../domain/chat_message.dart';
 import '../domain/maintenance_record.dart';
 
+/// Stored as the reply when the server sends none; the chat sheet shows it
+/// translated (`chat.no_reply`).
+const kNoAssistantReply = 'No response from the assistant.';
+
 /// The per-order assistant. Online only, and deliberately so: an answer
 /// composed from a stale cached order would be worse than no answer.
 class AiChatRepository {
@@ -97,8 +101,8 @@ class AiChatRepository {
     final body = response.data;
     return (
       content: body is Map
-          ? (body['content']?.toString() ?? 'No response from the assistant.')
-          : 'No response from the assistant.',
+          ? (body['content']?.toString() ?? kNoAssistantReply)
+          : kNoAssistantReply,
       messageId: body is Map ? body['messageId']?.toString() : null,
     );
   }

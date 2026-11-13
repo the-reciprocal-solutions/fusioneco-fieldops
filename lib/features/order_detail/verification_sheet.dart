@@ -8,6 +8,7 @@ import '../../state/checklist_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../theme/theme_extensions.dart';
 import '../../widgets/app_text.dart';
+import '../../theme/app_font.dart';
 
 /// What the technician captured before a session may start or end.
 class VerificationResult {
@@ -208,7 +209,7 @@ class _PhotoPanel extends StatelessWidget {
           style: theme.textTheme.labelSmall?.copyWith(
             color: FeColors.ink2,
             fontWeight: FontWeight.w700,
-            letterSpacing: 1.5,
+            letterSpacing: context.letterSpacingFor(1.5),
           ),
         ),
         const SizedBox(height: 8),
@@ -311,7 +312,7 @@ class _LocationPanel extends StatelessWidget {
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: FeColors.success,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: 1.5,
+                      letterSpacing: context.letterSpacingFor(1.5),
                     ),
                   ),
                   const SizedBox(height: 4),

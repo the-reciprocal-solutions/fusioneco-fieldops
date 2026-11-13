@@ -8,6 +8,7 @@ import '../../../domain/snag_ai.dart';
 import '../../../theme/fe_colors.dart';
 import '../../../widgets/voice_waveform.dart';
 import 'snag_visuals.dart';
+import '../../../theme/app_font.dart';
 
 /// Walk mode's details sheet (redesign 2026-10-06, owner iPhone test: "the
 /// start walk option is overwhelming … the UI is fully blocked with no frame
@@ -529,7 +530,7 @@ class SnagWalkAiStrip extends StatelessWidget {
                   children: [
                     Text(
                       'snags.ai.photo_title'.getString(context),
-                      style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3),
+                      style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: context.letterSpacingFor(0.3)),
                     ),
                     Text(
                       line,

@@ -18,6 +18,7 @@ import '../../../widgets/app_text.dart';
 import '../../../widgets/tech_popup.dart';
 import '../../order_detail/order_chat_sheet.dart';
 import 'process_guides_sheet.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// The home screen's "Your day" card (docs/day-brief.md): an AI summary when
 /// one passed the server's guards, the day's jobs as an ordered checklist,
@@ -152,7 +153,7 @@ class _DayBriefViewState extends State<DayBriefView> {
         border: Border.all(color: ai ? FeColors.aiLine : FeColors.line),
         boxShadow: [BoxShadow(color: FeColors.ink.withValues(alpha: 0.06), blurRadius: 18, offset: const Offset(0, 6))],
       ),
-      padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 8, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -490,7 +491,7 @@ class _DayBriefViewState extends State<DayBriefView> {
                 AppText.caption(_tr('day.guides_sub'), color: FeColors.ink2),
               ]),
             ),
-            const Icon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
+            const DirIcon(LucideIcons.chevronRight, size: 18, color: FeColors.ink2),
           ]),
         ),
       );

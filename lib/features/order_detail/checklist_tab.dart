@@ -18,6 +18,7 @@ import '../../widgets/common.dart';
 import '../../widgets/tech_popup.dart';
 import 'checklist_item_sheet.dart';
 import 'close_sheet.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Keeps the manual-hours field within what the DB column can hold —
 /// `DECIMAL(10,2)` on work_orders/reactive_maintenance/annual_maintenance,
@@ -325,7 +326,7 @@ class _ChecklistRow extends StatelessWidget {
               ],
             ),
           ),
-          const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
+          const DirIcon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
         ],
       ),
     );
@@ -347,7 +348,7 @@ class _RowChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(left: 8),
+    margin: const EdgeInsetsDirectional.only(start: 8),
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
     decoration: BoxDecoration(
       color: background,

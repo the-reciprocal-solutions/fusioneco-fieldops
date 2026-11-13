@@ -7,6 +7,7 @@ import '../theme/theme_extensions.dart';
 import 'app_text.dart';
 import 'fe_header.dart';
 import 'motion.dart';
+import '../theme/app_font.dart';
 
 /// The portal's one surface treatment: a soft, floating card. Depth comes
 /// from a wide low-opacity shadow rather than a border — the "card floats a
@@ -37,7 +38,7 @@ class TechCard extends StatelessWidget {
   }) : assert(!dark || tint == null, 'dark and tint are mutually exclusive');
 
   final Widget child;
-  final EdgeInsets padding;
+  final EdgeInsetsGeometry padding;
   final Color? borderColor;
   final VoidCallback? onTap;
   final Color? accentTop;
@@ -204,7 +205,7 @@ class TechChip extends StatelessWidget {
       style: Theme.of(context).textTheme.labelSmall?.copyWith(
         color: style.foreground,
         fontWeight: FontWeight.w700,
-        letterSpacing: 0.5,
+        letterSpacing: context.letterSpacingFor(0.5),
       ),
     ),
   );

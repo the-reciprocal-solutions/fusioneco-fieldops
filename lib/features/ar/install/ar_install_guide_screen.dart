@@ -158,7 +158,7 @@ class _Guide extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(child: details),
-            Expanded(child: Padding(padding: const EdgeInsets.fromLTRB(0, 16, 16, 16), child: SingleChildScrollView(child: planCard))),
+            Expanded(child: Padding(padding: const EdgeInsetsDirectional.fromSTEB(0, 16, 16, 16), child: SingleChildScrollView(child: planCard))),
           ],
         );
       },

@@ -14,6 +14,7 @@ import '../../widgets/app_text.dart';
 import '../../widgets/tech_popup.dart';
 import '../../widgets/voice_note_player.dart';
 import '../../widgets/voice_waveform.dart';
+import '../../theme/app_font.dart';
 
 /// A work order carries one spoken note of its own, separate from the
 /// per-item checklist notes. Recording again replaces the previous one.
@@ -169,7 +170,7 @@ class _RecordVoiceNoteState extends ConsumerState<RecordVoiceNote> {
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: FeColors.ink2,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: 1.5,
+                    letterSpacing: context.letterSpacingFor(1.5),
                   ),
                 ),
                 const SizedBox(height: 8),

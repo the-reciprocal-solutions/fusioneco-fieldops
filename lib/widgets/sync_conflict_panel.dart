@@ -3,6 +3,7 @@ import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../core/offline/mutation_label_text.dart';
 import '../core/offline/offline_db.dart';
 import '../core/offline/queue_bus.dart';
 import '../state/providers.dart';
@@ -152,7 +153,7 @@ class _ConflictRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     AppText.bodyMedium(
-                      conflict.label,
+                      mutationLabelText(context, conflict.label),
                       color: FeColors.ink,
                       weight: FontWeight.w600,
                     ),

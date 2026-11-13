@@ -10,6 +10,7 @@ import '../../../theme/fe_colors.dart';
 import '../../../theme/theme_extensions.dart';
 import '../../../widgets/motion.dart';
 import 'permit_visuals.dart';
+import '../../../widgets/dir_icon.dart';
 
 /// The dashboard's door into Permit to Work (docs/permit-to-work.md). Reads
 /// only the already-fetched "My permits" list, so it costs nothing extra and
@@ -76,7 +77,7 @@ class PermitDashboardCard extends ConsumerWidget {
                     ),
                   )
                 else
-                  const Icon(LucideIcons.arrowRight, color: Colors.white70, size: 18),
+                  const DirIcon(LucideIcons.arrowRight, color: Colors.white70, size: 18),
               ],
             ),
           ),

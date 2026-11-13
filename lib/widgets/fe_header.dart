@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../theme/fe_colors.dart';
 import 'app_text.dart';
+import 'dir_icon.dart';
 
 /// `.standard` — panel background, ink text/icons — is the only look every
 /// screen except the full-screen photo viewer needs. `.immersive` is that
@@ -82,7 +83,7 @@ class FeHeader extends StatelessWidget implements PreferredSizeWidget {
       leading: leading ??
           (showBack
               ? IconButton(
-                  icon: const Icon(LucideIcons.arrowLeft),
+                  icon: const DirIcon(LucideIcons.arrowLeft),
                   tooltip: 'common.back'.getString(context),
                   onPressed: () => context.pop(),
                 )

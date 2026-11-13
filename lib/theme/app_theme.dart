@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'fe_colors.dart';
 import 'theme_extensions.dart';
@@ -8,7 +7,7 @@ import 'theme_extensions.dart';
 /// Light-only, matching the "Navy Professional" web redesign direction.
 /// It ships no dark variant.
 abstract final class AppTheme {
-  static ThemeData build() {
+  static ThemeData build({bool rtl = false}) {
     final primaryContainer = Color.alphaBlend(
       FeColors.primary.withValues(alpha: 0.10),
       FeColors.panel,
@@ -53,7 +52,7 @@ abstract final class AppTheme {
       onInverseSurface: Colors.white,
     );
 
-    final text = _textTheme();
+    final text = _textTheme(rtl);
 
     return ThemeData(
       useMaterial3: true,
@@ -61,6 +60,9 @@ abstract final class AppTheme {
       scaffoldBackgroundColor: FeColors.page,
       canvasColor: FeColors.panel,
       splashFactory: InkRipple.splashFactory,
+      // Montserrat everywhere (bundled in pubspec.yaml); ThemeData applies it
+      // to textTheme and primaryTextTheme, so buttons, fields and bars get it too.
+      fontFamily: 'Montserrat',
       textTheme: text,
       // A sane default matching FeHeader's standard variant, kept as a
       // fallback for any bare AppBar() that isn't routed through FeHeader —
@@ -193,15 +195,16 @@ abstract final class AppTheme {
     );
   }
 
-  static TextTheme _textTheme() {
+  /// [rtl]: Arabic joins its letters, so any letter spacing pulls them apart.
+  static TextTheme _textTheme(bool rtl) {
     const onSurface = FeColors.ink;
     const onSurfaceMuted = FeColors.ink2;
     final base = TextTheme(
-      displaySmall: const TextStyle(
+      displaySmall: TextStyle(
         fontSize: 36,
         height: 40 / 36,
         fontWeight: FontWeight.w800,
-        letterSpacing: -0.9,
+        letterSpacing: rtl ? 0 : -0.9,
         color: onSurface,
       ),
       headlineMedium: const TextStyle(
@@ -257,21 +260,21 @@ abstract final class AppTheme {
         height: 20 / 14,
         fontWeight: FontWeight.w500,
       ),
-      labelMedium: const TextStyle(
+      labelMedium: TextStyle(
         fontSize: 12,
         height: 16 / 12,
         fontWeight: FontWeight.w700,
-        letterSpacing: 0.6,
+        letterSpacing: rtl ? 0 : 0.6,
         color: onSurfaceMuted,
       ),
-      labelSmall: const TextStyle(
+      labelSmall: TextStyle(
         fontSize: 10,
         height: 14 / 10,
         fontWeight: FontWeight.w600,
-        letterSpacing: 0.5,
+        letterSpacing: rtl ? 0 : 0.5,
         color: onSurfaceMuted,
       ),
     );
-    return GoogleFonts.poppinsTextTheme(base);
+    return base;
   }
 }

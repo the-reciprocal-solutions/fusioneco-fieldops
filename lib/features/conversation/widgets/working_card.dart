@@ -156,7 +156,7 @@ class _SessionRow extends StatelessWidget {
         else if (s.specialists.isNotEmpty)
           for (final sp in s.specialists)
             Padding(
-              padding: const EdgeInsets.only(top: 4, left: 38),
+              padding: const EdgeInsetsDirectional.only(top: 4, start: 38),
               child: Row(
                 children: [
                   Icon(
@@ -184,7 +184,7 @@ class _SessionRow extends StatelessWidget {
             )
         else
           Padding(
-            padding: const EdgeInsets.only(top: 4, left: 38),
+            padding: const EdgeInsetsDirectional.only(top: 4, start: 38),
             child: AppText.caption(
               stage ?? (working ? 'conv.stage_starting'.getString(context) : 'conv.stage_waiting'.getString(context)),
               color: FeColors.ink2,

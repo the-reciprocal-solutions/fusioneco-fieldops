@@ -14,6 +14,7 @@ class AuthState {
     this.isBusy = false,
     this.error,
     this.sessionExpired = false,
+    this.notTechnician = false,
   });
 
   final Session? session;
@@ -21,6 +22,11 @@ class AuthState {
   final bool isBusy;
   final String? error;
   final bool sessionExpired;
+
+  /// The last sign-in failed because the server has no technician by that
+  /// name (400 "Technician not found", authController.ts TechnicianLogin) —
+  /// the sign-in screen then tries the admin login (app/app_root.dart).
+  final bool notTechnician;
 
   bool get isAuthenticated => session != null && session!.userId.isNotEmpty;
 
@@ -30,6 +36,7 @@ class AuthState {
     bool? isBusy,
     String? error,
     bool? sessionExpired,
+    bool? notTechnician,
     bool clearSession = false,
     bool clearError = false,
   }) => AuthState(
@@ -38,6 +45,7 @@ class AuthState {
     isBusy: isBusy ?? this.isBusy,
     error: clearError ? null : (error ?? this.error),
     sessionExpired: sessionExpired ?? this.sessionExpired,
+    notTechnician: notTechnician ?? this.notTechnician,
   );
 }
 
@@ -79,7 +87,7 @@ class AuthController extends Notifier<AuthState> {
   }
 
   Future<bool> login(String username, String password) async {
-    state = state.copyWith(isBusy: true, clearError: true);
+    state = state.copyWith(isBusy: true, clearError: true, notTechnician: false);
     try {
       final repo = ref.read(authRepositoryProvider);
       final result = await repo.login(username: username, password: password);
@@ -113,7 +121,11 @@ class AuthController extends Notifier<AuthState> {
       ref.read(pushServiceProvider).init();
       return true;
     } on ApiFailure catch (e) {
-      state = state.copyWith(isBusy: false, error: e.message);
+      state = state.copyWith(
+        isBusy: false,
+        error: e.message,
+        notTechnician: e is HttpFailure && e.status == 400 && e.message == 'Technician not found',
+      );
       return false;
     }
   }
@@ -141,6 +153,9 @@ class AuthController extends Notifier<AuthState> {
   }
 
   void clearError() => state = state.copyWith(clearError: true);
+
+  /// The admin login's answer, shown in place of "Technician not found".
+  void showError(String message) => state = state.copyWith(error: message);
 }
 
 final authControllerProvider = NotifierProvider<AuthController, AuthState>(

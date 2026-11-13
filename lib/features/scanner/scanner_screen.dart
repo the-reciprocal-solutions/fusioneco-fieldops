@@ -26,6 +26,7 @@ import '../../theme/fe_colors.dart';
 import '../../theme/theme_extensions.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/fe_header.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Reads the QR stickers on assets, work orders and material bins, plus the
 /// c2o field-verification tags — those resolve offline against the local
@@ -1095,7 +1096,7 @@ class _C2oSessionStrip extends StatelessWidget {
             'scans.view_all'.getString(context),
             style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
           ),
-          Icon(LucideIcons.chevronRight, size: 16, color: Colors.white.withValues(alpha: 0.8)),
+          DirIcon(LucideIcons.chevronRight, size: 16, color: Colors.white.withValues(alpha: 0.8)),
         ],
       ),
     );

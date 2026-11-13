@@ -13,6 +13,7 @@ import '../../theme/fe_colors.dart';
 import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/photo_viewer.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Documents attached to the record's asset — Warranty / O&M / Datasheet /
 /// Certificates etc. Shared as-is between the Work Order detail screen and
@@ -220,7 +221,7 @@ class _DocumentRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
+        const DirIcon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
       ],
     ),
   );

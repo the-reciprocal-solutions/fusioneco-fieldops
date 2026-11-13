@@ -14,6 +14,8 @@ import '../../state/orders_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../widgets/common.dart';
 import '../../widgets/order_card.dart';
+import '../../theme/app_font.dart';
+import '../../widgets/dir_icon.dart';
 
 /// The chips at the top of the orders list. Generation now produces a single
 /// unified Work Order for every kind (see [OrdersRepository.listAll]), so the
@@ -129,11 +131,11 @@ class _OrdersScreenState extends ConsumerState<OrdersScreen> {
                       children: [
                         Text(
                           'orders.title'.getString(context),
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 26,
                             fontWeight: FontWeight.w800,
                             color: FeColors.ink,
-                            letterSpacing: -0.5,
+                            letterSpacing: context.letterSpacingFor(-0.5),
                             height: 1.1,
                           ),
                         ),
@@ -490,7 +492,7 @@ class _InspectionOrderCard extends StatelessWidget {
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
                                     color: statusFg,
-                                    letterSpacing: 0.4,
+                                    letterSpacing: context.letterSpacingFor(0.4),
                                   ),
                                 ),
                               ),
@@ -499,11 +501,11 @@ class _InspectionOrderCard extends StatelessWidget {
                           const SizedBox(height: 3),
                           Text(
                             inspection.templateName ?? 'Inspection',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 16.5,
                               fontWeight: FontWeight.w800,
                               color: FeColors.ink,
-                              letterSpacing: -0.2,
+                              letterSpacing: context.letterSpacingFor(-0.2),
                             ),
                           ),
                           if (inspection.templateLocation != null &&
@@ -535,7 +537,7 @@ class _InspectionOrderCard extends StatelessWidget {
                         color: Color(0xFFF8FAFC),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(
+                      child: const DirIcon(
                         LucideIcons.chevronRight,
                         size: 18,
                         color: Color(0xFF64748B),

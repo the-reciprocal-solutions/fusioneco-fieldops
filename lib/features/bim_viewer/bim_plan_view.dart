@@ -8,6 +8,7 @@ import '../../core/bim_viewer/plan_view_math.dart';
 import '../../state/ar_view_models.dart';
 import '../../state/bim_viewer_controller.dart';
 import '../../theme/fe_colors.dart';
+import '../../theme/app_font.dart';
 
 /// The 2D half of the model viewer (docs/bim-viewer.md §5): the floor's
 /// plan cut from the model (rooms, walls, columns, doors, equipment, grid),
@@ -330,7 +331,7 @@ class _PlanPainter extends CustomPainter {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
-        style: TextStyle(fontSize: bold ? 10 : 11, color: color, fontWeight: bold ? FontWeight.w700 : FontWeight.w600),
+        style: TextStyle(fontFamily: kAppFont, fontSize: bold ? 10 : 11, color: color, fontWeight: bold ? FontWeight.w700 : FontWeight.w600),
       ),
       textAlign: TextAlign.center,
       maxLines: 1,

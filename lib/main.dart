@@ -5,7 +5,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'app/app.dart';
+import 'admin/core/network/api_client.dart' as admin;
+import 'admin/core/storage/secure_store.dart' as admin;
+import 'admin/core/storage/session_store.dart' as admin;
+import 'admin/state/providers.dart' as admin;
+import 'app/app_root.dart';
 import 'app/env.dart';
 import 'core/legal/third_party_licenses.dart';
 import 'core/network/api_client.dart';
@@ -42,10 +46,14 @@ Future<void> main() async {
   final sessionStore = await SessionStore.open();
   final dbPassphrase = await secureStore.getOrCreateDbPassphrase();
   final offlineDb = await OfflineDb.open(passphrase: dbPassphrase);
-  final api = ApiClient(
-    secureStore: secureStore,
-    baseUrl: sessionStore.readBaseUrlOverride() ?? Env.defaultApiBaseUrl,
-  );
+  final baseUrl = sessionStore.readBaseUrlOverride() ?? Env.defaultApiBaseUrl;
+  final api = ApiClient(secureStore: secureStore, baseUrl: baseUrl);
+
+  // The admin side (lib/admin/, app/app_root.dart): its own keystore names,
+  // prefs and client, on the same server.
+  final adminSecureStore = admin.SecureStore();
+  final adminSessionStore = await admin.SessionStore.open();
+  final adminApi = admin.ApiClient(secureStore: adminSecureStore, baseUrl: baseUrl);
 
   // FR-4.4 — schedule the OS-level queue drain that runs even while the app
   // is closed. Not awaited past its own error handling: it must never block
@@ -59,8 +67,11 @@ Future<void> main() async {
         sessionStoreProvider.overrideWithValue(sessionStore),
         offlineDbProvider.overrideWithValue(offlineDb),
         apiClientProvider.overrideWithValue(api),
+        admin.secureStoreProvider.overrideWithValue(adminSecureStore),
+        admin.sessionStoreProvider.overrideWithValue(adminSessionStore),
+        admin.apiClientProvider.overrideWithValue(adminApi),
       ],
-      child: const TechnicianApp(),
+      child: const AppRoot(),
     ),
   );
 }

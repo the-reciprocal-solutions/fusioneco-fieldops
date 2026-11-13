@@ -6,6 +6,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../admin/core/push/local_notifications.dart' as admin;
+import '../../admin/core/storage/session_store.dart' as admin;
+import '../../admin/state/auth_controller.dart' as admin;
 import '../../app/router.dart';
 import '../../domain/conversation.dart';
 import '../../state/conversation_controller.dart';
@@ -36,6 +39,10 @@ import 'push_content.dart';
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  // One app, two sides (lib/app/app_root.dart): whoever is signed in on the
+  // phone decides how the push is drawn, so its tap lands on that side's
+  // handler (only the signed-in side initialises its LocalNotifications).
+  if (await admin.SessionStore.signedInOnDevice()) return admin.LocalNotifications.show(message);
   await LocalNotifications.show(message);
 }
 
@@ -75,11 +82,16 @@ class PushService {
   /// user signing in on the same phone never claimed it.
   Future<void> init() async {
     if (Firebase.apps.isEmpty) return;
+    final first = _attached == null;
     final attached = await (_attached ??= _attach());
     if (!attached) {
       _attached = null;
       return;
     }
+    // The notifications plugin is one per app: an admin who signed in earlier
+    // in this run took its tap callback and, on iOS, replaced the button
+    // categories. Take both back.
+    if (!first) await _initLocal();
     await syncToken();
   }
 
@@ -98,15 +110,16 @@ class PushService {
     final settings = await _messaging.requestPermission();
     if (settings.authorizationStatus == AuthorizationStatus.denied) return false;
 
-    await LocalNotifications.init(
-      onResponse: (payload, actionId, input) => _handleResponse(payload, actionId, input: input),
-    );
+    await _initLocal();
 
     // Attached before the first token fetch so a token FCM produces while
     // [_fcmToken] is still waiting for APNs is not missed.
-    _messaging.onTokenRefresh.listen(_register);
+    _messaging.onTokenRefresh.listen((t) {
+      if (!_adminActive) _register(t);
+    });
 
     FirebaseMessaging.onMessage.listen((message) {
+      if (_adminActive) return;
       LocalNotifications.show(message);
       _ref.invalidate(unseenNotificationCountProvider);
       // The bell list too, if it is open, so the new row is there to tap.
@@ -122,9 +135,9 @@ class PushService {
 
     // iOS: a button on an alert iOS drew itself (app in the background or
     // closed) — the app delegate hands it over with the typed reply.
-    final pending = await NativePushActions.listen(
-      (a) => _handleResponse(jsonEncode(a.data), a.actionId, input: a.input),
-    );
+    final pending = await NativePushActions.listen((a) {
+      if (!_adminActive) _handleResponse(jsonEncode(a.data), a.actionId, input: a.input);
+    });
     for (final a in pending) {
       _handleResponse(jsonEncode(a.data), a.actionId, input: a.input);
     }
@@ -132,11 +145,22 @@ class PushService {
     // iOS: a tap on the body of the server's APNs alert arrives through FCM,
     // not the local-notifications plugin. Android pushes are data-only and
     // never reach these.
-    FirebaseMessaging.onMessageOpenedApp.listen((m) => _handleResponse(jsonEncode(m.data), null));
+    FirebaseMessaging.onMessageOpenedApp.listen((m) {
+      if (!_adminActive) _handleResponse(jsonEncode(m.data), null);
+    });
     final initial = await _messaging.getInitialMessage();
     if (initial != null) _handleResponse(jsonEncode(initial.data), null);
     return true;
   }
+
+  Future<void> _initLocal() => LocalNotifications.init(
+        onResponse: (payload, actionId, input) => _handleResponse(payload, actionId, input: input),
+      );
+
+  /// One app, two sides (lib/app/app_root.dart): these listeners outlive a
+  /// technician's sign-out, and the admin side has its own. While an admin is
+  /// signed in only theirs act, or every push would show twice.
+  bool get _adminActive => _ref.read(admin.authControllerProvider).isAuthenticated;
 
   /// The FCM token, or null when there isn't one yet. On iOS, `getToken()`
   /// throws `apns-token-not-set` until APNs has handed the app its device

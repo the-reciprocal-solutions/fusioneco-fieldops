@@ -15,6 +15,7 @@ import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import 'time_text.dart';
 import 'day_actions.dart';
+import '../../widgets/dir_icon.dart';
 
 /// "My day" on the dashboard: the technician's daily attendance for payroll
 /// (docs/daily-attendance-shift-plan.md). Shows the shift, whether the day has
@@ -100,7 +101,7 @@ class _DayCardState extends ConsumerState<DayCard> {
     if (card.canEndDay && local != null) {
       final urgent = card.phase == DayPhase.shiftEnded;
       final label = AppText('attend.end'.getString(context), weight: FontWeight.w800);
-      const icon = Icon(LucideIcons.logOut, size: 18);
+      const icon = DirIcon(LucideIcons.logOut, size: 18);
       void onPressed() => unawaited(endMyDay(context, ref, today, local));
       return SizedBox(
         width: double.infinity,
@@ -112,7 +113,7 @@ class _DayCardState extends ConsumerState<DayCard> {
     if (card.canStartDay) {
       final off = card.phase == DayPhase.offDay;
       final label = AppText((off ? 'attend.start_off_day' : 'attend.start').getString(context), weight: FontWeight.w800);
-      const icon = Icon(LucideIcons.logIn, size: 18);
+      const icon = DirIcon(LucideIcons.logIn, size: 18);
       void onPressed() => unawaited(startMyDay(context, ref, today));
       return SizedBox(
         width: double.infinity,
@@ -205,7 +206,7 @@ class _StatusRow extends StatelessWidget {
       children: [
         if (text != null) _Tag(text: text, color: color),
         _Tag(text: sendKey.getString(context), color: sendColor),
-        if (rejected && (local.outIssue ?? local.inIssue) != null) AppText.caption(local.outIssue ?? local.inIssue!, color: FeColors.danger),
+        if (rejected && (local.outIssue ?? local.inIssue) != null) AppText.caption(_issueText(context, local.outIssue ?? local.inIssue!), color: FeColors.danger),
       ],
     );
   }
@@ -223,3 +224,11 @@ class _Tag extends StatelessWidget {
     child: AppText.caption(text, color: color, weight: FontWeight.w700),
   );
 }
+
+/// The two refusals this phone writes itself are translated; a reason the
+/// server sent is shown as it came.
+String _issueText(BuildContext context, String raw) => switch (raw) {
+      'The server did not receive your start of day.' => 'capture.issue_start_not_received'.getString(context),
+      'The server did not receive your end of day.' => 'capture.issue_end_not_received'.getString(context),
+      _ => raw,
+    };

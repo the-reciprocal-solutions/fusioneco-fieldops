@@ -614,7 +614,7 @@ class _SnagQuoteSheetState extends ConsumerState<SnagQuoteSheet> {
           Flexible(
             child: ListView(
               shrinkWrap: true,
-              padding: const EdgeInsets.fromLTRB(8, 8, 16, 8),
+              padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 16, 8),
               children: [
                 for (var i = 0; i < _lines.length; i++)
                   Row(
@@ -729,7 +729,7 @@ class _MaterialsSheetState extends ConsumerState<_MaterialsSheet> {
           Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 8), child: AppText.titleMedium('snags.est.materials_title'.getString(context))),
           for (var i = 0; i < _items.length; i++)
             Padding(
-              padding: const EdgeInsets.fromLTRB(4, 0, 16, 4),
+              padding: const EdgeInsetsDirectional.fromSTEB(4, 0, 16, 4),
               child: Row(
                 children: [
                   Checkbox(value: _include[i], onChanged: _busy || r != null ? null : (v) => setState(() => _include[i] = v ?? false)),

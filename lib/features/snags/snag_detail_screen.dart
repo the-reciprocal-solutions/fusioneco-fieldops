@@ -30,6 +30,7 @@ import 'widgets/snag_sheets.dart';
 import 'widgets/snag_estimate_card.dart';
 import 'widgets/snag_region_overlay.dart';
 import 'widgets/snag_visuals.dart';
+import '../../widgets/dir_icon.dart';
 
 /// UC-10 — one snag: its photos, where it is, where it is in its life, and
 /// the one or two things the viewer can do about it right now.
@@ -418,7 +419,7 @@ class _Strip extends StatelessWidget {
         itemBuilder: (context, i) {
           final p = photos[i];
           return Padding(
-            padding: EdgeInsets.only(right: photos.length > 1 ? 8 : 0),
+            padding: EdgeInsetsDirectional.only(end: photos.length > 1 ? 8 : 0),
             child: GestureDetector(
               onTap: () => _openFull(context, p),
               child: Stack(
@@ -426,8 +427,8 @@ class _Strip extends StatelessWidget {
                 children: [
                   // Kept defect highlights (2026-10-06) ride on the photo.
                   SnagPhoto(evidence: p, radius: 18, showRegions: true),
-                  Positioned(
-                    left: 10,
+                  PositionedDirectional(
+                    start: 10,
                     top: 10,
                     child: TechChip(
                       label: 'snags.stage.${p.stage}'.getString(context),
@@ -435,8 +436,8 @@ class _Strip extends StatelessWidget {
                     ),
                   ),
                   if (p.capturedByName != null)
-                    Positioned(
-                      left: 10,
+                    PositionedDirectional(
+                      start: 10,
                       bottom: 10,
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -560,7 +561,7 @@ class _Fact extends StatelessWidget {
                 color: danger ? FeColors.danger : (onTap != null ? FeColors.primary : FeColors.ink),
               ),
             ),
-            if (onTap != null) const Icon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
+            if (onTap != null) const DirIcon(LucideIcons.chevronRight, size: 16, color: FeColors.ink2),
           ],
         ),
       ),

@@ -57,7 +57,7 @@ class _TechnicianAppState extends ConsumerState<TechnicianApp> {
     return MaterialApp.router(
       title: 'FusionEco FieldOps',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.build(),
+      theme: AppTheme.build(rtl: AppLocales.isRtl(languageCode)),
       supportedLocales: localization.supportedLocales,
       localizationsDelegates: localization.localizationsDelegates,
       // Built from the Riverpod-owned `languageCode` (not re-read off the

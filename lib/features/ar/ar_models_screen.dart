@@ -689,7 +689,7 @@ class _Preview extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final usable = floor.models.where((m) => m.usable).map((m) => m.modelName).toList();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 16, 16, 16),
+      padding: const EdgeInsetsDirectional.fromSTEB(0, 16, 16, 16),
       child: TechCard(
         padding: const EdgeInsets.all(16),
         child: Column(

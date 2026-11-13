@@ -32,6 +32,7 @@ import 'snag_plan_screen.dart';
 import 'widgets/snag_ai_panel.dart';
 import 'widgets/snag_sheets.dart';
 import 'widgets/snag_visuals.dart';
+import '../../widgets/dir_icon.dart';
 
 /// UC-5 — one snag with full detail, usually raised from context: an asset
 /// page ("the insulation on this chiller is torn") or a work order ("found
@@ -526,7 +527,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
               children: [
                 for (var i = 0; i < _photos.length; i++)
                   Padding(
-                    padding: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsetsDirectional.only(end: 8),
                     child: Stack(
                       children: [
                         GestureDetector(
@@ -541,8 +542,8 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
                             ),
                           ),
                         ),
-                        Positioned(
-                          right: 4,
+                        PositionedDirectional(
+                          end: 4,
                           top: 4,
                           child: GestureDetector(
                             onTap: () => setState(() => _photos.removeAt(i)),
@@ -557,8 +558,8 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
                             ),
                           ),
                         ),
-                        const Positioned(
-                          left: 6,
+                        const PositionedDirectional(
+                          start: 6,
                           bottom: 6,
                           child: Icon(
                             LucideIcons.pencilLine,
@@ -759,7 +760,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
                           : [?_floor?.name, ?_space?.name].join(' › '),
                       weight: FontWeight.w700,
                     ),
-                    trailing: const Icon(LucideIcons.chevronRight, size: 16),
+                    trailing: const DirIcon(LucideIcons.chevronRight, size: 16),
                     onTap: tree == null ? null : () => _pickRoom(tree),
                   ),
                   if (_floor?.hasPlan ?? false) ...[
@@ -775,7 +776,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
                             .getString(context),
                         weight: FontWeight.w700,
                       ),
-                      trailing: const Icon(LucideIcons.chevronRight, size: 16),
+                      trailing: const DirIcon(LucideIcons.chevronRight, size: 16),
                       onTap: _pickPin,
                     ),
                   ],
@@ -817,7 +818,7 @@ class _SnagRaiseScreenState extends ConsumerState<SnagRaiseScreen> {
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
               minimumSize: const Size.fromHeight(46),
-              alignment: Alignment.centerLeft,
+              alignment: AlignmentDirectional.centerStart,
             ),
             onPressed: () async {
               final d = await showDatePicker(

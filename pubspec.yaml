@@ -34,7 +34,6 @@ dependencies:
   shared_preferences: ^2.3.3
 
   # ui
-  google_fonts: ^6.2.1
   lucide_icons_flutter: ^3.0.0
 
   # device capture — checklist sessions record a face photo and coordinates,
@@ -58,6 +57,8 @@ dependencies:
   vibration: ^3.2.1
   url_launcher: ^6.3.2
   webview_flutter: ^4.14.1
+  # Admin side (lib/admin/): the efficiency PDF report goes to the share sheet.
+  share_plus: ^12.0.2
   flutter_markdown_plus: ^1.0.12
   firebase_core: ^4.14.0
   firebase_messaging: ^16.6.0
@@ -105,7 +106,28 @@ flutter:
   assets:
     - assets/i18n/
     - assets/public/
+    - assets/admin/headers/
     # The model viewer's page (docs/bim-viewer.md): served to its WebView by
     # the app's loopback server. Folders aren't recursive, so vendor/ too.
     - assets/bim_viewer/
     - assets/bim_viewer/vendor/
+
+  # The app's only typeface, bundled so it works offline from the first
+  # launch (OFL, assets/fonts/montserrat/OFL.txt). Montserrat has no Arabic
+  # letters; Arabic text falls back to the phone's system font.
+  fonts:
+    - family: Montserrat
+      fonts:
+        - asset: assets/fonts/montserrat/Montserrat-Regular.ttf
+        - asset: assets/fonts/montserrat/Montserrat-Italic.ttf
+          style: italic
+        - asset: assets/fonts/montserrat/Montserrat-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/montserrat/Montserrat-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/montserrat/Montserrat-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/montserrat/Montserrat-ExtraBold.ttf
+          weight: 800
+        - asset: assets/fonts/montserrat/Montserrat-Black.ttf
+          weight: 900

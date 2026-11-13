@@ -465,7 +465,7 @@ class ArCoachStripView extends StatelessWidget {
       decoration: BoxDecoration(
         color: st.surface(strong: true),
         borderRadius: BorderRadius.circular(16),
-        border: st.border() ?? Border(left: BorderSide(color: tone, width: 4)),
+        border: st.border() ?? BorderDirectional(start: BorderSide(color: tone, width: 4)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

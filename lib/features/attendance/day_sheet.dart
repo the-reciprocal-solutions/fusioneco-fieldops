@@ -9,6 +9,8 @@ import '../../state/day_capture_controller.dart';
 import '../../theme/fe_colors.dart';
 import '../../theme/theme_extensions.dart';
 import '../../widgets/app_text.dart';
+import '../../theme/app_font.dart';
+import '../../widgets/dir_icon.dart';
 
 /// Opens the "Start my day" / "End my day" sheet. True when it was saved.
 Future<bool> showDaySheet(BuildContext context, DayCaptureArgs args) async {
@@ -156,7 +158,7 @@ class _Header extends StatelessWidget {
             color: args.isStart ? FeColors.success : FeColors.primary,
             borderRadius: BorderRadius.circular(context.radii.lg),
           ),
-          child: Icon(
+          child: DirIcon(
             args.isStart ? LucideIcons.logIn : LucideIcons.logOut,
             size: 18,
             color: Colors.white,
@@ -202,7 +204,7 @@ class _PhotoPanel extends StatelessWidget {
           style: Theme.of(context).textTheme.labelSmall?.copyWith(
             color: FeColors.ink2,
             fontWeight: FontWeight.w700,
-            letterSpacing: 1.5,
+            letterSpacing: context.letterSpacingFor(1.5),
           ),
         ),
         const SizedBox(height: 8),
@@ -256,7 +258,7 @@ class _PhotoPanel extends StatelessWidget {
         ),
         if (photo == null && !state.photoSkipped)
           Align(
-            alignment: Alignment.centerLeft,
+            alignment: AlignmentDirectional.centerStart,
             child: TextButton(
               onPressed: state.takingPhoto || state.saving ? null : onSkip,
               child: AppText.bodySmall('capture.skip_photo'.getString(context), color: FeColors.ink2),
@@ -360,7 +362,7 @@ class _ReasonPanel extends StatelessWidget {
           style: Theme.of(context).textTheme.labelSmall?.copyWith(
             color: FeColors.ink2,
             fontWeight: FontWeight.w700,
-            letterSpacing: 1.5,
+            letterSpacing: context.letterSpacingFor(1.5),
           ),
         ),
         const SizedBox(height: 8),

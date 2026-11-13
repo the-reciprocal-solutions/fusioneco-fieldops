@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localization/flutter_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -11,6 +12,7 @@ import '../../widgets/app_text.dart';
 import '../../widgets/common.dart';
 import '../../widgets/tech_header.dart';
 import 'inspection_send_flag.dart';
+import '../../theme/app_font.dart';
 
 class InspectionListScreen extends ConsumerWidget {
   const InspectionListScreen({super.key});
@@ -21,7 +23,7 @@ class InspectionListScreen extends ConsumerWidget {
 
     return Scaffold(
       backgroundColor: FeColors.page,
-      appBar: const TechHeader(title: 'Inspections'),
+      appBar: TechHeader(title: 'inspection.ui.list_title'.getString(context)),
       body: SafeArea(
         top: false,
         child: RefreshIndicator(
@@ -33,8 +35,8 @@ class InspectionListScreen extends ConsumerWidget {
               children: [
                 TechEmptyState(
                   icon: LucideIcons.circleAlert,
-                  title: 'Failed to load inspections',
-                  subtitle: 'Pull down to try again.',
+                  title: 'inspection.ui.list_failed'.getString(context),
+                  subtitle: 'common.pull_down_to_retry'.getString(context),
                   iconColor: FeColors.danger,
                 ),
               ],
@@ -43,12 +45,11 @@ class InspectionListScreen extends ConsumerWidget {
               if (items.isEmpty) {
                 return ListView(
                   padding: const EdgeInsets.all(16),
-                  children: const [
+                  children: [
                     TechEmptyState(
                       icon: LucideIcons.clipboardCheck,
-                      title: 'No inspections assigned',
-                      subtitle:
-                          "You'll see inspections here once one is assigned to you.",
+                      title: 'inspection.ui.list_empty_title'.getString(context),
+                      subtitle: 'inspection.ui.list_empty_subtitle'.getString(context),
                     ),
                   ],
                 );
@@ -61,8 +62,8 @@ class InspectionListScreen extends ConsumerWidget {
                 padding: const EdgeInsets.all(16),
                 children: [
                   if (pending.isNotEmpty) ...[
-                    const AppText.bodySmall(
-                      'TO DO',
+                    AppText.bodySmall(
+                      'inspection.ui.section_todo'.getString(context),
                       weight: FontWeight.w800,
                       color: FeColors.ink2,
                     ),
@@ -77,8 +78,8 @@ class InspectionListScreen extends ConsumerWidget {
                     const SizedBox(height: 12),
                   ],
                   if (other.isNotEmpty) ...[
-                    const AppText.bodySmall(
-                      'PAST INSPECTIONS',
+                    AppText.bodySmall(
+                      'inspection.ui.section_past'.getString(context),
                       weight: FontWeight.w800,
                       color: FeColors.ink2,
                     ),
@@ -117,6 +118,13 @@ class _InspectionCard extends StatelessWidget {
         return (FeColors.infoSoft, FeColors.info);
     }
   }
+
+  /// pending / completed / expired from the server; anything else shows as sent.
+  String _statusLabel(BuildContext context) => switch (inspection.status) {
+        'pending' || 'completed' || 'expired' =>
+          'inspection.ui.status_${inspection.status}'.getString(context),
+        _ => inspection.status.toUpperCase(),
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -161,7 +169,7 @@ class _InspectionCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      inspection.templateName ?? 'Inspection',
+                      inspection.templateName ?? 'inspection.ui.title'.getString(context),
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
@@ -182,12 +190,12 @@ class _InspectionCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  inspection.status.toUpperCase(),
+                  _statusLabel(context),
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
                     color: statusFg,
-                    letterSpacing: 0.4,
+                    letterSpacing: context.letterSpacingFor(0.4),
                   ),
                 ),
               ),
@@ -215,13 +223,13 @@ class _InspectionCard extends StatelessWidget {
                 ),
                 if (inspection.isOverdue) ...[
                   const SizedBox(width: 8),
-                  const Text(
-                    'OVERDUE',
+                  Text(
+                    'inspection.ui.overdue'.getString(context),
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
                       color: FeColors.danger,
-                      letterSpacing: 0.4,
+                      letterSpacing: context.letterSpacingFor(0.4),
                     ),
                   ),
                 ],

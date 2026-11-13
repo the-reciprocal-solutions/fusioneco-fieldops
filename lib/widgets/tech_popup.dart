@@ -136,9 +136,9 @@ class _TechToastState extends State<_TechToast> {
     final maxWidth = MediaQuery.sizeOf(context).width - 24;
     final width = maxWidth > 240 ? 240.0 : maxWidth;
 
-    return Positioned(
+    return PositionedDirectional(
       top: MediaQuery.paddingOf(context).top + 8,
-      right: 12,
+      end: 12,
       child: IgnorePointer(
         ignoring: _dismissing,
         child: AnimatedSlide(

@@ -47,21 +47,21 @@ class SnagCard extends StatelessWidget {
           Stack(
             children: [
               SnagPhoto(evidence: snag.coverPhoto, width: 76, height: 76, radius: 14),
-              Positioned(
-                left: 0,
+              PositionedDirectional(
+                start: 0,
                 top: 0,
                 bottom: 0,
                 child: Container(
                   width: 4,
                   decoration: BoxDecoration(
                     color: hue,
-                    borderRadius: const BorderRadius.horizontal(left: Radius.circular(14)),
+                    borderRadius: const BorderRadiusDirectional.horizontal(start: Radius.circular(14)),
                   ),
                 ),
               ),
               if (snag.photos.length > 1)
-                Positioned(
-                  right: 4,
+                PositionedDirectional(
+                  end: 4,
                   bottom: 4,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
